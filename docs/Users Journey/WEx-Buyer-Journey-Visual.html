@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WEx Buyer Journey</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --dark: #0f1a2e;
+    --accent: #1a7a52;
+    --accent-light: #e8f5ef;
+    --accent-mid: #b8dfc9;
+    --warm: #f7f4ef;
+    --orange: #e8762b;
+    --orange-light: #fef3eb;
+    --blue: #2563eb;
+    --blue-light: #eff4ff;
+    --purple: #7c3aed;
+    --purple-light: #f3eeff;
+    --gray-100: #f8f8f8;
+    --gray-200: #eaeaea;
+    --gray-400: #999;
+    --gray-600: #555;
+    --white: #fff;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--warm);
+    color: var(--dark);
+    padding: 40px;
+    min-height: 100vh;
+  }
+
+  .page-header {
+    text-align: center;
+    margin-bottom: 50px;
+  }
+
+  .page-header .badge {
+    display: inline-block;
+    background: var(--dark);
+    color: var(--white);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 6px 16px;
+    border-radius: 20px;
+    margin-bottom: 16px;
+  }
+
+  .page-header h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 48px;
+    color: var(--dark);
+    margin-bottom: 8px;
+  }
+
+  .page-header .subtitle {
+    font-size: 16px;
+    color: var(--gray-600);
+    max-width: 600px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+
+  /* Entry channels */
+  .entry-section {
+    margin-bottom: 36px;
+  }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--gray-400);
+    margin-bottom: 12px;
+  }
+
+  .entry-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+
+  .entry-card {
+    background: var(--white);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    text-align: center;
+  }
+
+  .entry-card .icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    margin: 0 auto 10px;
+  }
+
+  .entry-card:nth-child(1) .icon { background: var(--accent-light); }
+  .entry-card:nth-child(2) .icon { background: var(--blue-light); }
+  .entry-card:nth-child(3) .icon { background: var(--orange-light); }
+  .entry-card:nth-child(4) .icon { background: var(--purple-light); }
+
+  .entry-card h3 { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+  .entry-card p { font-size: 12px; color: var(--gray-600); line-height: 1.4; }
+
+  /* Main flow */
+  .flow-container {
+    background: var(--white);
+    border-radius: 16px;
+    padding: 32px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    margin-bottom: 36px;
+  }
+
+  .flow-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+
+  .flow-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--accent);
+    color: var(--white);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    flex-shrink: 0;
+  }
+
+  .flow-header h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 24px;
+  }
+
+  .flow-header .desc {
+    font-size: 13px;
+    color: var(--gray-600);
+  }
+
+  /* Step cards in a flow */
+  .flow-steps {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 10px;
+    position: relative;
+  }
+
+  .flow-step {
+    position: relative;
+    text-align: center;
+  }
+
+  .flow-step::after {
+    content: '›';
+    position: absolute;
+    right: -8px;
+    top: 16px;
+    font-size: 22px;
+    color: var(--gray-200);
+    font-weight: 700;
+  }
+
+  .flow-step:last-child::after { display: none; }
+
+  .flow-num {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--white);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    margin: 0 auto 8px;
+  }
+
+  .flow-step-title {
+    font-weight: 700;
+    font-size: 12px;
+    margin-bottom: 4px;
+    color: var(--dark);
+  }
+
+  .flow-step-desc {
+    font-size: 11px;
+    color: var(--gray-600);
+    line-height: 1.45;
+  }
+
+  .flow-step-ux {
+    font-size: 10px;
+    color: var(--accent);
+    font-weight: 600;
+    margin-top: 6px;
+  }
+
+  /* Results section */
+  .results-section {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: 24px;
+    margin-bottom: 36px;
+  }
+
+  .results-main {
+    background: var(--white);
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  .results-main h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    margin-bottom: 20px;
+  }
+
+  .tier {
+    border-radius: 10px;
+    padding: 18px;
+    margin-bottom: 14px;
+  }
+
+  .tier:last-child { margin-bottom: 0; }
+
+  .tier-1 {
+    background: var(--accent-light);
+    border: 1px solid var(--accent-mid);
+  }
+
+  .tier-2 {
+    background: var(--orange-light);
+    border: 1px solid #fcd5b5;
+  }
+
+  .tier-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .tier-1 .tier-label { color: var(--accent); }
+  .tier-2 .tier-label { color: var(--orange); }
+
+  .tier h3 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+  .tier p { font-size: 12.5px; color: var(--gray-600); line-height: 1.55; }
+
+  .tier-details {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .tier-tag {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.7);
+    color: var(--dark);
+  }
+
+  /* Contact capture */
+  .contact-section {
+    background: var(--white);
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  .contact-section h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    margin-bottom: 6px;
+  }
+
+  .contact-section .desc {
+    font-size: 13px;
+    color: var(--gray-600);
+    margin-bottom: 18px;
+    line-height: 1.5;
+  }
+
+  .contact-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--gray-100);
+  }
+
+  .contact-item:last-child { border-bottom: none; }
+
+  .contact-trigger {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--dark);
+    min-width: 0;
+    flex: 1;
+  }
+
+  .contact-capture {
+    font-size: 11px;
+    color: var(--gray-600);
+    flex: 1;
+  }
+
+  .contact-arrow {
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 14px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* Post-match flow */
+  .post-match {
+    background: var(--white);
+    border-radius: 16px;
+    padding: 32px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    margin-bottom: 36px;
+  }
+
+  .post-match h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 24px;
+    margin-bottom: 24px;
+  }
+
+  .timeline {
+    display: flex;
+    gap: 0;
+    position: relative;
+  }
+
+  .timeline::before {
+    content: '';
+    position: absolute;
+    top: 22px;
+    left: 40px;
+    right: 40px;
+    height: 3px;
+    background: var(--gray-200);
+    z-index: 0;
+  }
+
+  .tl-step {
+    flex: 1;
+    text-align: center;
+    position: relative;
+    z-index: 1;
+  }
+
+  .tl-dot {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0 auto 10px;
+    border: 3px solid var(--white);
+  }
+
+  .tl-dot.green { background: var(--accent); color: var(--white); }
+  .tl-dot.orange { background: var(--orange); color: var(--white); }
+  .tl-dot.blue { background: var(--blue); color: var(--white); }
+  .tl-dot.dark { background: var(--dark); color: var(--white); }
+
+  .tl-title {
+    font-weight: 700;
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+
+  .tl-desc {
+    font-size: 11px;
+    color: var(--gray-600);
+    line-height: 1.45;
+    max-width: 140px;
+    margin: 0 auto;
+  }
+
+  .tl-time {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--orange);
+    margin-top: 6px;
+  }
+
+  /* Pricing display */
+  .pricing-section {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+
+  .pricing-card {
+    background: var(--white);
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  .pricing-card h3 {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .pricing-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .pricing-card p {
+    font-size: 12.5px;
+    color: var(--gray-600);
+    line-height: 1.6;
+  }
+
+  .pricing-example {
+    margin-top: 10px;
+    background: var(--gray-100);
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 12px;
+    color: var(--gray-600);
+    line-height: 1.5;
+    font-style: italic;
+  }
+
+  @media print {
+    body { padding: 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <div class="badge">Warehouse Exchange</div>
+  <h1>Buyer Journey</h1>
+  <p class="subtitle">From "I need space" to matched options in under 60 seconds. Every question the buyer knows immediately, every answer directly improves matching.</p>
+</div>
+
+<!-- ENTRY CHANNELS -->
+<div class="entry-section">
+  <div class="section-label">How buyers enter</div>
+  <div class="entry-cards">
+    <div class="entry-card">
+      <div class="icon">🌐</div>
+      <h3>WEx Website</h3>
+      <p>Direct visit. 5-step matching flow.</p>
+    </div>
+    <div class="entry-card">
+      <div class="icon">💬</div>
+      <h3>SMS / Text</h3>
+      <p>"I need 10K sqft in Houston." AI parses into structured requirements.</p>
+    </div>
+    <div class="entry-card">
+      <div class="icon">📋</div>
+      <h3>Listing Sites</h3>
+      <p>LoopNet, Crexi inquiries routed into WEx matching.</p>
+    </div>
+    <div class="entry-card">
+      <div class="icon">🤝</div>
+      <h3>Broker Referral</h3>
+      <p>Broker submits requirements on buyer's behalf.</p>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN FLOW -->
+<div class="flow-container">
+  <div class="flow-header">
+    <div class="flow-icon">→</div>
+    <div>
+      <h2>5-Step Matching Flow</h2>
+      <div class="desc">All taps and sliders — no text fields, no forms. Under 60 seconds to results.</div>
+    </div>
+  </div>
+  <div class="flow-steps">
+    <div class="flow-step">
+      <div class="flow-num">1</div>
+      <div class="flow-step-title">Location</div>
+      <div class="flow-step-desc">"I need space in Phoenix..."</div>
+      <div class="flow-step-ux">Free text + autocomplete</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">2</div>
+      <div class="flow-step-title">Use Type</div>
+      <div class="flow-step-desc">Storage, Light Ops, or Distribution</div>
+      <div class="flow-step-ux">Single tap card</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">3</div>
+      <div class="flow-step-title">What Goods?</div>
+      <div class="flow-step-desc">General, food, chemicals, high-value, etc.</div>
+      <div class="flow-step-ux">Conditional on Step 2</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">4</div>
+      <div class="flow-step-title">Size</div>
+      <div class="flow-step-desc">"I need around 5,000 sqft"</div>
+      <div class="flow-step-ux">Slider + live match count</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">5</div>
+      <div class="flow-step-title">Timing</div>
+      <div class="flow-step-desc">Immediately, 30 days, 1-3 months, flexible</div>
+      <div class="flow-step-ux">Single tap card</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">6</div>
+      <div class="flow-step-title">Duration</div>
+      <div class="flow-step-desc">1-3 mo, 3-6 mo, 6-12 mo, 12-24 mo, 24+</div>
+      <div class="flow-step-ux">Single tap card</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">7</div>
+      <div class="flow-step-title">Deal-Breakers</div>
+      <div class="flow-step-desc">Office, dock, power, climate, etc.</div>
+      <div class="flow-step-ux">Optional tags · skippable</div>
+    </div>
+  </div>
+</div>
+
+<!-- RESULTS -->
+<div class="results-section">
+  <div class="results-main">
+    <h2>Results: Your Matched Spaces</h2>
+    
+    <div class="tier tier-1">
+      <div class="tier-label">Tier 1 — Cleared Options</div>
+      <h3>Up to 3 confirmed matches shown instantly</h3>
+      <p>Ranked by match quality, not price. Each card shows: satellite image, neighborhood (not address), match %, rate, monthly cost, term, total value, and "Why This Space" explanation.</p>
+      <div class="tier-details">
+        <span class="tier-tag">✓ Match %</span>
+        <span class="tier-tag">✓ All-in pricing</span>
+        <span class="tier-tag">✓ Market context</span>
+        <span class="tier-tag">✓ Value explanation</span>
+        <span class="tier-tag">✗ No address</span>
+        <span class="tier-tag">✗ No supplier name</span>
+      </div>
+    </div>
+
+    <div class="tier tier-2">
+      <div class="tier-label">Tier 2 — Being Evaluated</div>
+      <h3>Additional matches sourced in background</h3>
+      <p>Shown with less detail: satellite thumbnail, neighborhood, approx size, match %. No pricing yet. "We're confirming availability — you'll be notified as spaces clear." Auto-pings top 3 matching non-network suppliers.</p>
+      <div class="tier-details">
+        <span class="tier-tag">✓ Satellite preview</span>
+        <span class="tier-tag">✓ Neighborhood</span>
+        <span class="tier-tag">✓ Match %</span>
+        <span class="tier-tag">✗ No pricing</span>
+        <span class="tier-tag">✗ No address</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="contact-section">
+    <h2>Contact Capture</h2>
+    <div class="desc">Never gated before results. Captured naturally when the buyer takes action.</div>
+    
+    <div class="contact-item">
+      <div class="contact-trigger">Schedule Tour</div>
+      <div class="contact-arrow">→</div>
+      <div class="contact-capture">Email + phone to confirm booking</div>
+    </div>
+    <div class="contact-item">
+      <div class="contact-trigger">Book Instantly</div>
+      <div class="contact-arrow">→</div>
+      <div class="contact-capture">Email + phone to process</div>
+    </div>
+    <div class="contact-item">
+      <div class="contact-trigger">Ask a Question</div>
+      <div class="contact-arrow">→</div>
+      <div class="contact-capture">"Where should we send the answer?"</div>
+    </div>
+    <div class="contact-item">
+      <div class="contact-trigger">No Tier 1 Results</div>
+      <div class="contact-arrow">→</div>
+      <div class="contact-capture">"Where should we send matches?"</div>
+    </div>
+    <div class="contact-item">
+      <div class="contact-trigger">Email Me This List</div>
+      <div class="contact-arrow">→</div>
+      <div class="contact-capture">Email as a service, not a gate</div>
+    </div>
+    <div class="contact-item">
+      <div class="contact-trigger">Prefer to Text?</div>
+      <div class="contact-arrow">→</div>
+      <div class="contact-capture">Phone from first SMS message</div>
+    </div>
+  </div>
+</div>
+
+<!-- POST-MATCH: TOUR TO CLOSE -->
+<div class="post-match">
+  <h2>Tour to Close</h2>
+  <div class="timeline">
+    <div class="tl-step">
+      <div class="tl-dot green">1</div>
+      <div class="tl-title">Accept Match</div>
+      <div class="tl-desc">Agree to rate. Provide contact info. Sign WEx Guarantee terms.</div>
+    </div>
+    <div class="tl-step">
+      <div class="tl-dot green">2</div>
+      <div class="tl-title">Schedule Tour</div>
+      <div class="tl-desc">Pick date/time. Multi-property tours coordinated by WEx.</div>
+    </div>
+    <div class="tl-step">
+      <div class="tl-dot orange">3</div>
+      <div class="tl-title">Tour Space</div>
+      <div class="tl-desc">Physical confirmation only. Price already settled.</div>
+    </div>
+    <div class="tl-step">
+      <div class="tl-dot orange">4</div>
+      <div class="tl-title">Confirm</div>
+      <div class="tl-desc">Automated follow-up within 24hrs. Confirm, ask Qs, or pass.</div>
+      <div class="tl-time">48hr decision window</div>
+    </div>
+    <div class="tl-step">
+      <div class="tl-dot blue">5</div>
+      <div class="tl-title">Sign Agreement</div>
+      <div class="tl-desc">Engagement contract via DocuSign. Both parties sign.</div>
+    </div>
+    <div class="tl-step">
+      <div class="tl-dot blue">6</div>
+      <div class="tl-title">Onboard</div>
+      <div class="tl-desc">Insurance, company docs, Stripe payment setup.</div>
+    </div>
+    <div class="tl-step">
+      <div class="tl-dot dark">7</div>
+      <div class="tl-title">Move In</div>
+      <div class="tl-desc">Lease begins. Auto-billing monthly via Stripe.</div>
+      <div class="tl-time">Target: 5 days from tour</div>
+    </div>
+  </div>
+</div>
+
+<!-- PRICING DISPLAY -->
+<div class="pricing-section">
+  <div class="pricing-card">
+    <h3><span class="pricing-dot" style="background: var(--accent)"></span> At / Below Budget</h3>
+    <p>Shown normally with standard pricing display and market rate context for the area.</p>
+    <div class="pricing-example">"$1.00/sqft · $5,000/mo all-in. Rates in Phoenix typically run $0.57–$0.82/sqft."</div>
+  </div>
+  <div class="pricing-card">
+    <h3><span class="pricing-dot" style="background: var(--orange)"></span> Above Budget</h3>
+    <p>Still shown. Honest context about why it's included. No warning labels, no color-coding. Just a confident recommendation.</p>
+    <div class="pricing-example">"Higher rate — shown for its 94% match score and proximity to your distribution zone. Includes private office and 24/7 access."</div>
+  </div>
+</div>
+
+</body>
+</html>

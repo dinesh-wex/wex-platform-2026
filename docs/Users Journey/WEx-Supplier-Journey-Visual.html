@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WEx Supplier Journey</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --dark: #0f1a2e;
+    --accent: #1a7a52;
+    --accent-light: #e8f5ef;
+    --accent-mid: #b8dfc9;
+    --warm: #f7f4ef;
+    --orange: #e8762b;
+    --orange-light: #fef3eb;
+    --blue: #2563eb;
+    --blue-light: #eff4ff;
+    --gray-100: #f8f8f8;
+    --gray-200: #eaeaea;
+    --gray-400: #999;
+    --gray-600: #555;
+    --white: #fff;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--warm);
+    color: var(--dark);
+    padding: 40px;
+    min-height: 100vh;
+  }
+
+  .page-header {
+    text-align: center;
+    margin-bottom: 60px;
+  }
+
+  .page-header .badge {
+    display: inline-block;
+    background: var(--dark);
+    color: var(--white);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 6px 16px;
+    border-radius: 20px;
+    margin-bottom: 16px;
+  }
+
+  .page-header h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 48px;
+    color: var(--dark);
+    margin-bottom: 8px;
+  }
+
+  .page-header .subtitle {
+    font-size: 16px;
+    color: var(--gray-600);
+    max-width: 600px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+
+  /* Three paths layout */
+  .paths-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 50px;
+  }
+
+  .path {
+    background: var(--white);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  .path-header {
+    padding: 24px 24px 16px;
+    border-bottom: 1px solid var(--gray-200);
+  }
+
+  .path-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .path-a .path-label { color: var(--accent); }
+  .path-b .path-label { color: var(--blue); }
+  .path-c .path-label { color: var(--orange); }
+
+  .path-header h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    margin-bottom: 6px;
+  }
+
+  .path-header .desc {
+    font-size: 13px;
+    color: var(--gray-600);
+    line-height: 1.5;
+  }
+
+  .path-steps {
+    padding: 20px 24px 24px;
+  }
+
+  .step {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 20px;
+    position: relative;
+  }
+
+  .step:last-child { margin-bottom: 0; }
+
+  .step-line {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .step-dot {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--white);
+    flex-shrink: 0;
+    z-index: 1;
+  }
+
+  .path-a .step-dot { background: var(--accent); }
+  .path-b .step-dot { background: var(--blue); }
+  .path-c .step-dot { background: var(--orange); }
+
+  .step-connector {
+    width: 2px;
+    flex-grow: 1;
+    min-height: 12px;
+  }
+
+  .path-a .step-connector { background: var(--accent-mid); }
+  .path-b .step-connector { background: #bfdbfe; }
+  .path-c .step-connector { background: #fcd5b5; }
+
+  .step-content {
+    padding-top: 4px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .step-title {
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 4px;
+    color: var(--dark);
+  }
+
+  .step-desc {
+    font-size: 12.5px;
+    color: var(--gray-600);
+    line-height: 1.55;
+  }
+
+  .step-tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-top: 6px;
+  }
+
+  .tag-green { background: var(--accent-light); color: var(--accent); }
+  .tag-blue { background: var(--blue-light); color: var(--blue); }
+  .tag-orange { background: var(--orange-light); color: var(--orange); }
+
+  /* Convergence arrow */
+  .convergence {
+    text-align: center;
+    margin: 10px 0 40px;
+    position: relative;
+  }
+
+  .convergence-line {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .convergence-line .line {
+    height: 2px;
+    width: 80px;
+    background: var(--gray-200);
+  }
+
+  .convergence-line .arrow-down {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--dark);
+    color: var(--white);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+  }
+
+  .convergence-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--gray-400);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+
+  /* Network flow */
+  .network-section {
+    background: var(--white);
+    border-radius: 16px;
+    padding: 32px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    margin-bottom: 40px;
+  }
+
+  .network-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+
+  .network-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--dark);
+    color: var(--white);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    flex-shrink: 0;
+  }
+
+  .network-header h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 24px;
+  }
+
+  .network-header .desc {
+    font-size: 13px;
+    color: var(--gray-600);
+  }
+
+  .deal-flow {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 0;
+    position: relative;
+  }
+
+  .deal-step {
+    text-align: center;
+    position: relative;
+    padding: 0 8px;
+  }
+
+  .deal-step::after {
+    content: '→';
+    position: absolute;
+    right: -6px;
+    top: 20px;
+    font-size: 18px;
+    color: var(--gray-200);
+    font-weight: 700;
+  }
+
+  .deal-step:last-child::after { display: none; }
+
+  .deal-dot {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: var(--accent-light);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 700;
+    margin: 0 auto 10px;
+  }
+
+  .deal-step-title {
+    font-weight: 700;
+    font-size: 12px;
+    margin-bottom: 4px;
+    color: var(--dark);
+  }
+
+  .deal-step-desc {
+    font-size: 11px;
+    color: var(--gray-600);
+    line-height: 1.45;
+  }
+
+  .deal-step-time {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--orange);
+    margin-top: 6px;
+  }
+
+  /* Insights */
+  .insights {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+
+  .insight-card {
+    background: var(--white);
+    border-radius: 12px;
+    padding: 24px;
+    border-left: 4px solid;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  .insight-card.green { border-color: var(--accent); }
+  .insight-card.orange { border-color: var(--orange); }
+
+  .insight-card h3 {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .insight-card p {
+    font-size: 12.5px;
+    color: var(--gray-600);
+    line-height: 1.6;
+  }
+
+  @media print {
+    body { padding: 20px; }
+    .paths-container { gap: 16px; }
+    .path, .network-section, .insight-card { box-shadow: none; border: 1px solid var(--gray-200); }
+  }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <div class="badge">Warehouse Exchange</div>
+  <h1>Supplier Journey</h1>
+  <p class="subtitle">Three entry paths, one network. Every supplier path converges into the same deal-ready state regardless of how they entered.</p>
+</div>
+
+<!-- THREE PATHS -->
+<div class="paths-container">
+  
+  <!-- PATH A -->
+  <div class="path path-a">
+    <div class="path-header">
+      <div class="path-label">Path A — Inbound</div>
+      <h2>EarnCheck Entry</h2>
+      <div class="desc">Curiosity-driven. Supplier checks their property value, discovers WEx.</div>
+    </div>
+    <div class="path-steps">
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">1</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Enter Address</div>
+          <div class="step-desc">Single field. No registration. Just curiosity.</div>
+          <div class="step-tag tag-green">Zero friction</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">2</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Instant Valuation</div>
+          <div class="step-desc">See estimated revenue immediately. Adjust space size slider to watch income change in real time.</div>
+          <div class="step-tag tag-green">First value delivered</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">3</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Configure Space</div>
+          <div class="step-desc">5-6 taps: available space, min size, storage vs ops, office, weekend access, availability. Each toggle shows income impact.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">4</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Set Pricing</div>
+          <div class="step-desc">Choose Automated (set rate, we handle everything) or Manual (negotiate each deal, 15% fee). Market data anchors the rate.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">5</div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Activate</div>
+          <div class="step-desc">Flip the switch. Accept terms. You're in the network.</div>
+          <div class="step-tag tag-green">Network ready</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PATH B -->
+  <div class="path path-b">
+    <div class="path-header">
+      <div class="path-label">Path B — Inbound</div>
+      <h2>Direct Onboarding</h2>
+      <div class="desc">Intent-driven. Supplier comes to WEx wanting to list their space.</div>
+    </div>
+    <div class="path-steps">
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">1</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Enter Address</div>
+          <div class="step-desc">Same single field. WEx auto-pulls all property data from CoStar/database.</div>
+          <div class="step-tag tag-blue">Auto-populated profile</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">2</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Valuation + Configure</div>
+          <div class="step-desc">See revenue estimate and answer configuration questions in one combined flow. Revenue motivates completion.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">3</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Set Pricing</div>
+          <div class="step-desc">Same Automated vs Manual choice. Market-rate anchoring. Annual projection shown.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">4</div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Activate</div>
+          <div class="step-desc">Accept terms. Full profile ready. No lengthy forms needed.</div>
+          <div class="step-tag tag-blue">Network ready</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PATH C -->
+  <div class="path path-c">
+    <div class="path-header">
+      <div class="path-label">Path C — Outbound</div>
+      <h2>Cold Outreach</h2>
+      <div class="desc">Demand-pulled. WEx has a buyer and reaches out to non-network suppliers.</div>
+    </div>
+    <div class="path-steps">
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">1</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Demand Trigger</div>
+          <div class="step-desc">A buyer search finds no/insufficient Tier 1 matches. System identifies matching non-network properties.</div>
+          <div class="step-tag tag-orange">Buyer need drives activation</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">2</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">SMS / Email Outreach</div>
+          <div class="step-desc">"We have a buyer for your space. Est. rate: $X.XX/sqft. Interested? Reply YES with your rate."</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">3</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Rate Reply</div>
+          <div class="step-desc">Supplier replies with their rate. One text. WEx already has their property data from database.</div>
+          <div class="step-tag tag-orange">One-text onboarding</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">4</div>
+          <div class="step-connector"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Fast-Track Confirm</div>
+          <div class="step-desc">2-3 quick questions via text: available space, use restrictions, earliest start. Only what data can't provide.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-line">
+          <div class="step-dot">5</div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Deal + Network</div>
+          <div class="step-desc">Presented to buyer. Completes one deal → becomes permanent network supplier for future matches.</div>
+          <div class="step-tag tag-orange">Network ready</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CONVERGENCE -->
+<div class="convergence">
+  <div class="convergence-line">
+    <div class="line"></div>
+    <div class="line"></div>
+    <div class="arrow-down">↓</div>
+    <div class="line"></div>
+    <div class="line"></div>
+  </div>
+  <div class="convergence-text">All paths converge → Supplier is in-network → Same deal flow</div>
+</div>
+
+<!-- NETWORK DEAL FLOW -->
+<div class="network-section">
+  <div class="network-header">
+    <div class="network-icon">⚡</div>
+    <div>
+      <h2>In-Network Deal Flow</h2>
+      <div class="desc">Once activated through any path, every supplier experiences the same deal cycle</div>
+    </div>
+  </div>
+  <div class="deal-flow">
+    <div class="deal-step">
+      <div class="deal-dot">1</div>
+      <div class="deal-step-title">Deal Ping</div>
+      <div class="deal-step-desc">SMS/email with buyer requirements, rate, and estimated income</div>
+      <div class="deal-step-time">12hr window</div>
+    </div>
+    <div class="deal-step">
+      <div class="deal-dot">2</div>
+      <div class="deal-step-title">Accept / Pass</div>
+      <div class="deal-step-desc">One tap. Decline reason stored for better future matching</div>
+    </div>
+    <div class="deal-step">
+      <div class="deal-dot">3</div>
+      <div class="deal-step-title">Tour Request</div>
+      <div class="deal-step-desc">Buyer picks time. Supplier confirms or proposes alternative</div>
+      <div class="deal-step-time">12hr to confirm</div>
+    </div>
+    <div class="deal-step">
+      <div class="deal-dot">4</div>
+      <div class="deal-step-title">WEx Guarantee</div>
+      <div class="deal-step-desc">Anti-circumvention signed as occupancy protection</div>
+    </div>
+    <div class="deal-step">
+      <div class="deal-dot">5</div>
+      <div class="deal-step-title">Tour</div>
+      <div class="deal-step-desc">Physical confirmation only. Price already agreed</div>
+    </div>
+    <div class="deal-step">
+      <div class="deal-dot">6</div>
+      <div class="deal-step-title">Close</div>
+      <div class="deal-step-desc">DocuSign agreement + Stripe bank setup</div>
+      <div class="deal-step-time">Target: 5 days</div>
+    </div>
+    <div class="deal-step">
+      <div class="deal-dot">7</div>
+      <div class="deal-step-title">Get Paid</div>
+      <div class="deal-step-desc">Automated monthly Stripe deposits at agreed rate</div>
+    </div>
+  </div>
+</div>
+
+<!-- INSIGHTS -->
+<div class="insights">
+  <div class="insight-card green">
+    <h3>🧠 Behavioral Profile Built by Doing, Not Forms</h3>
+    <p>Every deal acceptance, rejection, and question builds the supplier's profile. After 5-10 interactions, WEx knows their preferences better than any form could capture — without the supplier ever filling one out.</p>
+  </div>
+  <div class="insight-card orange">
+    <h3>🔄 Every Cold Outreach Grows the Network</h3>
+    <p>Even rejected cold outreach captures rate floors and preferences. Suppliers who complete one deal become permanent network members. One-time activations compound into lasting supply.</p>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx next build:*)",
+      "Bash(curl:*)",
+      "Bash(pip show:*)",
+      "Bash(python -m pip:*)",
+      "Bash(PYTHONPATH=src python:*)"
+    ]
+  }
+}

@@ -1,0 +1,156 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wex-platform"
+version = "0.1.0"
+description = "WEx Platform 2026 - Unified warehouse exchange platform"
+requires-python = ">=3.12"
+license = {text = "Proprietary"}
+authors = [
+    {name = "Warehouse Exchange", email = "engineering@warehouseexchange.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # Web framework
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+
+    # Data validation
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+
+    # Database
+    "sqlalchemy>=2.0.35",
+    "aiosqlite>=0.20.0",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+
+    # AI
+    "google-generativeai>=0.8.0",
+
+    # Auth
+    "passlib[bcrypt]>=1.7.4",
+    "python-jose[cryptography]>=3.3.0",
+
+    # External services
+    "httpx>=0.28.0",
+    "sendgrid>=6.11.0",
+
+    # Utilities
+    "python-multipart>=0.0.9",
+    "python-dotenv>=1.0.1",
+    "structlog>=24.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+
+    # Linting and formatting
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+]
+
+[project.scripts]
+wex-platform = "wex_platform.app.main:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wex_platform"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+]
+
+# ============================================================================
+# Ruff Configuration
+# ============================================================================
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+    "PTH",    # flake8-use-pathlib
+    "ERA",    # eradicate (commented-out code)
+    "RUF",    # Ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults (FastAPI Depends)
+    "ARG001", # unused function argument (common in handlers)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["wex_platform"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*" = ["ARG001", "S101"]
+
+# ============================================================================
+# MyPy Configuration
+# ============================================================================
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+    "google.generativeai.*",
+    "sendgrid.*",
+    "jose.*",
+    "passlib.*",
+]
+ignore_missing_imports = true
+
+# ============================================================================
+# Pytest Configuration
+# ============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+    "-ra",
+    "-q",
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "unit: Unit tests (no external dependencies)",
+    "integration: Integration tests (may require external services)",
+    "slow: Slow tests (skip with -m 'not slow')",
+]
