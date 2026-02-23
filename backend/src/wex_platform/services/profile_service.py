@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wex_platform.domain.models import PropertyProfile
+from wex_platform.domain.models import PropertyProfile, Warehouse
 from wex_platform.infra.database import async_session
 
 logger = logging.getLogger(__name__)
@@ -108,6 +108,17 @@ async def create_profile_from_search(
                 is_test=is_test,
                 # sqft is set later by Trigger 2 (configurator) — not from building_size_sqft
             )
+
+            # Copy images from linked Warehouse record
+            if warehouse_id:
+                wh_result = await db.execute(
+                    select(Warehouse).where(Warehouse.id == warehouse_id)
+                )
+                wh = wh_result.scalar_one_or_none()
+                if wh:
+                    profile.primary_image_url = wh.primary_image_url
+                    profile.image_urls = wh.image_urls or []
+
             db.add(profile)
             await db.commit()
             logger.info("[Profile] Created profile for session=%s, address=%s", session_id, address)
@@ -291,7 +302,7 @@ async def _run_ai_pipeline(db: AsyncSession, profile: PropertyProfile, raw_conte
         )
 
         model_step2 = get_model(
-            model_name="gemini-2.5-flash-preview-05-20",
+            model_name="gemini-3-flash-preview",
             temperature=0.1,
             json_mode=True,
             system_instruction=step2_prompt,

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { api } from '@/lib/api';
-import { BuildingData, DEMO_BUILDING, RevenueEstimate, TruthCore } from './types';
+import { BuildingData, RevenueEstimate, TruthCore } from './types';
 
 interface Phase2Props {
   truthCore: TruthCore;
@@ -13,6 +13,7 @@ interface Phase2Props {
   setRevenueEstimate: React.Dispatch<React.SetStateAction<RevenueEstimate | null>>;
   onComplete: () => void;
   onRejected: (address: string) => void;
+  onFailed: () => void;
 }
 
 const PROCESSING_STEPS = [
@@ -35,24 +36,29 @@ export default function Phase2Processing({
   setRevenueEstimate,
   onComplete,
   onRejected,
+  onFailed,
 }: Phase2Props) {
   const [text, setText] = useState(PROCESSING_STEPS[0]);
   const [dataReady, setDataReady] = useState(false);
   const [animDone, setAnimDone] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
+
     // 1. Cycle through processing text (animation runs immediately)
     const timers: NodeJS.Timeout[] = [];
     PROCESSING_STEPS.forEach((msg, i) => {
       if (i > 0) {
-        timers.push(setTimeout(() => setText(msg), i * STEP_INTERVAL_MS));
+        timers.push(setTimeout(() => { if (!cancelled) setText(msg); }, i * STEP_INTERVAL_MS));
       }
     });
 
     // 2. Minimum animation time: all steps + 1s buffer after last step
     const totalAnimTime = (PROCESSING_STEPS.length - 1) * STEP_INTERVAL_MS + 1500;
-    const animTimer = setTimeout(() => setAnimDone(true), totalAnimTime);
+    const animTimer = setTimeout(() => { if (!cancelled) setAnimDone(true); }, totalAnimTime);
     timers.push(animTimer);
 
     // 3. Fetch building data + revenue estimate in parallel
@@ -64,7 +70,8 @@ export default function Phase2Processing({
         try {
           const sessionId = sessionStorage.getItem('wex_smoke_session_id') || undefined;
           const { isTestSession } = await import('@/lib/analytics');
-          const results = await api.warehouseLookup(truthCore.address, sessionId, isTestSession());
+          const results = await api.warehouseLookup(truthCore.address, sessionId, isTestSession(), controller.signal);
+          if (cancelled) return;
           if (results && results.length > 0) {
             const bld = results[0];
 
@@ -98,23 +105,19 @@ export default function Phase2Processing({
               nnn_rates: bld.nnn_rates || null,
             };
           }
-        } catch {
-          // Backend unavailable — will use demo fallback below
+        } catch (err) {
+          // If aborted by cleanup, exit silently
+          if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) return;
+          // Backend unavailable or other error — will show apology below
         }
       }
 
-      // Fallback to demo building if still no data
+      if (cancelled) return;
+
+      // No data found — show apology instead of fake demo data
       if (!resolvedBuilding) {
-        const addr = truthCore.address || DEMO_BUILDING.address;
-        resolvedBuilding = {
-          ...DEMO_BUILDING,
-          address: addr,
-          city: undefined,
-          state: undefined,
-          zip: undefined,
-          primary_image_url: api.streetViewUrl(addr),
-          image_urls: [api.streetViewUrl(addr)],
-        };
+        setFailed(true);
+        return;
       }
 
       // Set building data and update truth core with resolved info
@@ -133,7 +136,7 @@ export default function Phase2Processing({
         // Rates were fetched in parallel with property search — no extra API call
         const low = prefetchedRates.nnn_low;
         const high = prefetchedRates.nnn_high;
-        setRevenueEstimate({
+        if (!cancelled) setRevenueEstimate({
           low_rate: low,
           high_rate: high,
           low_monthly: Math.round(sqft * low),
@@ -151,7 +154,7 @@ export default function Phase2Processing({
             state: resolvedBuilding.state,
             zip: resolvedBuilding.zip,
           });
-          setRevenueEstimate({
+          if (!cancelled) setRevenueEstimate({
             low_rate: result.low_rate,
             high_rate: result.high_rate,
             low_monthly: result.low_monthly,
@@ -163,7 +166,7 @@ export default function Phase2Processing({
         } catch {
           // Fallback: client-side estimate
           const rates = resolvedBuilding.state === 'CA' ? [0.85, 1.10] : [0.65, 0.90];
-          setRevenueEstimate({
+          if (!cancelled) setRevenueEstimate({
             low_rate: rates[0],
             high_rate: rates[1],
             low_monthly: Math.round(sqft * rates[0]),
@@ -174,7 +177,7 @@ export default function Phase2Processing({
         }
       }
 
-      setDataReady(true);
+      if (!cancelled) setDataReady(true);
     };
 
     fetchData();
@@ -183,6 +186,7 @@ export default function Phase2Processing({
     const PROGRESS_DURATION_MS = 90000;
     const PROGRESS_TICK_MS = 200;
     const progressTimer = setInterval(() => {
+      if (cancelled) return;
       setProgress((prev) => {
         const next = prev + (100 / (PROGRESS_DURATION_MS / PROGRESS_TICK_MS));
         return next >= 100 ? 100 : next;
@@ -191,6 +195,8 @@ export default function Phase2Processing({
     timers.push(progressTimer as unknown as NodeJS.Timeout);
 
     return () => {
+      cancelled = true;
+      controller.abort();
       timers.forEach(clearTimeout);
       clearInterval(progressTimer);
     };
@@ -202,6 +208,38 @@ export default function Phase2Processing({
       onComplete();
     }
   }, [dataReady, animDone, onComplete]);
+
+  // --- Apology screen when lookup fails ---
+  if (failed) {
+    return (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.5 }}
+        className="min-h-[calc(100vh-8rem)] flex flex-col items-center justify-center bg-black relative overflow-hidden"
+      >
+        <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-900 opacity-80" />
+        <div className="z-10 text-center max-w-md px-6">
+          <div className="w-16 h-16 rounded-full bg-slate-700/50 flex items-center justify-center mx-auto mb-6">
+            <span className="text-3xl">🏗️</span>
+          </div>
+          <h2 className="text-white text-2xl md:text-3xl font-bold mb-3">
+            We&apos;re sorry
+          </h2>
+          <p className="text-slate-300 text-base md:text-lg mb-8">
+            We couldn&apos;t find details for this property right now. This can happen when our data sources are temporarily slow. Please try again.
+          </p>
+          <button
+            onClick={onFailed}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 px-8 rounded-xl shadow-lg transition-all"
+          >
+            Try Again
+          </button>
+        </div>
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div

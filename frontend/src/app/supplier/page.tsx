@@ -486,7 +486,7 @@ function SupplierDashboard() {
             {/* Right side: Actions */}
             <div className="flex items-center gap-3">
               <Link
-                href="/supplier/earncheck"
+                href="/supplier/earncheck?returning=true"
                 className="bg-slate-900 hover:bg-black text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg transition-transform hover:-translate-y-0.5"
               >
                 <Plus size={18} />
@@ -534,7 +534,7 @@ function SupplierDashboard() {
         {!loading && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {/* A. The "Growth" Card (Add New Asset) */}
-            <Link href="/supplier/earncheck">
+            <Link href="/supplier/earncheck?returning=true">
               <motion.div
                 whileHover={{ scale: 1.02 }}
                 className="group relative h-[420px] rounded-[24px] border-2 border-dashed border-slate-300 bg-gradient-to-b from-white to-emerald-50/50 hover:border-emerald-400 transition-all cursor-pointer flex flex-col items-center justify-center text-center p-6"

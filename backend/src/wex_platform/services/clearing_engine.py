@@ -53,6 +53,20 @@ DLA_MAX_CANDIDATES = 5
 DLA_TOKEN_EXPIRY_DAYS = 7
 
 
+def _haversine_miles(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Return the great-circle distance in miles between two lat/lng points."""
+    R = 3958.8  # Earth radius in miles
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlng / 2) ** 2
+    )
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
 class ClearingEngine:
     """Orchestrates the clearing pipeline: filter -> score -> price-check -> rank."""
 
@@ -211,11 +225,7 @@ class ClearingEngine:
         if not matches_data:
             return []
 
-        # Pricing + persistence
-        from wex_platform.agents.pricing_agent import PricingAgent
-
-        pricing_agent = PricingAgent()
-
+        # Pricing (pure formula — no AI needed) + persistence
         results: list[dict] = []
         for match_data in matches_data[:3]:  # Top 3 matches
             wh_id = match_data.get("warehouse_id")
@@ -231,9 +241,8 @@ class ClearingEngine:
             tc_data = wh_dict_match["truth_core"]
             supplier_rate = tc_data.get("supplier_rate_per_sqft", 0)
 
-            buyer_rate = await self._calculate_buyer_rate(
-                pricing_agent, wh_dict_match, supplier_rate
-            )
+            # WEx formula: supplier × 1.20 (margin) × 1.06 (guarantee), round UP
+            buyer_rate = math.ceil((supplier_rate * 1.20 * 1.06) * 100) / 100
 
             spread = buyer_rate - supplier_rate
             spread_pct = (spread / buyer_rate) * 100 if buyer_rate > 0 else 0
@@ -262,6 +271,15 @@ class ClearingEngine:
             )
             session.add(ib_score)
 
+            # Calculate distance from buyer's requested location
+            wh_lat = wh_dict_match.get("lat")
+            wh_lng = wh_dict_match.get("lng")
+            distance_miles = None
+            if buyer_need.lat and buyer_need.lng and wh_lat and wh_lng:
+                distance_miles = round(
+                    _haversine_miles(buyer_need.lat, buyer_need.lng, wh_lat, wh_lng), 1
+                )
+
             results.append({
                 "match_id": match_id,
                 "warehouse_id": wh_id,
@@ -276,6 +294,7 @@ class ClearingEngine:
                 "supplier_rate": round(supplier_rate, 2),  # Admin only
                 "spread_pct": round(spread_pct, 1),  # Admin only
                 "confidence": match_data.get("confidence", 0),
+                "distance_miles": distance_miles,
             })
 
         return results
@@ -566,21 +585,25 @@ class ClearingEngine:
             if buyer_need.max_sqft and tc.min_sqft and tc.min_sqft > buyer_need.max_sqft:
                 continue
 
-            # State filter (loose - same state)
+            # State filter — hard constraint, never return out-of-state
             if buyer_need.state and wh.state:
                 if buyer_need.state.upper() != wh.state.upper():
                     continue
 
+            # Distance filter — max 50 miles when coordinates are available
+            if buyer_need.lat and buyer_need.lng and wh.lat and wh.lng:
+                dist = _haversine_miles(buyer_need.lat, buyer_need.lng, wh.lat, wh.lng)
+                if dist > 50:
+                    continue
+
             candidates.append(wh)
 
-        # If state filter is too strict and returns nothing, relax it
-        # and let the AI agent sort out geographic relevance
+        # Never relax the state filter — out-of-state results confuse buyers
         if not candidates and buyer_need.state:
             logger.info(
-                "State filter too strict for %s, relaxing to all active warehouses",
+                "No warehouses in state %s — returning empty set",
                 buyer_need.state,
             )
-            candidates = [wh for wh in warehouses if wh.truth_core]
 
         return candidates
 
@@ -613,6 +636,8 @@ class ClearingEngine:
                 "building_size_sqft": wh.building_size_sqft,
                 "property_type": wh.property_type,
                 "primary_image_url": wh.primary_image_url,
+                "lat": wh.lat,
+                "lng": wh.lng,
                 "image_urls": wh.image_urls or [],
                 "truth_core": {
                     "min_sqft": tc.min_sqft,
@@ -646,85 +671,6 @@ class ClearingEngine:
             }
             warehouse_dicts.append(wh_dict)
         return warehouse_dicts
-
-    # ------------------------------------------------------------------
-    # Pricing
-    # ------------------------------------------------------------------
-
-    async def _calculate_buyer_rate(
-        self,
-        pricing_agent,
-        warehouse_dict: dict,
-        supplier_rate: float,
-    ) -> float:
-        """Calculate the buyer-facing rate using the Pricing Agent.
-
-        Falls back to a 20% spread over the supplier rate if the
-        pricing agent call fails.  Enforces a minimum 10% spread
-        to ensure WEx margin.
-
-        Args:
-            pricing_agent: An initialised PricingAgent instance.
-            warehouse_dict: The warehouse data dict (used by the
-                pricing agent for market context).
-            supplier_rate: The supplier's rate per sqft.
-
-        Returns:
-            The buyer rate per sqft (float).
-        """
-        # WEx pricing formula: supplier_rate x 1.20 (margin) x 1.06 (guarantee fee), round UP
-        default_rate = math.ceil((supplier_rate * 1.20 * 1.06) * 100) / 100
-
-        # Build a flat dict the pricing agent expects
-        pricing_data = {
-            "city": warehouse_dict.get("city"),
-            "state": warehouse_dict.get("state"),
-            "building_size_sqft": warehouse_dict.get("building_size_sqft", 0),
-        }
-        tc = warehouse_dict.get("truth_core", {})
-        pricing_data.update({
-            "min_sqft": tc.get("min_sqft", 0),
-            "max_sqft": tc.get("max_sqft", 0),
-            "activity_tier": tc.get("activity_tier", "storage_only"),
-            "clear_height_ft": tc.get("clear_height_ft"),
-            "dock_doors_receiving": tc.get("dock_doors_receiving", 0),
-            "drive_in_bays": tc.get("drive_in_bays", 0),
-            "has_office_space": tc.get("has_office_space", False),
-            "has_sprinkler": tc.get("has_sprinkler", False),
-            "parking_spaces": tc.get("parking_spaces", 0),
-            "power_supply": tc.get("power_supply"),
-        })
-
-        # Contextual memories as plain strings
-        memories_text = [
-            m.get("content", "")
-            for m in warehouse_dict.get("memories", [])
-            if m.get("content")
-        ]
-
-        try:
-            pricing_result = await pricing_agent.get_rate_guidance(
-                pricing_data, contextual_memories=memories_text or None
-            )
-
-            if pricing_result.ok:
-                suggested = pricing_result.data.get(
-                    "suggested_rate_mid", default_rate
-                )
-                # Enforce minimum: always apply full formula
-                buyer_rate = max(
-                    math.ceil((suggested * 1.06) * 100) / 100,
-                    math.ceil((supplier_rate * 1.20 * 1.06) * 100) / 100,
-                )
-                return buyer_rate
-        except Exception as exc:
-            logger.warning(
-                "Pricing agent failed for warehouse %s: %s",
-                warehouse_dict.get("id"),
-                exc,
-            )
-
-        return default_rate
 
     # ------------------------------------------------------------------
     # InstantBookScore construction

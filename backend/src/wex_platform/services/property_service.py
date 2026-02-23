@@ -1,8 +1,11 @@
 """Service to persist Gemini property search results into the database."""
 import json
+import logging
 import uuid
 from datetime import datetime
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,33 +58,48 @@ async def create_warehouse_from_search(
         maps_key = settings.google_maps_api_key
         if maps_key:
             base = "https://maps.googleapis.com/maps/api/staticmap"
-            # Satellite view (close-up aerial)
+            sv = "https://maps.googleapis.com/maps/api/streetview"
+            lat, lng = geocoding.lat, geocoding.lng
+            # 1. Satellite view — close-up aerial (zoom 18)
             image_urls.append(
-                f"{base}?center={geocoding.lat},{geocoding.lng}"
+                f"{base}?center={lat},{lng}"
                 f"&zoom=18&size=600x400&maptype=satellite&key={maps_key}"
             )
-            # Street View (ground-level building photo)
+            # 2. Street View — only include if imagery exists at this location
+            try:
+                import httpx
+                sv_meta = httpx.get(
+                    f"{sv}/metadata?location={lat},{lng}&key={maps_key}",
+                    timeout=5,
+                )
+                if sv_meta.status_code == 200 and sv_meta.json().get("status") == "OK":
+                    image_urls.append(
+                        f"{sv}?size=600x400&location={lat},{lng}&key={maps_key}"
+                    )
+            except Exception:
+                pass  # skip street view if metadata check fails
+            # 3. Roadmap view — contextual location with pin
             image_urls.append(
-                f"https://maps.googleapis.com/maps/api/streetview"
-                f"?size=600x400&location={geocoding.lat},{geocoding.lng}"
-                f"&key={maps_key}"
-            )
-            # Roadmap view (contextual location)
-            image_urls.append(
-                f"{base}?center={geocoding.lat},{geocoding.lng}"
+                f"{base}?center={lat},{lng}"
                 f"&zoom=15&size=600x400&maptype=roadmap"
-                f"&markers=color:red%7C{geocoding.lat},{geocoding.lng}&key={maps_key}"
+                f"&markers=color:red%7C{lat},{lng}&key={maps_key}"
             )
 
-    # Merge any property photos extracted from listing sources (up to 2)
+    # Merge property photos extracted from CRE listings (up to 7)
     extracted_images = property_data.get("image_urls", [])
+    logger.info(
+        "[PropertyService] CRE images from Gemini: %s (type=%s), Google Maps images: %d",
+        len(extracted_images) if isinstance(extracted_images, list) else repr(extracted_images),
+        type(extracted_images).__name__,
+        len(image_urls),
+    )
     if extracted_images and isinstance(extracted_images, list):
-        for url in extracted_images[:2]:
+        for url in extracted_images[:7]:
             if isinstance(url, str) and url.startswith("http") and url not in image_urls:
                 image_urls.append(url)
 
-    # Cap at 5 images total
-    image_urls = image_urls[:5]
+    # Cap at 10 images total
+    image_urls = image_urls[:10]
 
     warehouse.image_urls = image_urls
     warehouse.primary_image_url = image_urls[0] if image_urls else None

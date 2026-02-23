@@ -417,11 +417,37 @@ class BaseAgent:
         buyer_id: Optional[str] = None,
         deal_id: Optional[str] = None,
     ) -> None:
-        """Non-blocking wrapper around ``log_activity``.
+        """Fire-and-forget wrapper around ``log_activity``.
 
-        Catches all exceptions so that a database failure never
-        propagates up to the caller.
+        Schedules the DB write as a background task so it never blocks
+        the calling agent (prevents SQLite lock contention during
+        concurrent AI calls).
         """
+        import asyncio
+
+        asyncio.ensure_future(self._do_log_activity(
+            action=action,
+            input_summary=input_summary,
+            output_summary=output_summary,
+            tokens_used=tokens_used,
+            latency_ms=latency_ms,
+            warehouse_id=warehouse_id,
+            buyer_id=buyer_id,
+            deal_id=deal_id,
+        ))
+
+    async def _do_log_activity(
+        self,
+        action: str,
+        input_summary: str,
+        output_summary: str,
+        tokens_used: int,
+        latency_ms: int,
+        warehouse_id: Optional[str] = None,
+        buyer_id: Optional[str] = None,
+        deal_id: Optional[str] = None,
+    ) -> None:
+        """Actual DB write for agent logs, runs in background."""
         try:
             await self.log_activity(
                 action=action,

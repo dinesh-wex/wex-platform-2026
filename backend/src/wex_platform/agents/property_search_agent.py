@@ -39,7 +39,7 @@ class PropertySearchAgent:
     # Fields used to determine whether a supplemental search is needed.
     _COVERAGE_FIELDS = ["building_size_sqft", "year_built", "clear_height_ft", "dock_doors"]
     # Timeout for individual Gemini API calls (seconds)
-    _API_TIMEOUT = 45
+    _API_TIMEOUT = 90
 
     def __init__(self):
         from wex_platform.app.config import get_settings
@@ -419,7 +419,7 @@ Extract the structured property data as JSON."""
             async def _run_extraction():
                 return await asyncio.wait_for(
                     self._client.aio.models.generate_content(
-                        model="gemini-2.0-flash",
+                        model="gemini-3-flash-preview",
                         contents=extraction_input,
                         config=types.GenerateContentConfig(
                             system_instruction=EXTRACTION_PROMPT,
@@ -482,7 +482,7 @@ Extract the structured property data as JSON."""
                 logger.warning("JSON parse failed for '%s', attempting repair", address)
                 repair_response = await asyncio.wait_for(
                     self._client.aio.models.generate_content(
-                        model="gemini-2.0-flash",
+                        model="gemini-3-flash-preview",
                         contents=f"Fix this malformed JSON, return ONLY valid JSON:\n\n{raw_json}",
                         config=types.GenerateContentConfig(
                             temperature=0.0,
@@ -519,7 +519,20 @@ Extract the structured property data as JSON."""
                     set(property_data.get("source_urls", []) + grounding_urls)
                 )
 
-            logger.info("[PropertySearch] Step 2 complete — extracted %d non-null fields", sum(1 for v in property_data.values() if v is not None))
+            # Ensure image_urls is a list (Gemini sometimes returns null or omits it)
+            if not isinstance(property_data.get("image_urls"), list):
+                property_data["image_urls"] = []
+
+            # Log image extraction results
+            img_urls = property_data.get("image_urls")
+            logger.info(
+                "[PropertySearch] Step 2 complete — extracted %d non-null fields, image_urls=%s",
+                sum(1 for v in property_data.values() if v is not None),
+                f"{len(img_urls)} URLs" if isinstance(img_urls, list) else repr(img_urls),
+            )
+            if isinstance(img_urls, list) and img_urls:
+                for u in img_urls[:3]:
+                    logger.info("[PropertySearch]   image: %s", u)
 
             # --- Post-extraction pipeline (execution order matters!) ---
 

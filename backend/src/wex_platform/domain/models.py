@@ -699,6 +699,10 @@ class PropertyProfile(Base):
     available_sqft = Column(Integer)
     lot_size_acres = Column(Float)
 
+    # --- Images (copied from Warehouse on activation) ---
+    primary_image_url = Column(String(500))
+    image_urls = Column(JSON, default=[])
+
     # --- AI fields ---
     additional_notes = Column(Text)         # Raw user free-text from "Tell us more"
     ai_profile_summary = Column(Text)       # AI-generated structured summary (living doc)

@@ -29,10 +29,16 @@ import {
   Thermometer,
   Car,
   ArrowRight,
+  Ruler,
+  Box,
+  Settings2,
+  Edit2,
+  Smartphone,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import ContactCaptureModal from "@/components/ui/ContactCaptureModal";
 import TourBookingFlow from "@/components/ui/TourBookingFlow";
+import ModifySearchDrawer, { type SearchIntent } from "@/components/ui/ModifySearchDrawer";
 
 // Alias for optional icon
 const DoorOpen = ArrowRight;
@@ -56,6 +62,7 @@ interface MatchOption {
     city: string;
     state: string;
     neighborhood?: string;
+    distance_miles?: number | null;
   };
 
   property: {
@@ -105,6 +112,71 @@ function formatNumber(num: number): string {
   return new Intl.NumberFormat("en-US").format(num);
 }
 
+const ACTIVITY_TIER_LABELS: Record<string, string> = {
+  storage_only: "Storage Only",
+  storage_light_assembly: "Storage & Light Assembly",
+  distribution: "Distribution",
+  ecommerce_fulfillment: "E-Commerce Fulfillment",
+  manufacturing_light: "Light Manufacturing",
+  manufacturing_heavy: "Heavy Manufacturing",
+  cold_storage: "Cold Storage",
+  cross_dock: "Cross Dock",
+};
+
+function formatActivityTier(raw: string | undefined | null): string {
+  if (!raw) return "Industrial";
+  if (ACTIVITY_TIER_LABELS[raw]) return ACTIVITY_TIER_LABELS[raw];
+  // Fallback: convert snake_case to Title Case
+  return raw.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/* ------------------------------------------------------------------ */
+/*  Map flat API tier1 response to nested MatchOption                   */
+/* ------------------------------------------------------------------ */
+function mapApiToMatchOption(raw: any): MatchOption {
+  // If already nested (e.g. from buildDemoOptions), pass through
+  if (raw.location && typeof raw.location === "object") return raw as MatchOption;
+
+  const features: FeaturePill[] = [];
+  const f = raw.features || {};
+  if (f.clear_height) features.push({ label: `${f.clear_height}ft Clear`, icon: "height" });
+  if (f.dock_doors) features.push({ label: `${f.dock_doors} Docks`, icon: "dock" });
+  if (f.has_sprinkler) features.push({ label: "Sprinklered", icon: "sprinkler" });
+  if (f.has_office) features.push({ label: "Office Space", icon: "office" });
+  if (f.parking) features.push({ label: `${f.parking} Parking`, icon: "parking" });
+
+  return {
+    match_id: raw.match_id || "",
+    warehouse_id: raw.warehouse_id || "",
+    tier: raw.tier || 1,
+    match_score: raw.confidence ?? raw.match_score ?? 0,
+    match_explanation: raw.reasoning || raw.match_explanation || "",
+    location: {
+      city: raw.city || "",
+      state: raw.state || "",
+      neighborhood: raw.neighborhood || raw.address || "",
+      distance_miles: raw.distance_miles ?? null,
+    },
+    property: {
+      type: formatActivityTier(f.activity_tier),
+      available_sqft: raw.available_sqft || 0,
+      building_total_sqft: raw.building_size_sqft || undefined,
+    },
+    features,
+    pricing: {
+      rate_sqft: raw.buyer_rate || 0,
+      monthly_total: raw.monthly_cost || 0,
+      term_months: raw.term_months || 6,
+      term_total: raw.total_value || 0,
+    },
+    primary_image: raw.primary_image_url
+      ? { url: raw.primary_image_url, type: "supplier" }
+      : null,
+    instant_book_eligible: raw.instant_book_eligible || false,
+    description: raw.description || undefined,
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /*  Icon mapping for feature pills                                     */
 /* ------------------------------------------------------------------ */
@@ -146,6 +218,9 @@ function SmartMediaGallery({
   alt: string;
 }) {
   const [swipeIndex, setSwipeIndex] = useState(0);
+  const [lightbox, setLightbox] = useState(false);
+  const [lbIndex, setLbIndex] = useState(0);
+  const [failedUrls, setFailedUrls] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -153,12 +228,19 @@ function SmartMediaGallery({
     const idx = Math.round(el.scrollLeft / el.clientWidth);
     setSwipeIndex(idx);
   }, []);
-  const hero = images[0] || null;
-  const insets = images.slice(1, 3);
-  const extraCount = Math.max(0, images.length - 3);
+
+  // Filter out broken images
+  const validImages = images.filter((img) => !failedUrls.has(img.url));
+  const handleImgError = (url: string) => {
+    setFailedUrls((prev) => new Set(prev).add(url));
+  };
+
+  const hero = validImages[0] || null;
+  const insets = validImages.slice(1, 3);
+  const extraCount = Math.max(0, validImages.length - 3);
 
   // --- EMPTY STATE ---
-  if (images.length === 0) {
+  if (validImages.length === 0) {
     return (
       <div className="relative w-full aspect-video bg-gradient-to-br from-slate-100 to-slate-200 flex flex-col items-center justify-center gap-3">
         <Building2 className="w-16 h-16 text-slate-300" />
@@ -168,10 +250,10 @@ function SmartMediaGallery({
   }
 
   // --- SINGLE IMAGE ---
-  if (images.length === 1) {
+  if (validImages.length === 1) {
     return (
       <div className="relative w-full aspect-video bg-slate-100 overflow-hidden">
-        <img src={hero!.url} alt={alt} className="absolute inset-0 w-full h-full object-cover" />
+        <img src={hero!.url} alt={alt} className="absolute inset-0 w-full h-full object-cover" onError={() => handleImgError(hero!.url)} />
         {hasVirtualTour && <VirtualTourButton />}
       </div>
     );
@@ -184,15 +266,15 @@ function SmartMediaGallery({
       {/* Desktop Bento: 70 / 30 split */}
       <div className="hidden md:grid grid-cols-[7fr_3fr] gap-1 relative overflow-hidden rounded-t-2xl" style={{ height: 340 }}>
         {/* Hero */}
-        <div className="relative overflow-hidden">
-          <img src={hero!.url} alt={alt} className="absolute inset-0 w-full h-full object-cover" />
+        <div className="relative overflow-hidden cursor-pointer" onClick={() => { setLbIndex(0); setLightbox(true); }}>
+          <img src={hero!.url} alt={alt} className="absolute inset-0 w-full h-full object-cover" onError={() => handleImgError(hero!.url)} />
           {hasVirtualTour && <VirtualTourButton />}
         </div>
         {/* Inset stack */}
         <div className="flex flex-col gap-1">
           {insets.map((img, i) => (
-            <div key={i} className="relative flex-1 overflow-hidden">
-              <img src={img.url} alt={`${alt} ${i + 2}`} className="absolute inset-0 w-full h-full object-cover" />
+            <div key={i} className="relative flex-1 overflow-hidden cursor-pointer" onClick={() => { setLbIndex(i + 1); setLightbox(true); }}>
+              <img src={img.url} alt={`${alt} ${i + 2}`} className="absolute inset-0 w-full h-full object-cover" onError={() => handleImgError(img.url)} />
               {/* "+N more" overlay on last inset */}
               {i === insets.length - 1 && extraCount > 0 && (
                 <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
@@ -213,22 +295,47 @@ function SmartMediaGallery({
       {/* Mobile Swipe */}
       <div className="md:hidden relative">
         <div ref={scrollRef} onScroll={handleScroll} className="overflow-x-auto snap-x snap-mandatory flex scrollbar-hide" style={{ scrollbarWidth: "none" }}>
-          {images.map((img, i) => (
+          {validImages.map((img, i) => (
             <div key={i} className="snap-center shrink-0 w-full aspect-video relative bg-slate-100">
-              <img src={img.url} alt={`${alt} ${i + 1}`} className="absolute inset-0 w-full h-full object-cover" />
+              <img src={img.url} alt={`${alt} ${i + 1}`} className="absolute inset-0 w-full h-full object-cover" onError={() => handleImgError(img.url)} />
               {i === 0 && hasVirtualTour && <VirtualTourButton />}
             </div>
           ))}
         </div>
         {/* Pagination dots */}
-        {images.length > 1 && (
+        {validImages.length > 1 && (
           <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-            {images.map((_, i) => (
+            {validImages.map((_, i) => (
               <div key={i} className={`w-2 h-2 rounded-full transition-colors ${i === swipeIndex ? "bg-white" : "bg-white/50"}`} />
             ))}
           </div>
         )}
       </div>
+
+      {/* Lightbox modal */}
+      {lightbox && (
+        <div className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center" onClick={() => setLightbox(false)}>
+          {/* Close button */}
+          <button className="absolute top-4 right-4 text-white/80 hover:text-white text-3xl font-light z-10 w-10 h-10 flex items-center justify-center" onClick={() => setLightbox(false)}>✕</button>
+          {/* Prev */}
+          {validImages.length > 1 && (
+            <button className="absolute left-4 text-white/70 hover:text-white text-4xl z-10" onClick={(e) => { e.stopPropagation(); setLbIndex((lbIndex - 1 + validImages.length) % validImages.length); }}>‹</button>
+          )}
+          {/* Image */}
+          <img
+            src={validImages[lbIndex]?.url}
+            alt={`${alt} ${lbIndex + 1}`}
+            className="max-h-[85vh] max-w-[90vw] object-contain rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
+          {/* Next */}
+          {validImages.length > 1 && (
+            <button className="absolute right-14 text-white/70 hover:text-white text-4xl z-10" onClick={(e) => { e.stopPropagation(); setLbIndex((lbIndex + 1) % validImages.length); }}>›</button>
+          )}
+          {/* Counter */}
+          <div className="absolute bottom-6 text-white/70 text-sm">{lbIndex + 1} / {validImages.length}</div>
+        </div>
+      )}
     </>
   );
 }
@@ -256,12 +363,14 @@ function Tier1Card({
   onAccept,
   onAsk,
   accepting,
+  allocatedSqft,
 }: {
   option: MatchOption;
   index: number;
   onAccept: (matchId: string) => void;
   onAsk: (matchId: string) => void;
   accepting: string | null;
+  allocatedSqft: number;
 }) {
   // Derive display strings with fallbacks
   const neighborhood =
@@ -314,6 +423,11 @@ function Tier1Card({
           <div className="md:col-span-2">
             <div className="flex items-center gap-2 text-slate-500 text-sm font-bold uppercase tracking-widest mb-2">
               <MapPin size={16} /> {neighborhood}
+              {option.location.distance_miles != null && (
+                <span className="text-xs font-semibold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full ml-1">
+                  {option.location.distance_miles < 1 ? '<1' : Math.round(option.location.distance_miles)} mi away
+                </span>
+              )}
             </div>
             {/* Anti-circumvention: NO STREET ADDRESS */}
             <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-2">
@@ -356,29 +470,57 @@ function Tier1Card({
           </div>
         )}
 
-        {/* 4. FINANCIALS ("The Ticket") */}
+        {/* 4. FINANCIALS ("The Ticket") — 5-column breakdown */}
         <div className="bg-slate-50 rounded-2xl p-6 mb-8 border border-slate-100">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6 md:divide-x md:divide-slate-200">
-            <div className="md:pl-0">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 md:gap-2 items-center text-center">
+            {/* Allocated Size */}
+            <div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Allocated Size</p>
+              <p className="text-xl font-bold text-slate-900">{allocatedSqft.toLocaleString()}</p>
+              <p className="text-xs text-slate-500">sqft</p>
+            </div>
+            {/* × operator */}
+            <div className="hidden md:flex items-center justify-center">
+              <span className="text-slate-300 text-lg font-bold">×</span>
+            </div>
+            {/* Your Rate */}
+            <div>
               <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Your Rate</p>
               <p className="text-xl font-bold text-slate-900">${option.pricing.rate_sqft.toFixed(2)}</p>
               <p className="text-xs text-slate-500">/sqft/month</p>
             </div>
-            <div className="md:pl-6">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Monthly Cost</p>
+            {/* = operator */}
+            <div className="hidden md:flex items-center justify-center">
+              <span className="text-slate-300 text-lg font-bold">=</span>
+            </div>
+            {/* Monthly Cost */}
+            <div>
+              <p className="text-xs font-bold text-emerald-600 uppercase tracking-widest mb-1">Monthly Cost</p>
               <p className="text-2xl font-bold text-emerald-600">{formatCurrency(option.pricing.monthly_total)}</p>
               <p className="text-xs text-slate-500">all-in pricing</p>
             </div>
-            <div className="md:pl-6">
+          </div>
+
+          {/* Term row */}
+          <div className="mt-4 pt-4 border-t border-slate-200 grid grid-cols-2 md:grid-cols-3 gap-4 items-center text-center">
+            <div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Monthly Cost</p>
+              <p className="text-lg font-bold text-slate-900">{formatCurrency(option.pricing.monthly_total)}</p>
+            </div>
+            <div className="hidden md:flex items-center justify-center">
+              <span className="text-slate-300 text-lg font-bold">×</span>
+            </div>
+            <div>
               <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Term</p>
-              <p className="text-xl font-bold text-slate-900">{option.pricing.term_months}</p>
-              <p className="text-xs text-slate-500">months</p>
+              <p className="text-lg font-bold text-slate-900">{option.pricing.term_months} months</p>
             </div>
-            <div className="md:pl-6">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total Value</p>
-              <p className="text-xl font-bold text-slate-900">{formatCurrency(option.pricing.term_total)}</p>
-              <p className="text-xs text-slate-500">over full term</p>
-            </div>
+          </div>
+
+          {/* Total Value highlight */}
+          <div className="mt-4 pt-4 border-t border-slate-200 text-center">
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total Lease Value</p>
+            <p className="text-2xl font-bold text-slate-900">{formatCurrency(option.pricing.term_total)}</p>
+            <p className="text-xs text-slate-500">over {option.pricing.term_months} months</p>
           </div>
 
           {/* Market Context Banner */}
@@ -681,10 +823,16 @@ function OptionsContent() {
   // Email list modal state
   const [emailListModalOpen, setEmailListModalOpen] = useState(false);
 
+  // Pending options (Tier 2) subscription state
+  const [pendingSubscribed, setPendingSubscribed] = useState(false);
+
   // Tour booking flow state
   const [tourFlowOpen, setTourFlowOpen] = useState(false);
   const [tourFlowDeal, setTourFlowDeal] = useState<any>(null);
   const [tourFlowWarehouse, setTourFlowWarehouse] = useState<any>(null);
+
+  // Modify Search drawer state
+  const [modifyDrawerOpen, setModifyDrawerOpen] = useState(false);
 
   // Check if contact is already saved
   useEffect(() => {
@@ -734,6 +882,82 @@ function OptionsContent() {
     if (monthlyMatch && sqft > 0)
       return Math.round((parseFloat(monthlyMatch[1]) / sqft) * 100) / 100;
     return 1.1;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /*  Modify Search — drawer helpers                                    */
+  /* ---------------------------------------------------------------- */
+  function getCurrentIntent(): SearchIntent {
+    const need = getBuyerNeed();
+    return {
+      location: need.location || "",
+      sqft: parseBuyerSqft(need),
+      useType: need.use_type || "storage",
+      goodsType: need.goods_type || "",
+      timing: need.timing || "Immediately",
+      duration: need.duration || "6 Months",
+      amenities: (need.requirements || "")
+        .split(",")
+        .map((r: string) => r.trim())
+        .filter(Boolean),
+    };
+  }
+
+  async function handleModifySearch(intent: SearchIntent) {
+    setLoading(true);
+
+    // Parse duration to months
+    let durationMonths = 6;
+    const dMatch = intent.duration.match(/^(\d+)\s*Month/i);
+    if (dMatch) durationMonths = parseInt(dMatch[1]);
+    else if (intent.duration === "Flexible") durationMonths = 0;
+
+    // Persist updated need to localStorage
+    const buyerNeed = {
+      location: intent.location,
+      size_sqft: `${intent.sqft.toLocaleString()} sqft`,
+      sqft_raw: String(intent.sqft),
+      use_type: intent.useType,
+      goods_type: intent.goodsType || "Not specified",
+      timing: intent.timing,
+      duration: intent.duration,
+      requirements: intent.amenities.join(", ") || "None specified",
+    };
+    localStorage.setItem("wex_buyer_need", JSON.stringify(buyerNeed));
+
+    // Re-run the clearing engine
+    try {
+      const result = await api.anonymousSearch({
+        location: intent.location,
+        use_type: intent.useType,
+        goods_type: intent.goodsType || undefined,
+        size_sqft: intent.sqft,
+        timing: intent.timing,
+        duration_months: durationMonths,
+        deal_breakers: intent.amenities,
+      });
+
+      localStorage.setItem("wex_search_session", JSON.stringify(result));
+
+      // Update results in-place
+      if (result.session_token) {
+        await loadFromSession(result.session_token);
+      } else if (result.matches) {
+        // Direct match results
+        const mapped = (result.matches || []).map(mapApiToMatchOption);
+        const t1 = mapped.filter((m: MatchOption) => m.tier === 1);
+        const t2 = mapped.filter((m: MatchOption) => m.tier === 2);
+        setTier1(t1);
+        setTier2(t2);
+        setLoading(false);
+      } else {
+        setLoading(false);
+      }
+    } catch (err) {
+      console.error("Modify search failed:", err);
+      setError("Search update failed. Please try again.");
+      setLoading(false);
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -855,15 +1079,7 @@ function OptionsContent() {
               ? `${whyParts.slice(0, 4).join(". ")}. Your ${allocatedSqft.toLocaleString()} sqft requirement fits well within the available space.`
               : `This ${allocatedSqft.toLocaleString()} sqft space in ${wh.city || "the area"} is a strong match for your storage requirements.`;
 
-            // Map activity tier to display name
-            const activityMap: Record<string, string> = {
-              storage_only: "Storage",
-              storage_light_assembly: "Storage & Light Assembly",
-              distribution: "Distribution",
-              ecommerce_fulfillment: "E-Commerce Fulfillment",
-              manufacturing_light: "Light Manufacturing",
-            };
-            const propertyType = activityMap[wh.truth_core?.activity_tier] || wh.truth_core?.activity_tier || "Industrial";
+            const propertyType = formatActivityTier(wh.truth_core?.activity_tier);
 
             const opt: MatchOption = {
               match_id: `match-local-${i}`,
@@ -920,7 +1136,10 @@ function OptionsContent() {
               images: wh.image_url
                 ? [
                     { url: wh.image_url, type: "supplier" },
-                    ...(wh.image_urls || []).slice(0, 4).map((u: string) => ({ url: u, type: "supplier" })),
+                    ...(wh.image_urls || [])
+                      .filter((u: string) => u !== wh.image_url)
+                      .slice(0, 4)
+                      .map((u: string) => ({ url: u, type: "supplier" })),
                   ]
                 : [],
               has_virtual_tour: !!wh.virtual_tour_url,
@@ -1106,8 +1325,8 @@ function OptionsContent() {
     try {
       // Fetch from backend session cache
       const data = await api.getSearchSession(token);
-      const t1: MatchOption[] = data.tier1 || [];
-      const t2: MatchOption[] = data.tier2 || [];
+      const t1: MatchOption[] = (data.tier1 || []).map(mapApiToMatchOption);
+      const t2: MatchOption[] = (data.tier2 || []).map(mapApiToMatchOption);
 
       if (t1.length > 0 || t2.length > 0) {
         setTier1(
@@ -1129,8 +1348,8 @@ function OptionsContent() {
         cached &&
         (cached.tier1?.length > 0 || cached.tier2?.length > 0)
       ) {
-        setTier1(cached.tier1 || []);
-        setTier2(cached.tier2 || []);
+        setTier1((cached.tier1 || []).map(mapApiToMatchOption));
+        setTier2((cached.tier2 || []).map(mapApiToMatchOption));
       } else {
         const demo = buildDemoOptions();
         setTier1(demo.tier1);
@@ -1149,9 +1368,10 @@ function OptionsContent() {
     setError(null);
     try {
       const data = await api.getClearedOptions(nId);
-      const opts: MatchOption[] = Array.isArray(data)
+      const raw = Array.isArray(data)
         ? data
         : data.options || data.matches || [];
+      const opts: MatchOption[] = raw.map(mapApiToMatchOption);
       if (opts.length > 0) {
         // Split into tiers
         const t1 = opts
@@ -1399,63 +1619,156 @@ function OptionsContent() {
         {/* -------------------------------------------------------- */}
         {!loading && hasTier1 && (
           <>
-            {/* Page Title */}
+            {/* Page Title + Buyer Intent Summary */}
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="mb-8"
+              className="w-full max-w-4xl mx-auto mb-8"
             >
-              <h2 className="text-2xl font-bold text-slate-900 mb-2">
-                Cleared Options
-              </h2>
-              <p className="text-slate-500">
-                We found {tier1.length}{" "}
-                {tier1.length === 1 ? "space" : "spaces"} that match your
-                requirements. All rates shown are all-in — no hidden fees.
-              </p>
+              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900 mb-2">
+                    Cleared Options
+                  </h2>
+                  <p className="text-slate-500 text-sm">
+                    We found {tier1.length}{" "}
+                    {tier1.length === 1 ? "space" : "spaces"} matching your
+                    criteria. All rates are all-in.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setModifyDrawerOpen(true)}
+                  className="flex items-center gap-2 text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:border-slate-400 hover:bg-slate-50 px-4 py-2 rounded-lg transition-all"
+                >
+                  <Edit2 size={14} /> Modify Search
+                </button>
+              </div>
+
+              {/* Intent Summary Banner */}
+              {(() => {
+                const need = getBuyerNeed();
+                const hasData = need.location || need.size_sqft || need.use_type;
+                if (!hasData) return null;
+                const reqPills = (need.requirements || "")
+                  .split(",")
+                  .map((r: string) => r.trim())
+                  .filter(Boolean);
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-y-3 gap-x-6">
+                    {need.location && (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <MapPin size={16} className="text-slate-400" />
+                          <span className="text-sm font-bold text-slate-700">{need.location}</span>
+                        </div>
+                        <div className="hidden md:block w-px h-4 bg-slate-300" />
+                      </>
+                    )}
+                    {need.size_sqft && (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <Ruler size={16} className="text-slate-400" />
+                          <span className="text-sm font-bold text-slate-700">{need.size_sqft}</span>
+                        </div>
+                        <div className="hidden md:block w-px h-4 bg-slate-300" />
+                      </>
+                    )}
+                    {need.use_type && (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <Box size={16} className="text-slate-400" />
+                          <span className="text-sm font-bold text-slate-700">{need.use_type}</span>
+                        </div>
+                        {reqPills.length > 0 && (
+                          <div className="hidden md:block w-px h-4 bg-slate-300" />
+                        )}
+                      </>
+                    )}
+                    {reqPills.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <Settings2 size={16} className="text-slate-400" />
+                        <div className="flex gap-1.5 flex-wrap">
+                          {reqPills.map((req: string, i: number) => (
+                            <span key={i} className="text-xs font-bold text-slate-600 bg-slate-200/70 px-2 py-0.5 rounded-md">
+                              {req}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </motion.div>
 
             {/* Tier 1 Cards */}
             <div className="space-y-8">
-              {tier1.map((option, i) => (
-                <Tier1Card
-                  key={option.match_id}
-                  option={option}
-                  index={i}
-                  onAccept={handleAcceptClick}
-                  onAsk={handleAskClick}
-                  accepting={accepting}
-                />
-              ))}
+              {(() => {
+                const allocSqft = parseBuyerSqft(getBuyerNeed());
+                return tier1.map((option, i) => (
+                  <Tier1Card
+                    key={option.match_id}
+                    option={option}
+                    index={i}
+                    onAccept={handleAcceptClick}
+                    onAsk={handleAskClick}
+                    accepting={accepting}
+                    allocatedSqft={allocSqft}
+                  />
+                ));
+              })()}
             </div>
 
-            {/* Tier 2 Section */}
+            {/* Pending Options Strip (Tier 2 as status indicator) */}
             {tier2.length > 0 && (
-              <div className="mt-12">
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: 0.5 }}
-                  className="flex items-center gap-3 mb-6"
-                >
-                  <div className="h-px flex-1 bg-gray-200" />
-                  <div className="flex items-center gap-2 text-slate-500 text-sm font-medium">
-                    <Clock className="w-4 h-4" />
-                    Being Evaluated
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.5 }}
+                className="w-full max-w-4xl mx-auto mt-8 mb-24"
+              >
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 md:p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm">
+                  {/* LEFT: Status Indicator */}
+                  <div className="flex items-start gap-4 w-full md:w-auto">
+                    <div className="mt-1 bg-blue-100 text-blue-600 p-2 rounded-full relative flex-shrink-0">
+                      <span className="animate-ping absolute inset-0 rounded-full bg-blue-400 opacity-20" />
+                      <Search size={20} className="relative z-10" />
+                    </div>
+                    <div>
+                      <h4 className="text-lg font-bold text-slate-900 mb-1">
+                        {tier2.length} more {tier2.length === 1 ? "space" : "spaces"} in your area {tier2.length === 1 ? "is" : "are"} being confirmed.
+                      </h4>
+                      <p className="text-sm text-slate-600">
+                        We are actively verifying terms. We&apos;ll notify you as they become available.
+                      </p>
+                    </div>
                   </div>
-                  <div className="h-px flex-1 bg-gray-200" />
-                </motion.div>
 
-                <div className="space-y-4">
-                  {tier2.map((option, i) => (
-                    <Tier2Card
-                      key={option.match_id}
-                      option={option}
-                      index={i}
-                    />
-                  ))}
+                  {/* RIGHT: Lead Capture */}
+                  <div className="w-full md:w-auto flex-shrink-0">
+                    {!pendingSubscribed ? (
+                      <div className="flex flex-col sm:flex-row gap-3">
+                        <button
+                          onClick={() => setPendingSubscribed(true)}
+                          className="flex items-center justify-center gap-2 bg-white border border-slate-300 hover:border-slate-900 hover:bg-slate-900 hover:text-white text-slate-700 text-sm font-bold py-2.5 px-5 rounded-lg transition-all"
+                        >
+                          <Smartphone size={16} /> Text Me Updates
+                        </button>
+                        <button
+                          onClick={() => setPendingSubscribed(true)}
+                          className="flex items-center justify-center gap-2 bg-white border border-slate-300 hover:border-slate-900 hover:bg-slate-900 hover:text-white text-slate-700 text-sm font-bold py-2.5 px-5 rounded-lg transition-all"
+                        >
+                          <Mail size={16} /> Email Me
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 text-emerald-700 bg-emerald-50 border border-emerald-200 py-2.5 px-5 rounded-lg text-sm font-bold">
+                        <CheckCircle2 size={18} /> You&apos;re on the list
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              </motion.div>
             )}
           </>
         )}
@@ -1609,6 +1922,14 @@ function OptionsContent() {
           }}
         />
       )}
+
+      {/* Modify Search — slide-out drawer */}
+      <ModifySearchDrawer
+        isOpen={modifyDrawerOpen}
+        onClose={() => setModifyDrawerOpen(false)}
+        currentIntent={getCurrentIntent()}
+        onUpdate={handleModifySearch}
+      />
     </div>
   );
 }

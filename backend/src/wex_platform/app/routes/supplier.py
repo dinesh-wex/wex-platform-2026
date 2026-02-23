@@ -29,6 +29,7 @@ from wex_platform.domain.models import (
     TruthCoreChange,
     Deal,
     DealEvent,
+    PropertyProfile,
 )
 from wex_platform.domain.schemas import TruthCoreCreate, TruthCoreResponse
 from wex_platform.services.pricing_engine import calculate_default_buyer_rate
@@ -608,7 +609,9 @@ async def lookup_warehouse_by_address(
     logger.info("[Lookup] Parallel complete: search_ok=%s, rates=%s", search_result.ok, "found" if nnn_rates else "none")
 
     if not search_result.ok:
-        _NOT_FOUND_CACHE[normalized] = {"ts": time.time(), "ttl": 3600}
+        # Don't cache timeouts/errors — only cache genuine "not found" results.
+        # This allows retries after transient Gemini failures.
+        logger.warning("[Lookup] Search failed for '%s': %s", search_address, search_result.error)
         return []
 
     result_data = search_result.data
@@ -626,7 +629,7 @@ async def lookup_warehouse_by_address(
             # Cache with reason so subsequent requests also show rejection page
             _NOT_FOUND_CACHE[normalized] = {"ts": time.time(), "ttl": 3600, "not_commercial": True}
             return [{"not_commercial": True, "address": search_address}]
-        _NOT_FOUND_CACHE[normalized] = {"ts": time.time(), "ttl": 3600}  # 1 hour
+        _NOT_FOUND_CACHE[normalized] = {"ts": time.time(), "ttl": 300}  # 5 minutes
         return []
 
     if result_class == "verified_not_persisted":
@@ -652,6 +655,9 @@ async def lookup_warehouse_by_address(
         evidence_bundle=evidence_bundle,
         fields_by_source=fields_by_source,
     )
+
+    # Commit warehouse + truth_core + memories to DB
+    await db.commit()
 
     # Trigger 1: Create property profile from Gemini search (background)
     if session_id:
@@ -851,6 +857,10 @@ async def activate_warehouse(
     if not warehouse:
         raise HTTPException(status_code=404, detail="Warehouse not found")
 
+    # Mark warehouse as in-network so clearing engine includes it in Tier 1
+    if warehouse.supplier_status != "in_network":
+        warehouse.supplier_status = "in_network"
+
     now = datetime.now(timezone.utc)
 
     # Check for existing truth core
@@ -948,13 +958,57 @@ async def activate_warehouse(
 
     await db.commit()
 
-    # Generate AI description (non-blocking, never fails activation)
-    try:
-        from wex_platform.services.description_service import generate_warehouse_description
-        await generate_warehouse_description(db, warehouse_id)
-        await db.commit()
-    except Exception as exc:
-        logger.warning("Description generation failed for %s: %s", warehouse_id, exc)
+    # --- Sync Warehouse images → PropertyProfile (background) ---
+    import asyncio
+    from wex_platform.infra.database import async_session as _async_session
+
+    async def _sync_profile():
+        try:
+            async with _async_session() as bg_db:
+                pp_result = await bg_db.execute(
+                    select(PropertyProfile).where(PropertyProfile.warehouse_id == warehouse_id)
+                )
+                profile = pp_result.scalar_one_or_none()
+
+                if profile:
+                    profile.primary_image_url = warehouse.primary_image_url
+                    profile.image_urls = warehouse.image_urls or []
+                    profile.updated_at = now
+                else:
+                    profile = PropertyProfile(
+                        id=str(uuid.uuid4()),
+                        session_id=f"activation-{warehouse_id}",
+                        warehouse_id=warehouse_id,
+                        address=warehouse.address,
+                        city=warehouse.city,
+                        state=warehouse.state,
+                        zip=warehouse.zip,
+                        building_size_sqft=warehouse.building_size_sqft,
+                        lot_size_acres=warehouse.lot_size_acres,
+                        year_built=warehouse.year_built,
+                        construction_type=warehouse.construction_type,
+                        zoning=warehouse.zoning,
+                        primary_image_url=warehouse.primary_image_url,
+                        image_urls=warehouse.image_urls or [],
+                    )
+                    bg_db.add(profile)
+                await bg_db.commit()
+        except Exception as exc:
+            logger.warning("PropertyProfile image sync failed for %s: %s", warehouse_id, exc)
+
+    asyncio.ensure_future(_sync_profile())
+
+    # Generate AI description (background — never blocks activation)
+    async def _generate_description():
+        try:
+            from wex_platform.services.description_service import generate_warehouse_description
+            async with _async_session() as bg_db:
+                await generate_warehouse_description(bg_db, warehouse_id)
+                await bg_db.commit()
+        except Exception as exc:
+            logger.warning("Description generation failed for %s: %s", warehouse_id, exc)
+
+    asyncio.ensure_future(_generate_description())
 
     return truth_core
 

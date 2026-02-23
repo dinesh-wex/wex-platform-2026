@@ -1,5 +1,6 @@
 """Async database engine and session management."""
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -37,3 +38,29 @@ async def init_db():
     """Create all tables (for local dev). Use Alembic for production migrations."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # SQLite doesn't support ADD COLUMN IF NOT EXISTS, so we run each
+    # migration and silently ignore "duplicate column" errors.
+    _migrations = [
+        "ALTER TABLE smoke_test_events ADD COLUMN is_test BOOLEAN DEFAULT 0",
+        "ALTER TABLE page_views ADD COLUMN is_test BOOLEAN DEFAULT 0",
+        "ALTER TABLE lead_captures ADD COLUMN is_test BOOLEAN DEFAULT 0",
+        "ALTER TABLE lead_captures ADD COLUMN session_id VARCHAR(100)",
+        "ALTER TABLE lead_captures ADD COLUMN market_rate_low FLOAT",
+        "ALTER TABLE lead_captures ADD COLUMN market_rate_high FLOAT",
+        "ALTER TABLE lead_captures ADD COLUMN recommended_rate FLOAT",
+        "ALTER TABLE property_profiles ADD COLUMN is_test BOOLEAN DEFAULT 0",
+        "ALTER TABLE property_profiles ADD COLUMN market_rate_low FLOAT",
+        "ALTER TABLE property_profiles ADD COLUMN market_rate_high FLOAT",
+        "ALTER TABLE property_profiles ADD COLUMN recommended_rate FLOAT",
+        "ALTER TABLE property_profiles ADD COLUMN primary_image_url VARCHAR(500)",
+        "ALTER TABLE property_profiles ADD COLUMN image_urls JSON",
+    ]
+
+    if "sqlite" in settings.database_url:
+        async with engine.begin() as conn:
+            for stmt in _migrations:
+                try:
+                    await conn.execute(text(stmt))
+                except Exception:
+                    pass  # Column already exists — safe to ignore

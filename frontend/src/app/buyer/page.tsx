@@ -18,6 +18,8 @@ import {
   Grid,
   Building2,
   ArrowUpRight,
+  Calendar,
+  Infinity,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -52,12 +54,7 @@ const USE_TYPE_LABELS: Record<string, string> = {
   distribution: "Distribution",
 };
 
-const TIMING_OPTIONS = [
-  { label: "Immediately", desc: "Ready to move in now", icon: <Zap size={20} /> },
-  { label: "Within 30 Days", desc: "Need space this month", icon: <Clock size={20} /> },
-  { label: "1–3 Months", desc: "Planning ahead", icon: <Clock size={20} /> },
-  { label: "Flexible", desc: "No rush, exploring options", icon: <Clock size={20} /> },
-];
+/* Timing: hybrid calendar picker + "Immediately" shortcut (see Step 5) */
 
 const GOODS_TYPE_OPTIONS: Record<string, { label: string; icon: React.ReactNode; useTypes: string[] }[]> = {
   storage: [
@@ -82,13 +79,7 @@ const GOODS_TYPE_OPTIONS: Record<string, { label: string; icon: React.ReactNode;
   ],
 };
 
-const DURATION_OPTIONS = [
-  { label: "1–3 Months", desc: "Short-term flex" },
-  { label: "3–6 Months", desc: "Seasonal or project" },
-  { label: "6–12 Months", desc: "Standard lease" },
-  { label: "12–24 Months", desc: "Committed term" },
-  { label: "24+ Months", desc: "Long-term partnership" },
-];
+/* Duration: interactive 1–36 month slider + "Flexible" shortcut (see Step 5) */
 
 const DEALBREAKER_OPTIONS = [
   "Office Space",
@@ -203,6 +194,17 @@ function AgentFlow({
   const [idleTimer, setIdleTimer] = useState(0);
   const [, setShowSMSPrompt] = useState(false);
   const [findingMatches, setFindingMatches] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [isImmediate, setIsImmediate] = useState(false);
+  const [durationMonths, setDurationMonths] = useState(6);
+  const [isFlexible, setIsFlexible] = useState(false);
+
+  // When user reaches Step 5, sync slider default into intent so "Next Step" is enabled
+  useEffect(() => {
+    if (step === 5 && !intent.duration) {
+      setIntent((prev) => ({ ...prev, duration: `${durationMonths} Months` }));
+    }
+  }, [step, intent.duration, durationMonths, setIntent]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -245,13 +247,14 @@ function AgentFlow({
     };
     localStorage.setItem("wex_buyer_need", JSON.stringify(buyerNeed));
 
-    // Parse duration to months
-    let durationMonths = 6;
-    if (intent.duration.includes("1–3")) durationMonths = 3;
-    else if (intent.duration.includes("3–6")) durationMonths = 6;
-    else if (intent.duration.includes("6–12")) durationMonths = 12;
-    else if (intent.duration.includes("12–24")) durationMonths = 24;
-    else if (intent.duration.includes("24+")) durationMonths = 36;
+    // Parse duration to months — slider gives exact values like "8 Months", or "Flexible"
+    let parsedDuration = 6;
+    const durationMatch = intent.duration.match(/^(\d+)\s*Month/i);
+    if (durationMatch) {
+      parsedDuration = parseInt(durationMatch[1]);
+    } else if (intent.duration === "Flexible") {
+      parsedDuration = 0; // signal to backend: no preference
+    }
 
     // Call anonymous search — no account required
     const requirements = {
@@ -260,7 +263,7 @@ function AgentFlow({
       goods_type: intent.goodsType || undefined,
       size_sqft: intent.sqft,
       timing: intent.timing,
-      duration_months: durationMonths,
+      duration_months: parsedDuration,
       deal_breakers: intent.amenities,
     };
 
@@ -427,66 +430,134 @@ function AgentFlow({
             </motion.div>
           )}
 
-          {/* SCREEN 5: TIMING + DURATION (combined) */}
+          {/* SCREEN 5: TIMING + DURATION — Hybrid calendar / slider design */}
           {step === 5 && (
             <motion.div key="step5" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="w-full max-w-4xl mx-auto">
-              <h2 className="text-3xl md:text-5xl font-bold text-center mb-12 text-slate-900">When and how long?</h2>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                {/* LEFT: When do you need it? */}
-                <div>
-                  <h3 className="text-lg font-bold text-slate-700 mb-4 uppercase tracking-widest text-xs">When do you need it?</h3>
-                  <div className="flex flex-col gap-3">
-                    {TIMING_OPTIONS.map((opt) => (
-                      <div
-                        key={opt.label}
-                        onClick={() => { resetIdle(); setIntent({ ...intent, timing: opt.label }); }}
-                        className={`group bg-white border p-4 rounded-2xl cursor-pointer transition-all duration-300 flex items-center gap-3 ${
-                          intent.timing === opt.label
-                            ? "border-emerald-500 shadow-md bg-emerald-50"
-                            : "border-slate-200 hover:border-emerald-500 hover:shadow-lg"
-                        }`}
-                      >
-                        <div className={`transition-colors ${intent.timing === opt.label ? "text-emerald-600" : "text-slate-400 group-hover:text-emerald-600"}`}>{opt.icon}</div>
-                        <div>
-                          <h4 className="text-base font-bold text-slate-900">{opt.label}</h4>
-                          <p className="text-slate-500 text-xs">{opt.desc}</p>
-                        </div>
-                        {intent.timing === opt.label && <Check size={18} className="ml-auto text-emerald-600" />}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* RIGHT: How long? */}
-                <div>
-                  <h3 className="text-lg font-bold text-slate-700 mb-4 uppercase tracking-widest text-xs">How long do you need it?</h3>
-                  <div className="flex flex-col gap-3">
-                    {DURATION_OPTIONS.map((opt) => (
-                      <div
-                        key={opt.label}
-                        onClick={() => { resetIdle(); setIntent({ ...intent, duration: opt.label }); }}
-                        className={`group bg-white border p-4 rounded-2xl cursor-pointer transition-all duration-300 flex items-center gap-3 ${
-                          intent.duration === opt.label
-                            ? "border-emerald-500 shadow-md bg-emerald-50"
-                            : "border-slate-200 hover:border-emerald-500 hover:shadow-lg"
-                        }`}
-                      >
-                        <div className={`transition-colors ${intent.duration === opt.label ? "text-emerald-600" : "text-slate-400 group-hover:text-emerald-600"}`}>
-                          <Clock size={20} />
-                        </div>
-                        <div>
-                          <h4 className="text-base font-bold text-slate-900">{opt.label}</h4>
-                          <p className="text-slate-500 text-xs">{opt.desc}</p>
-                        </div>
-                        {intent.duration === opt.label && <Check size={18} className="ml-auto text-emerald-600" />}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+              <div className="text-center mb-12">
+                <h2 className="text-3xl md:text-5xl font-bold text-slate-900 mb-2">Target Timeline</h2>
+                <p className="text-slate-500 text-base">Precision helps us clear the best rates.</p>
               </div>
 
-              {/* Continue button — enabled when both timing and duration selected */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+
+                {/* ── LEFT: START DATE ── */}
+                <div>
+                  <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <Calendar size={16} /> Move-in Date
+                  </h3>
+                  <div className="space-y-4">
+                    {/* "Immediately" shortcut */}
+                    <button
+                      onClick={() => {
+                        resetIdle();
+                        setIsImmediate(true);
+                        setStartDate("");
+                        setIntent({ ...intent, timing: "Immediately" });
+                      }}
+                      className={`w-full flex items-center justify-between p-4 rounded-xl border-2 transition-all ${
+                        isImmediate
+                          ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                          : "border-slate-200 hover:border-slate-400 bg-white"
+                      }`}
+                    >
+                      <span className="font-bold flex items-center gap-2"><Zap size={18} /> Immediately</span>
+                      {isImmediate && <div className="w-3 h-3 bg-emerald-500 rounded-full" />}
+                    </button>
+
+                    <div className="relative flex items-center justify-center">
+                      <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-200" /></div>
+                      <span className="relative bg-slate-50 px-3 text-slate-400 text-xs font-bold uppercase tracking-widest">or</span>
+                    </div>
+
+                    {/* Calendar date picker */}
+                    <div className={`relative p-4 rounded-xl border-2 transition-all ${
+                      !isImmediate && startDate ? "border-emerald-500 bg-white ring-1 ring-emerald-500" : "border-slate-200 bg-white"
+                    }`}>
+                      <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Select a move-in date</label>
+                      <input
+                        type="date"
+                        value={startDate}
+                        min={new Date().toISOString().split("T")[0]}
+                        onChange={(e) => {
+                          resetIdle();
+                          setStartDate(e.target.value);
+                          setIsImmediate(false);
+                          const d = new Date(e.target.value);
+                          setIntent({ ...intent, timing: d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) });
+                        }}
+                        className="w-full bg-transparent font-bold text-lg text-slate-900 outline-none cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── RIGHT: DURATION SLIDER ── */}
+                <div>
+                  <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <Clock size={16} /> Term Length
+                  </h3>
+
+                  {/* Slider card */}
+                  <div className={`bg-white rounded-2xl border-2 p-8 text-center transition-all ${
+                    isFlexible ? "border-slate-200 opacity-50" : "border-emerald-500 shadow-lg"
+                  }`}>
+                    <motion.div
+                      key={isFlexible ? "flex" : durationMonths}
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 20 }}
+                      className="text-5xl font-bold text-slate-900 mb-2"
+                    >
+                      {isFlexible ? (
+                        <span className="text-slate-400">Flexible</span>
+                      ) : (
+                        <>{durationMonths} <span className="text-lg text-slate-400 font-medium">{durationMonths === 1 ? "Month" : "Months"}</span></>
+                      )}
+                    </motion.div>
+
+                    <input
+                      type="range"
+                      min="1"
+                      max="36"
+                      value={durationMonths}
+                      onChange={(e) => {
+                        resetIdle();
+                        const v = parseInt(e.target.value);
+                        setDurationMonths(v);
+                        setIsFlexible(false);
+                        setIntent({ ...intent, duration: `${v} Months` });
+                      }}
+                      disabled={isFlexible}
+                      className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600 mt-4"
+                    />
+                    <div className="flex justify-between text-xs text-slate-400 font-bold mt-2">
+                      <span>1 Mo</span>
+                      <span>12 Mo</span>
+                      <span>24 Mo</span>
+                      <span>36 Mo</span>
+                    </div>
+                  </div>
+
+                  {/* "Flexible" shortcut */}
+                  <button
+                    onClick={() => {
+                      resetIdle();
+                      setIsFlexible(!isFlexible);
+                      setIntent({ ...intent, duration: !isFlexible ? "Flexible" : `${durationMonths} Months` });
+                    }}
+                    className={`mt-4 w-full flex items-center justify-center gap-2 p-3 rounded-xl border-2 font-bold text-sm transition-all ${
+                      isFlexible
+                        ? "bg-slate-800 text-white border-slate-800"
+                        : "bg-white text-slate-500 border-slate-200 hover:border-slate-400"
+                    }`}
+                  >
+                    <Infinity size={16} /> I&apos;m Flexible
+                  </button>
+                </div>
+
+              </div>
+
+              {/* Continue button — enabled when both timing and duration are set */}
               <div className="text-center mt-10">
                 <button
                   onClick={() => { if (intent.timing && intent.duration) nextStep(); }}

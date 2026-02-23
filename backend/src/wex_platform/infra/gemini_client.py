@@ -6,7 +6,7 @@ from wex_platform.app.config import get_settings
 
 
 def get_model(
-    model_name: str = "gemini-2.0-flash",
+    model_name: str = "gemini-3-flash-preview",
     temperature: float = 0.7,
     json_mode: bool = False,
     system_instruction: str | None = None,

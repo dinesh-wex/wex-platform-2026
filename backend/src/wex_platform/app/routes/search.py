@@ -145,6 +145,7 @@ async def anonymous_search(
             },
             "reasoning": m.get("reasoning", ""),
             "instant_book_eligible": m.get("instant_book_eligible", False),
+            "distance_miles": m.get("distance_miles"),
             "tier": 1,
         })
 
@@ -205,10 +206,14 @@ async def get_search_session(
     if not session_record:
         raise HTTPException(status_code=404, detail="Search session not found")
 
-    # Check expiry
-    if session_record.expires_at and session_record.expires_at < datetime.now(
-        timezone.utc
-    ):
+    # Check expiry (handle both naive and aware datetimes from SQLite)
+    if session_record.expires_at:
+        expires = session_record.expires_at
+        now = datetime.now(timezone.utc)
+        # SQLite stores naive datetimes — make them comparable
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+    if session_record.expires_at and expires < now:
         raise HTTPException(
             status_code=410,
             detail="Search session expired. Please run a new search.",

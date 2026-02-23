@@ -39,7 +39,7 @@ class DescriptionAgent(BaseAgent):
     def __init__(self):
         super().__init__(
             agent_name="description",
-            model_name="gemini-2.0-flash",
+            model_name="gemini-3-flash-preview",
             temperature=0.8,
         )
 

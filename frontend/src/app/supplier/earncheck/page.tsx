@@ -10,6 +10,7 @@ import Phase4Configurator from "@/components/activation/Phase4Configurator";
 import Phase5Pricing from "@/components/activation/Phase5Pricing";
 import Phase6Activation from "@/components/activation/Phase6Activation";
 import Phase6Join from "@/components/activation/Phase6Join";
+import Phase6AddAsset from "@/components/activation/Phase6AddAsset";
 import PhaseRejection from "@/components/activation/PhaseRejection";
 import {
   type Phase,
@@ -24,7 +25,7 @@ import { api } from "@/lib/api";
 
 export default function SupplierActivationWizard() {
   const [step, setStepRaw] = useState<Phase>(1);
-  const [entryIntent, setEntryIntent] = useState<'earncheck' | 'onboard'>('earncheck');
+  const [entryIntent, setEntryIntent] = useState<'earncheck' | 'onboard' | 'returning'>('earncheck');
 
   // Scroll to top on every phase transition (fixes mobile scroll position)
   const setStep = (next: Phase) => {
@@ -36,8 +37,10 @@ export default function SupplierActivationWizard() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
 
-    // Detect entry intent: ?intent=onboard means "List Your Space" path
-    if (params.get("intent") === "onboard" || params.get("onboard") === "true") {
+    // Detect entry intent
+    if (params.get("returning") === "true") {
+      setEntryIntent('returning');
+    } else if (params.get("intent") === "onboard" || params.get("onboard") === "true") {
       setEntryIntent('onboard');
     }
 
@@ -61,6 +64,15 @@ export default function SupplierActivationWizard() {
   const [revenueEstimate, setRevenueEstimate] = useState<RevenueEstimate | null>(null);
   const [memories, setMemories] = useState<ContextualMemoryEntry[]>([]);
   const [rejectedAddress, setRejectedAddress] = useState<string | null>(null);
+
+  function resetToSearch() {
+    setRejectedAddress(null);
+    setTruthCore(createDefaultTruthCore());
+    setBuildingData(null);
+    setRevenueEstimate(null);
+    setMemories([]);
+    setStep(1);
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-white text-slate-900 font-sans selection:bg-emerald-100">
@@ -107,19 +119,14 @@ export default function SupplierActivationWizard() {
               setRevenueEstimate={setRevenueEstimate}
               onComplete={() => setStep(3)}
               onRejected={(addr) => setRejectedAddress(addr)}
+              onFailed={resetToSearch}
             />
           )}
           {rejectedAddress && (
             <PhaseRejection
               key="rejected"
               address={rejectedAddress}
-              onTryAgain={() => {
-                setRejectedAddress(null);
-                setTruthCore(createDefaultTruthCore());
-                setBuildingData(null);
-                setRevenueEstimate(null);
-                setStep(1);
-              }}
+              onTryAgain={resetToSearch}
             />
           )}
           {step === 3 && (
@@ -130,6 +137,7 @@ export default function SupplierActivationWizard() {
               buildingData={buildingData}
               revenueEstimate={revenueEstimate}
               onNext={() => setStep(4)}
+              onSearchAgain={resetToSearch}
             />
           )}
           {step === 4 && (
@@ -168,6 +176,16 @@ export default function SupplierActivationWizard() {
           {step === 6 && entryIntent === 'earncheck' && (
             <Phase6Activation
               key="p6"
+              truthCore={truthCore}
+              buildingData={buildingData}
+              revenueEstimate={revenueEstimate}
+              memories={memories}
+              setMemories={setMemories}
+            />
+          )}
+          {step === 6 && entryIntent === 'returning' && (
+            <Phase6AddAsset
+              key="p6-add"
               truthCore={truthCore}
               buildingData={buildingData}
               revenueEstimate={revenueEstimate}

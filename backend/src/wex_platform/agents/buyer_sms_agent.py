@@ -162,7 +162,7 @@ class IntentClassifier(BaseAgent):
     def __init__(self):
         super().__init__(
             agent_name="buyer_sms_intent",
-            model_name="gemini-2.0-flash",
+            model_name="gemini-3-flash-preview",
             temperature=0.1,
         )
 
@@ -213,7 +213,7 @@ class CriteriaExtractor(BaseAgent):
     def __init__(self):
         super().__init__(
             agent_name="buyer_sms_criteria",
-            model_name="gemini-2.0-flash",
+            model_name="gemini-3-flash-preview",
             temperature=0.2,
         )
 
@@ -271,7 +271,7 @@ class ResponseGenerator(BaseAgent):
     def __init__(self):
         super().__init__(
             agent_name="buyer_sms_response",
-            model_name="gemini-2.0-flash",
+            model_name="gemini-3-flash-preview",
             temperature=0.7,
         )
 

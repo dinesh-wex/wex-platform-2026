@@ -87,10 +87,13 @@ You need **two terminals** running simultaneously.
 
 ### Terminal 1 — Backend (port 8000)
 
+> **IMPORTANT:** You must have completed "FIRST TIME SETUP" above first.
+> If you get `uvicorn is not recognized`, it means dependencies aren't installed yet — go back to Step 2.
+
 ```powershell
 conda activate wex
 cd "C:\Users\deser\Github\Warehouse Exchange\WEx Platform 2026\backend"
-uvicorn wex_platform.app.main:app --reload --port 8000
+python -m uvicorn wex_platform.app.main:app --reload --port 8000
 ```
 
 On first run, the SQLite database (`wex_platform.db`) is auto-created with all tables.

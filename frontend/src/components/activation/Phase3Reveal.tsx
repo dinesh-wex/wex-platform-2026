@@ -13,6 +13,7 @@ interface Phase3Props {
   buildingData: BuildingData | null;
   revenueEstimate: RevenueEstimate | null;
   onNext: () => void;
+  onSearchAgain: () => void;
 }
 
 interface DNATag {
@@ -37,6 +38,7 @@ export default function Phase3Reveal({
   buildingData,
   revenueEstimate,
   onNext,
+  onSearchAgain,
 }: Phase3Props) {
   const rates = getRegionalRates(buildingData?.state);
   const [prevRevenue, setPrevRevenue] = useState(0);
@@ -229,7 +231,7 @@ export default function Phase3Reveal({
             </button>
 
             <button
-              onClick={() => window.history.back()}
+              onClick={onSearchAgain}
               className="w-full text-slate-400 text-xs hover:text-slate-600 font-medium mt-3"
             >
               {copy.phase3.secondaryCta}

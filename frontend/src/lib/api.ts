@@ -30,6 +30,31 @@ export async function fetchAPI(path: string, options?: RequestInit) {
   return res.json();
 }
 
+export async function fetchAPIWithSignal(url: string, signal?: AbortSignal) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+
+  const token = getToken();
+  if (token) {
+    headers["Authorization"] = "Bearer " + token;
+  }
+
+  const res = await fetch(`${API_BASE}${url}`, { headers, signal });
+
+  if (res.status === 401) {
+    removeToken();
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
+    throw new Error("Unauthorized");
+  }
+
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
 // ---------------------------------------------------------------------------
 // Auth endpoints
 // ---------------------------------------------------------------------------
@@ -78,11 +103,11 @@ export const api = {
   // Supplier endpoints
   supplierLogin: (email: string) =>
     fetchAPI(`/api/supplier/login`, { method: 'POST', body: JSON.stringify({ email }) }),
-  warehouseLookup: (address: string, sessionId?: string, isTest?: boolean) => {
+  warehouseLookup: (address: string, sessionId?: string, isTest?: boolean, signal?: AbortSignal) => {
     let url = `/api/supplier/warehouse/lookup?address=${encodeURIComponent(address)}`;
     if (sessionId) url += `&session_id=${encodeURIComponent(sessionId)}`;
     if (isTest) url += `&is_test=true`;
-    return fetchAPI(url);
+    return fetchAPIWithSignal(url, signal);
   },
   getWarehouses: (params?: { status?: string; owner_email?: string }) => {
     const searchParams = new URLSearchParams();
