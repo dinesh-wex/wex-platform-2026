@@ -174,7 +174,11 @@ function mapApiToMatchOption(raw: any): MatchOption {
       : null,
     instant_book_eligible: raw.instant_book_eligible || false,
     description: raw.description || undefined,
-  };
+    use_type_callouts: raw.use_type_callouts || [],
+    within_budget: raw.within_budget ?? true,
+    budget_stretch_pct: raw.budget_stretch_pct ?? 0,
+    budget_alternative_available: raw.budget_alternative_available ?? false,
+  } as MatchOption;
 }
 
 /* ------------------------------------------------------------------ */
@@ -467,6 +471,16 @@ function Tier1Card({
                 </span>
               );
             })}
+            {/* Use type callouts */}
+            {(option as any).use_type_callouts && (option as any).use_type_callouts.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {(option as any).use_type_callouts.map((callout: string, i: number) => (
+                  <span key={i} className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                    {callout}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -522,6 +536,14 @@ function Tier1Card({
             <p className="text-2xl font-bold text-slate-900">{formatCurrency(option.pricing.term_total)}</p>
             <p className="text-xs text-slate-500">over {option.pricing.term_months} months</p>
           </div>
+
+          {/* Budget indicator */}
+          {(option as any).budget_stretch_pct != null && (option as any).budget_stretch_pct > 0 && (
+            <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-600">
+              <span className="w-3 h-3 rounded-full bg-amber-400 flex-shrink-0" />
+              <span>{Math.round((option as any).budget_stretch_pct)}% above your stated budget</span>
+            </div>
+          )}
 
           {/* Market Context Banner */}
           {option.market_context && (
@@ -663,15 +685,11 @@ function Tier2Card({
             </div>
           )}
 
-          {/* Sourcing in progress */}
+          {/* Show match score instead of just "sourcing" */}
           <div className="flex items-center gap-2 mb-2">
-            <div className="relative flex items-center justify-center w-4 h-4">
-              <span className="absolute inline-flex h-full w-full rounded-full bg-blue-300/50 animate-ping" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
+            <div className="text-sm font-medium text-emerald-700">
+              {Math.round(option.match_score)}% estimated match
             </div>
-            <span className="text-sm font-medium text-blue-600">
-              Confirming availability and rate
-            </span>
           </div>
 
           <p className="text-xs text-slate-500">

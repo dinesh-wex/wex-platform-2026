@@ -207,36 +207,63 @@ class ClearingEngine:
 
         warehouse_dicts = self._format_warehouses(candidates)
 
-        # AI-powered scoring
+        # Layer 1: Deterministic MCDA scoring
+        from wex_platform.services.match_scorer import (
+            compute_composite_score,
+            recompute_with_feature_score,
+            apply_budget_context,
+        )
+
+        deterministic_scores = {}
+        for wh_dict in warehouse_dicts:
+            scores = compute_composite_score(
+                need_dict, wh_dict, wh_dict.get("truth_core", {})
+            )
+            deterministic_scores[wh_dict["id"]] = scores
+
+        # Sort by base composite, take top candidates for LLM evaluation
+        sorted_candidates = sorted(
+            warehouse_dicts,
+            key=lambda w: deterministic_scores[w["id"]]["composite_score"],
+            reverse=True,
+        )[:6]  # Send top 6 to LLM, return top 3
+
+        # Layer 2: LLM evaluates features + generates reasoning
         from wex_platform.agents.clearing_agent import ClearingAgent
 
         clearing_agent = ClearingAgent()
-        agent_result = await clearing_agent.find_matches(need_dict, warehouse_dicts)
 
-        if not agent_result.ok:
-            logger.error(
-                "Clearing agent failed (tier1) for buyer need %s: %s",
-                buyer_need_id,
-                agent_result.error,
+        try:
+            agent_result = await clearing_agent.evaluate_features(
+                need_dict, sorted_candidates, deterministic_scores,
             )
-            return []
+            if agent_result.ok:
+                for match_data in agent_result.data:
+                    wh_id = match_data.get("warehouse_id")
+                    if wh_id in deterministic_scores:
+                        deterministic_scores[wh_id] = recompute_with_feature_score(
+                            deterministic_scores[wh_id],
+                            match_data["feature_score"],
+                        )
+                        deterministic_scores[wh_id]["reasoning"] = match_data.get("reasoning", "")
+                        deterministic_scores[wh_id]["instant_book_eligible"] = match_data.get("instant_book_eligible", False)
+            else:
+                logger.warning("LLM feature eval failed, using base scores: %s", agent_result.error)
+        except Exception as exc:
+            logger.warning("LLM feature eval exception, using base scores: %s", exc)
 
-        matches_data = agent_result.data.get("matches", [])
-        if not matches_data:
-            return []
+        # Re-sort by final composite and take top 3
+        final_sorted = sorted(
+            sorted_candidates,
+            key=lambda w: deterministic_scores[w["id"]]["composite_score"],
+            reverse=True,
+        )[:3]
 
         # Pricing (pure formula — no AI needed) + persistence
         results: list[dict] = []
-        for match_data in matches_data[:3]:  # Top 3 matches
-            wh_id = match_data.get("warehouse_id")
-            wh_dict_match = next(
-                (w for w in warehouse_dicts if w["id"] == wh_id), None
-            )
-            if not wh_dict_match:
-                logger.warning(
-                    "Clearing agent returned unknown warehouse_id %s", wh_id
-                )
-                continue
+        for wh_dict_match in final_sorted:
+            wh_id = wh_dict_match["id"]
+            scores = deterministic_scores[wh_id]
 
             tc_data = wh_dict_match["truth_core"]
             supplier_rate = tc_data.get("supplier_rate_per_sqft", 0)
@@ -252,50 +279,62 @@ class ClearingEngine:
                 id=match_id,
                 buyer_need_id=buyer_need_id,
                 warehouse_id=wh_id,
-                match_score=match_data.get("composite_score", 0),
-                confidence=match_data.get("confidence", 0),
-                instant_book_eligible=match_data.get(
-                    "instant_book_eligible", False
-                ),
-                reasoning=match_data.get("reasoning", ""),
-                scoring_breakdown=match_data.get("scoring_breakdown", {}),
+                match_score=scores["composite_score"],
+                confidence=scores["composite_score"],
+                instant_book_eligible=scores.get("instant_book_eligible", False),
+                reasoning=scores.get("reasoning", ""),
+                scoring_breakdown={
+                    "location_score": scores["location_score"],
+                    "size_score": scores["size_score"],
+                    "use_type_score": scores["use_type_score"],
+                    "feature_score": scores["feature_score"],
+                    "timing_score": scores["timing_score"],
+                    "budget_score": scores["budget_score"],
+                },
                 status="pending",
             )
             session.add(match)
 
             ib_score = self._build_instant_book_score(
                 match_id=match_id,
-                match_data=match_data,
+                match_data={
+                    "composite_score": scores["composite_score"],
+                    "scoring_breakdown": {
+                        "use_type": scores["use_type_score"],
+                    },
+                    "instant_book_eligible": scores.get("instant_book_eligible", False),
+                },
                 tc_data=tc_data,
                 memory_count=len(wh_dict_match.get("memories", [])),
             )
             session.add(ib_score)
 
-            # Calculate distance from buyer's requested location
-            wh_lat = wh_dict_match.get("lat")
-            wh_lng = wh_dict_match.get("lng")
-            distance_miles = None
-            if buyer_need.lat and buyer_need.lng and wh_lat and wh_lng:
-                distance_miles = round(
-                    _haversine_miles(buyer_need.lat, buyer_need.lng, wh_lat, wh_lng), 1
-                )
-
             results.append({
                 "match_id": match_id,
                 "warehouse_id": wh_id,
                 "warehouse": wh_dict_match,
-                "match_score": match_data.get("composite_score", 0),
-                "scoring_breakdown": match_data.get("scoring_breakdown", {}),
-                "reasoning": match_data.get("reasoning", ""),
-                "instant_book_eligible": match_data.get(
-                    "instant_book_eligible", False
-                ),
+                "match_score": scores["composite_score"],
+                "scoring_breakdown": {
+                    "location_score": scores["location_score"],
+                    "size_score": scores["size_score"],
+                    "use_type_score": scores["use_type_score"],
+                    "feature_score": scores["feature_score"],
+                    "timing_score": scores["timing_score"],
+                    "budget_score": scores["budget_score"],
+                },
+                "reasoning": scores.get("reasoning", ""),
+                "instant_book_eligible": scores.get("instant_book_eligible", False),
                 "buyer_rate": round(buyer_rate, 2),
                 "supplier_rate": round(supplier_rate, 2),  # Admin only
                 "spread_pct": round(spread_pct, 1),  # Admin only
-                "confidence": match_data.get("confidence", 0),
-                "distance_miles": distance_miles,
+                "confidence": scores["composite_score"],
+                "distance_miles": scores.get("distance_miles"),
+                "within_budget": scores.get("within_budget", True),
+                "budget_stretch_pct": scores.get("budget_stretch_pct", 0.0),
+                "use_type_callouts": scores.get("use_type_callouts", []),
             })
+
+        apply_budget_context(results, buyer_need.max_budget_per_sqft)
 
         return results
 
@@ -536,6 +575,8 @@ class ClearingEngine:
         return {
             "city": buyer_need.city,
             "state": buyer_need.state,
+            "lat": buyer_need.lat,
+            "lng": buyer_need.lng,
             "radius_miles": buyer_need.radius_miles,
             "min_sqft": buyer_need.min_sqft,
             "max_sqft": buyer_need.max_sqft,
@@ -559,53 +600,75 @@ class ClearingEngine:
         buyer_need: BuyerNeed,
         warehouses: list[Warehouse],
     ) -> list[Warehouse]:
-        """Deterministic pre-filter before AI scoring.
-
-        Removes warehouses that cannot possibly satisfy the buyer
-        need based on hard constraints: available sqft range and
-        geographic state.  This keeps the AI scoring prompt small
-        and focused on plausible candidates.
-
-        Args:
-            buyer_need: The buyer's structured need.
-            warehouses: All active warehouses.
-
-        Returns:
-            The subset of warehouses that pass hard-constraint checks.
-        """
+        """Co-primary gate: BOTH geo AND requirements must pass."""
         candidates = []
+        buyer_radius = buyer_need.radius_miles or 25
+        max_radius = min(buyer_radius, 50)
+
         for wh in warehouses:
             tc = wh.truth_core
             if not tc:
                 continue
 
-            # Size filter - warehouse must have enough space
-            if buyer_need.min_sqft and tc.max_sqft and tc.max_sqft < buyer_need.min_sqft:
-                continue
-            if buyer_need.max_sqft and tc.min_sqft and tc.min_sqft > buyer_need.max_sqft:
+            # ---- REQUIREMENTS GATE ----
+            if not self._passes_requirements_gate(wh, buyer_need):
                 continue
 
-            # State filter — hard constraint, never return out-of-state
-            if buyer_need.state and wh.state:
-                if buyer_need.state.upper() != wh.state.upper():
-                    continue
-
-            # Distance filter — max 50 miles when coordinates are available
+            # ---- GEO GATE ----
             if buyer_need.lat and buyer_need.lng and wh.lat and wh.lng:
                 dist = _haversine_miles(buyer_need.lat, buyer_need.lng, wh.lat, wh.lng)
-                if dist > 50:
+                if dist > max_radius:
+                    continue
+            elif buyer_need.state and wh.state:
+                if buyer_need.state.upper() != wh.state.upper():
                     continue
 
             candidates.append(wh)
 
-        # Never relax the state filter — out-of-state results confuse buyers
-        if not candidates and buyer_need.state:
-            logger.info(
-                "No warehouses in state %s — returning empty set",
-                buyer_need.state,
-            )
+        # If strict filter yields nothing, try KNN fallback
+        if not candidates and buyer_need.lat and buyer_need.lng:
+            candidates = self._knn_fallback(buyer_need, warehouses, k=5, max_distance=100)
 
         return candidates
+
+    def _passes_requirements_gate(self, wh, buyer_need):
+        """Check size overlap and use type compatibility."""
+        tc = wh.truth_core
+        if not tc:
+            return False
+
+        # Size overlap
+        if buyer_need.min_sqft and tc.max_sqft and tc.max_sqft < buyer_need.min_sqft:
+            return False
+        if buyer_need.max_sqft and tc.min_sqft and tc.min_sqft > buyer_need.max_sqft:
+            return False
+
+        # Use type compatibility (replaces flat activity_tier match)
+        if buyer_need.use_type:
+            from wex_platform.services.use_type_compat import compute_use_type_score
+            score, _ = compute_use_type_score(
+                tc.activity_tier or "storage_only",
+                buyer_need.use_type,
+                has_office_space=tc.has_office_space or False,
+            )
+            if score == 0:
+                return False
+
+        return True
+
+    def _knn_fallback(self, buyer_need, all_warehouses, k=5, max_distance=100):
+        """Find k nearest warehouses that pass requirements gate, regardless of radius."""
+        scored = []
+        for wh in all_warehouses:
+            if not self._passes_requirements_gate(wh, buyer_need):
+                continue
+            if not (wh.lat and wh.lng):
+                continue
+            dist = _haversine_miles(buyer_need.lat, buyer_need.lng, wh.lat, wh.lng)
+            if dist <= max_distance:
+                scored.append((dist, wh))
+        scored.sort(key=lambda x: x[0])
+        return [wh for _, wh in scored[:k]]
 
     # ------------------------------------------------------------------
     # Warehouse formatting
@@ -638,6 +701,7 @@ class ClearingEngine:
                 "primary_image_url": wh.primary_image_url,
                 "lat": wh.lat,
                 "lng": wh.lng,
+                "neighborhood": wh.neighborhood,
                 "image_urls": wh.image_urls or [],
                 "truth_core": {
                     "min_sqft": tc.min_sqft,

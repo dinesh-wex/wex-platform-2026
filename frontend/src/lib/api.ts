@@ -2,15 +2,17 @@ import { getToken, removeToken } from "./auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-export async function fetchAPI(path: string, options?: RequestInit) {
+export async function fetchAPI(path: string, options?: RequestInit & { noAuth?: boolean }) {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options?.headers as Record<string, string> || {}),
   };
 
-  const token = getToken();
-  if (token) {
-    headers["Authorization"] = "Bearer " + token;
+  if (!options?.noAuth) {
+    const token = getToken();
+    if (token) {
+      headers["Authorization"] = "Bearer " + token;
+    }
   }
 
   const res = await fetch(`${API_BASE}${path}`, {
@@ -20,9 +22,6 @@ export async function fetchAPI(path: string, options?: RequestInit) {
 
   if (res.status === 401) {
     removeToken();
-    if (typeof window !== "undefined") {
-      window.location.href = "/login";
-    }
     throw new Error("Unauthorized");
   }
 
@@ -42,9 +41,6 @@ export async function fetchAPIWithSignal(url: string, signal?: AbortSignal) {
 
   if (res.status === 401) {
     removeToken();
-    if (typeof window !== "undefined") {
-      window.location.href = "/login";
-    }
     throw new Error("Unauthorized");
   }
 
@@ -109,10 +105,11 @@ export const api = {
     if (isTest) url += `&is_test=true`;
     return fetchAPIWithSignal(url, signal);
   },
-  getWarehouses: (params?: { status?: string; owner_email?: string }) => {
+  getWarehouses: (params?: { status?: string; owner_email?: string; company_id?: string }) => {
     const searchParams = new URLSearchParams();
     if (params?.status) searchParams.set('status', params.status);
-    if (params?.owner_email) searchParams.set('owner_email', params.owner_email);
+    if (params?.company_id) searchParams.set('company_id', params.company_id);
+    else if (params?.owner_email) searchParams.set('owner_email', params.owner_email);
     const qs = searchParams.toString();
     return fetchAPI(`/api/supplier/warehouses${qs ? `?${qs}` : ''}`);
   },
@@ -127,6 +124,12 @@ export const api = {
     fetchAPI(`/api/supplier/warehouse/${id}/activate`, {
       method: 'POST',
       body: JSON.stringify(data),
+    }),
+  activateWarehouseAnon: (id: string, data: any) =>
+    fetchAPI(`/api/supplier/warehouse/${id}/activate`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      noAuth: true,
     }),
   startActivation: (warehouseId: string) =>
     fetchAPI('/api/supplier/activate/start', {
@@ -305,7 +308,245 @@ export const api = {
     fetchAPI(`/api/search/session/${token}`),
   promoteSession: (sessionToken: string) =>
     fetchAPI('/api/search/promote', { method: 'POST', body: JSON.stringify({ session_token: sessionToken }) }),
+  extractIntent: (data: { text: string }) =>
+    fetchAPI('/api/search/extract', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // ---------------------------------------------------------------------------
+  // Engagement Lifecycle — Inc 2 (Agreement, Onboarding, Payments)
+  // ---------------------------------------------------------------------------
+  submitTourOutcome: (id: string, outcome: 'confirmed' | 'passed', reason?: string) =>
+    fetchAPI(`/api/engagements/${id}/tour/outcome`, {
+      method: 'POST',
+      body: JSON.stringify({ outcome, reason }),
+    }),
+  getAgreement: (id: string) =>
+    fetchAPI(`/api/engagements/${id}/agreement`),
+  signAgreement: (id: string, role: 'buyer' | 'supplier') =>
+    fetchAPI(`/api/engagements/${id}/agreement/sign`, {
+      method: 'POST',
+      body: JSON.stringify({ role }),
+    }),
+  getOnboardingStatus: (id: string) =>
+    fetchAPI(`/api/engagements/${id}/onboarding`),
+  uploadInsurance: (id: string) =>
+    fetchAPI(`/api/engagements/${id}/onboarding/insurance`, { method: 'POST' }),
+  uploadCompanyDocs: (id: string) =>
+    fetchAPI(`/api/engagements/${id}/onboarding/company-docs`, { method: 'POST' }),
+  submitPaymentMethod: (id: string) =>
+    fetchAPI(`/api/engagements/${id}/onboarding/payment`, { method: 'POST' }),
+  getEngagementPayments: (id: string) =>
+    fetchAPI(`/api/engagements/${id}/payments`),
+  getBuyerPayments: () =>
+    fetchAPI('/api/buyer/payments'),
 
   // Health
   health: () => fetchAPI('/health'),
+
+  // ---------------------------------------------------------------------------
+  // Supplier Dashboard — Portfolio
+  // ---------------------------------------------------------------------------
+  getPortfolio: () => fetchAPI('/api/supplier/portfolio'),
+  getActions: () => fetchAPI('/api/supplier/actions'),
+  getSuggestions: () => fetchAPI('/api/supplier/suggestions'),
+
+  // ---------------------------------------------------------------------------
+  // Supplier Dashboard — Properties
+  // ---------------------------------------------------------------------------
+  getProperties: () => fetchAPI('/api/supplier/properties'),
+  getProperty: (id: string) => fetchAPI(`/api/supplier/properties/${id}`),
+  getPropertySuggestions: (id: string) => fetchAPI(`/api/supplier/properties/${id}/suggestions`),
+  respondToSuggestion: (propertyId: string, data: { suggestion_id: string; response: string }) =>
+    fetchAPI(`/api/supplier/properties/${propertyId}/suggestion-response`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateSpecs: (id: string, data: Record<string, unknown>) =>
+    fetchAPI(`/api/supplier/properties/${id}/specs`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  updateConfig: (id: string, data: Record<string, unknown>) =>
+    fetchAPI(`/api/supplier/properties/${id}/config`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  updatePricing: (id: string, data: { rate: number }) =>
+    fetchAPI(`/api/supplier/properties/${id}/pricing`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  getUploadToken: (id: string) =>
+    fetchAPI(`/api/supplier/properties/${id}/upload-token`, { method: 'POST' }),
+  getPropertyPhotos: (id: string) => fetchAPI(`/api/supplier/properties/${id}/photos`),
+  deletePropertyPhoto: (propertyId: string, photoId: string) =>
+    fetchAPI(`/api/supplier/properties/${propertyId}/photos/${photoId}`, { method: 'DELETE' }),
+  reorderPropertyPhotos: (propertyId: string, order: string[]) =>
+    fetchAPI(`/api/supplier/properties/${propertyId}/photos/reorder`, {
+      method: 'PATCH',
+      body: JSON.stringify({ order }),
+    }),
+  setPropertyPrimaryPhoto: (propertyId: string, photoId: string) =>
+    fetchAPI(`/api/supplier/properties/${propertyId}/photos/${photoId}/primary`, {
+      method: 'PATCH',
+    }),
+  getPropertyActivity: (id: string) => fetchAPI(`/api/supplier/properties/${id}/activity`),
+
+  // ---------------------------------------------------------------------------
+  // Supplier Dashboard — Photo Upload (tokenized, no auth)
+  // ---------------------------------------------------------------------------
+  verifyUploadToken: (propertyId: string, token: string) =>
+    fetch(`${API_BASE}/api/upload/${propertyId}/${token}/verify`).then(r => r.json()),
+  uploadPropertyPhotos: (propertyId: string, token: string, formData: FormData) =>
+    fetch(`${API_BASE}/api/upload/${propertyId}/${token}/photos`, {
+      method: 'POST',
+      body: formData,
+    }).then(r => r.json()),
+
+  // ---------------------------------------------------------------------------
+  // Supplier Dashboard — Engagements (legacy)
+  // ---------------------------------------------------------------------------
+  getEngagements: (status?: string) =>
+    fetchAPI(`/api/supplier/engagements${status ? `?status=${status}` : ''}`),
+  getEngagement: (id: string) => fetchAPI(`/api/supplier/engagements/${id}`),
+  respondToEngagement: (id: string, data: { action: string; reason?: string }) =>
+    fetchAPI(`/api/supplier/engagements/${id}/respond`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  confirmEngagementTour: (id: string, data: { confirmed: boolean; proposed_date?: string; proposed_time?: string }) =>
+    fetchAPI(`/api/supplier/engagements/${id}/tour/confirm`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // ---------------------------------------------------------------------------
+  // Engagement Lifecycle API (spec-compliant)
+  // ---------------------------------------------------------------------------
+  getEngagementTimeline: (id: string) =>
+    fetchAPI(`/api/engagements/${id}/timeline`),
+  acceptDealPing: (id: string, terms?: { supplierTermsAccepted: boolean; supplierTermsVersion: string }) =>
+    fetchAPI(`/api/engagements/${id}/deal-ping/accept`, {
+      method: 'POST',
+      body: JSON.stringify(terms ?? {}),
+    }),
+  declineDealPing: (id: string, reason?: string) =>
+    fetchAPI(`/api/engagements/${id}/deal-ping/decline`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  submitContact: (id: string, email: string, phone: string) =>
+    fetchAPI(`/api/engagements/${id}/contact`, {
+      method: 'POST',
+      body: JSON.stringify({ email, phone }),
+    }),
+  signEngagementGuarantee: (id: string) =>
+    fetchAPI(`/api/engagements/${id}/guarantee`, {
+      method: 'POST',
+      body: JSON.stringify({ accepted: true }),
+    }),
+  requestTour: (id: string, preferredDate?: string) =>
+    fetchAPI(`/api/engagements/${id}/tour/request`, {
+      method: 'POST',
+      body: JSON.stringify({ preferred_date: preferredDate }),
+    }),
+  confirmEngagementTourV2: (id: string, scheduledDate: string) =>
+    fetchAPI(`/api/engagements/${id}/tour/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ scheduled_date: scheduledDate }),
+    }),
+  rescheduleEngagementTour: (id: string, newDate: string, reason: string) =>
+    fetchAPI(`/api/engagements/${id}/tour/reschedule`, {
+      method: 'POST',
+      body: JSON.stringify({ new_date: newDate, reason }),
+    }),
+  confirmInstantBook: (id: string) =>
+    fetchAPI(`/api/engagements/${id}/instant-book/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  declineEngagement: (id: string, reason: string) =>
+    fetchAPI(`/api/engagements/${id}/decline`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+
+  // ---------------------------------------------------------------------------
+  // Engagement Lifecycle — Inc 3 (Q&A, Admin)
+  // ---------------------------------------------------------------------------
+  getQuestions: (engagementId: string) =>
+    fetchAPI(`/api/engagements/${engagementId}/qa`),
+  submitQuestion: (engagementId: string, questionText: string) =>
+    fetchAPI(`/api/engagements/${engagementId}/qa`, {
+      method: 'POST',
+      body: JSON.stringify({ question_text: questionText }),
+    }),
+  answerQuestion: (engagementId: string, questionId: string, answerText: string) =>
+    fetchAPI(`/api/engagements/${engagementId}/qa/${questionId}/answer`, {
+      method: 'POST',
+      body: JSON.stringify({ answer_text: answerText }),
+    }),
+  getPropertyKnowledge: (warehouseId: string) =>
+    fetchAPI(`/api/properties/${warehouseId}/knowledge`),
+
+  // ---------------------------------------------------------------------------
+  // Supplier Dashboard — Payments
+  // ---------------------------------------------------------------------------
+  getPayments: (params?: { from?: string; to?: string; property_id?: string; status?: string; page?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.from) sp.set('from', params.from);
+    if (params?.to) sp.set('to', params.to);
+    if (params?.property_id) sp.set('property_id', params.property_id);
+    if (params?.status) sp.set('status', params.status);
+    if (params?.page) sp.set('page', String(params.page));
+    const qs = sp.toString();
+    return fetchAPI(`/api/supplier/payments${qs ? `?${qs}` : ''}`);
+  },
+  getPaymentsSummary: () => fetchAPI('/api/supplier/payments/summary'),
+  exportPayments: (format: 'csv' | 'pdf', from?: string, to?: string) => {
+    const sp = new URLSearchParams({ format });
+    if (from) sp.set('from', from);
+    if (to) sp.set('to', to);
+    return fetchAPI(`/api/supplier/payments/export?${sp.toString()}`);
+  },
+
+  // ---------------------------------------------------------------------------
+  // Supplier Dashboard — Account
+  // ---------------------------------------------------------------------------
+  getAccount: () => fetchAPI('/api/supplier/account'),
+  updateAccount: (data: { name?: string; company?: string; phone?: string; email?: string }) =>
+    fetchAPI('/api/supplier/account', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  changePassword: (data: { current_password: string; new_password: string }) =>
+    fetchAPI('/api/supplier/account/password', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getNotificationPrefs: () => fetchAPI('/api/supplier/account/notifications'),
+  updateNotificationPrefs: (data: Record<string, boolean>) =>
+    fetchAPI('/api/supplier/account/notifications', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  // ---------------------------------------------------------------------------
+  // Supplier Dashboard — Team
+  // ---------------------------------------------------------------------------
+  getTeam: () => fetchAPI('/api/supplier/team'),
+  inviteTeamMember: (data: { email: string; role: string }) =>
+    fetchAPI('/api/supplier/team/invite', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  removeTeamMember: (userId: string) =>
+    fetchAPI(`/api/supplier/team/${userId}`, { method: 'DELETE' }),
+  updateTeamMember: (userId: string, data: { role: string }) =>
+    fetchAPI(`/api/supplier/team/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
 };

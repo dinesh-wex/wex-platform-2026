@@ -111,10 +111,10 @@ export default function Phase6Activation(props: Phase6Props) {
       activation_status: isSmokeTest ? 'pending_report' : 'on',
     };
 
-    // Try backend API
+    // Try backend API — use anonymous call to avoid leaking a previous user's session
     try {
       if (buildingData?.id) {
-        await api.activateWarehouse(buildingData.id, payload);
+        await api.activateWarehouseAnon(buildingData.id, payload);
       }
     } catch {
       // Backend unavailable — continue with localStorage

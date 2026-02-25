@@ -12,11 +12,13 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
     Integer,
     JSON,
+    Numeric,
     String,
     Text,
 )
@@ -47,6 +49,31 @@ class User(Base):
     email_verified = Column(Boolean, default=False)
     created_at = Column(DateTime, default=func.now())
     last_login_at = Column(DateTime, nullable=True)
+    company_id = Column(String(36), ForeignKey("companies.id"), nullable=True)
+    company_role = Column(String(20), nullable=True, default="admin")
+
+    # Relationships
+    company_ref = relationship("Company", back_populates="users")
+
+
+class Company(Base):
+    """Organization that owns warehouses. Every user belongs to exactly one company.
+
+    For individuals, a single-member company is auto-created at registration.
+    For businesses, the company has multiple users with different roles.
+    Warehouse ownership is always via company_id, never via email or user_id.
+    """
+
+    __tablename__ = "companies"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(255), nullable=False)
+    type = Column(String(20), nullable=False, default="individual")  # individual, business
+    created_at = Column(DateTime, default=func.now())
+
+    # Relationships
+    users = relationship("User", back_populates="company_ref")
+    warehouses = relationship("Warehouse", back_populates="company_ref")
 
 
 # ---------------------------------------------------------------------------
@@ -63,12 +90,16 @@ class Warehouse(Base):
     owner_name = Column(String(255))
     owner_email = Column(String(255))
     owner_phone = Column(String(50))
+    company_id = Column(String(36), ForeignKey("companies.id"), nullable=True, index=True)
+    # created_by is AUDIT ONLY. Never use for access control.
+    created_by = Column(String(36), ForeignKey("users.id"), nullable=True)
     address = Column(String(500), nullable=False)
     city = Column(String(100))
     state = Column(String(50))
     zip = Column(String(20))
     lat = Column(Float)
     lng = Column(Float)
+    neighborhood = Column(String(150))
     building_size_sqft = Column(Integer)
     lot_size_acres = Column(Float)
     year_built = Column(Integer)
@@ -89,6 +120,7 @@ class Warehouse(Base):
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
     # Relationships
+    company_ref = relationship("Company", back_populates="warehouses")
     truth_core = relationship("TruthCore", back_populates="warehouse", uselist=False)
     memories = relationship("ContextualMemory", back_populates="warehouse")
     supplier_agreements = relationship("SupplierAgreement", back_populates="warehouse")
@@ -734,3 +766,347 @@ class SearchSession(Base):
     created_at = Column(DateTime, default=func.now())
 
     buyer_need = relationship("BuyerNeed")
+
+
+# ---------------------------------------------------------------------------
+# Supplier Dashboard Domain
+# ---------------------------------------------------------------------------
+
+
+class NearMiss(Base):
+    """A property that nearly matched a buyer need but was excluded or not selected."""
+
+    __tablename__ = "near_misses"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    property_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
+    buyer_need_id = Column(String(36), ForeignKey("buyer_needs.id"), nullable=False)
+    match_score = Column(Float, nullable=True)
+    outcome = Column(String(50))  # NearMissOutcome
+    reasons = Column(JSON)  # array of {field, detail, fix}
+    evaluated_at = Column(DateTime)
+
+    # Relationships
+    warehouse = relationship("Warehouse", backref="near_misses")
+    buyer_need = relationship("BuyerNeed", backref="near_misses")
+
+
+class SupplierResponse(Base):
+    """Tracks supplier responses to deal pings, DLA outreach, tour requests, etc."""
+
+    __tablename__ = "supplier_responses"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    property_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
+    supplier_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+    deal_id = Column(String(36), ForeignKey("deals.id"), nullable=True)
+    dla_token = Column(String(64), nullable=True)
+    event_type = Column(String(50))  # SupplierResponseEventType
+    sent_at = Column(DateTime)
+    deadline_at = Column(DateTime)
+    responded_at = Column(DateTime, nullable=True)
+    response_time_hours = Column(Float, nullable=True)
+    outcome = Column(String(50), nullable=True)  # SupplierResponseOutcome
+    decline_reason = Column(String(255), nullable=True)
+    counter_rate = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+
+    # Relationships
+    warehouse = relationship("Warehouse", backref="supplier_responses")
+    supplier = relationship("User", backref="supplier_responses")
+    deal = relationship("Deal", backref="supplier_responses")
+
+
+class BuyerEngagement(Base):
+    """Tracks how buyers engage with a property in search results."""
+
+    __tablename__ = "buyer_engagements"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    property_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
+    buyer_need_id = Column(String(36), ForeignKey("buyer_needs.id"), nullable=False)
+    shown_at = Column(DateTime)
+    position_in_results = Column(Integer)
+    tier = Column(String(20))  # ResultTier
+    action_taken = Column(String(50), nullable=True)  # BuyerEngagementAction
+    action_at = Column(DateTime, nullable=True)
+    time_on_page_seconds = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+
+    # Relationships
+    warehouse = relationship("Warehouse", backref="buyer_engagements")
+    buyer_need = relationship("BuyerNeed", backref="buyer_engagements")
+
+
+class UploadToken(Base):
+    """Tokenized upload access for property photos (no auth required)."""
+
+    __tablename__ = "upload_tokens"
+
+    token = Column(String(64), primary_key=True)
+    property_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now())
+    expires_at = Column(DateTime)
+    is_used = Column(Boolean, default=False)
+
+    # Relationships
+    warehouse = relationship("Warehouse", backref="upload_tokens")
+
+
+# ---------------------------------------------------------------------------
+# Engagement Lifecycle Domain
+# ---------------------------------------------------------------------------
+
+
+class Engagement(Base):
+    """Central engagement tracking object from match through active lease."""
+
+    __tablename__ = "engagements"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    warehouse_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
+    buyer_need_id = Column(String(36), ForeignKey("buyer_needs.id"), nullable=False)
+    buyer_id = Column(String(36), ForeignKey("buyers.id"), nullable=True)
+    # supplier_id is AUDIT ONLY — records who actioned the deal ping.
+    # Never use for authorization. Use company_id via the property FK instead.
+    supplier_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+
+    # Status
+    status = Column(String(50), nullable=False, default="deal_ping_sent", index=True)
+    tier = Column(String(20), nullable=False)  # EngagementTier
+    path = Column(String(20), nullable=True)  # EngagementPath — set when buyer chooses
+
+    # Matching
+    match_score = Column(Float)
+    match_rank = Column(Integer)
+
+    # Pricing
+    supplier_rate_sqft = Column(Numeric(10, 4))
+    buyer_rate_sqft = Column(Numeric(10, 4))
+    monthly_supplier_payout = Column(Numeric(12, 2))
+    monthly_buyer_total = Column(Numeric(12, 2))
+    sqft = Column(Integer)
+
+    # Deal ping
+    deal_ping_sent_at = Column(DateTime, nullable=True)
+    deal_ping_expires_at = Column(DateTime, nullable=True)
+    deal_ping_responded_at = Column(DateTime, nullable=True)
+
+    # Supplier terms (Tier 2)
+    supplier_terms_accepted = Column(Boolean, default=False)
+    supplier_terms_version = Column(String(100), nullable=True)
+
+    # Buyer contact
+    buyer_email = Column(String(255), nullable=True)
+    buyer_phone = Column(String(50), nullable=True)
+    buyer_company_name = Column(String(255), nullable=True)
+
+    # Guarantee
+    guarantee_signed_at = Column(DateTime, nullable=True)
+    guarantee_ip_address = Column(String(45), nullable=True)
+    guarantee_terms_version = Column(String(100), nullable=True)
+
+    # Tour
+    tour_requested_at = Column(DateTime, nullable=True)
+    tour_requested_date = Column(Date, nullable=True)
+    tour_requested_time = Column(String(20), nullable=True)  # e.g. "10:00 AM"
+    tour_confirmed_at = Column(DateTime, nullable=True)
+    tour_scheduled_date = Column(DateTime, nullable=True)
+    tour_completed_at = Column(DateTime, nullable=True)
+    tour_reschedule_count = Column(Integer, default=0)
+    tour_rescheduled_date = Column(Date, nullable=True)
+    tour_rescheduled_time = Column(String(20), nullable=True)
+    tour_rescheduled_by = Column(String(20), nullable=True)  # EngagementActor value
+    tour_outcome = Column(String(30), nullable=True)  # TourOutcome
+
+    # Instant book
+    instant_book_requested_at = Column(DateTime, nullable=True)
+    instant_book_confirmed_at = Column(DateTime, nullable=True)
+
+    # Agreement
+    agreement_sent_at = Column(DateTime, nullable=True)
+    agreement_signed_at = Column(DateTime, nullable=True)
+
+    # Onboarding
+    onboarding_started_at = Column(DateTime, nullable=True)
+    onboarding_completed_at = Column(DateTime, nullable=True)
+    insurance_uploaded = Column(Boolean, default=False)
+    company_docs_uploaded = Column(Boolean, default=False)
+    payment_method_added = Column(Boolean, default=False)
+
+    # Lease
+    term_months = Column(Integer, nullable=True)  # Snapshotted from BuyerNeed.duration_months at creation
+    lease_start_date = Column(Date, nullable=True)
+    lease_end_date = Column(Date, nullable=True)
+
+    # Decline
+    declined_by = Column(String(20), nullable=True)  # DeclineParty
+    decline_reason = Column(String(500), nullable=True)
+    declined_at = Column(DateTime, nullable=True)
+
+    # Cancellation
+    cancelled_by = Column(String(20), nullable=True)  # CancelledBy
+    cancel_reason = Column(String(500), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+
+    # Admin
+    admin_notes = Column(Text, nullable=True)
+    admin_flagged = Column(Boolean, default=False)
+    admin_flag_reason = Column(String(500), nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationships
+    events = relationship("EngagementEvent", back_populates="engagement")
+    warehouse = relationship("Warehouse", backref="engagements")
+    buyer_need = relationship("BuyerNeed", backref="engagements")
+    buyer = relationship("Buyer", backref="engagements")
+    supplier = relationship("User", backref="engagements")
+
+
+class EngagementEvent(Base):
+    """Immutable audit trail entry for engagement state transitions."""
+
+    __tablename__ = "engagement_events"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    engagement_id = Column(String(36), ForeignKey("engagements.id"), nullable=False)
+    event_type = Column(String(100), nullable=False)  # EngagementEventType
+    actor = Column(String(20), nullable=False)  # EngagementActor
+    actor_id = Column(String(36), nullable=True)
+    from_status = Column(String(50), nullable=True)  # EngagementStatus
+    to_status = Column(String(50), nullable=True)  # EngagementStatus
+    data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+
+    # Relationships
+    engagement = relationship("Engagement", back_populates="events")
+
+
+class EngagementAgreement(Base):
+    """Per-engagement lease agreement with dual-sign workflow."""
+
+    __tablename__ = "engagement_agreements"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    engagement_id = Column(String(36), ForeignKey("engagements.id"), nullable=False)
+    version = Column(Integer, default=1)
+    status = Column(String(30), nullable=False, default="pending")  # AgreementSignStatus
+    terms_text = Column(Text, nullable=False)
+
+    # Pricing snapshot
+    buyer_rate_sqft = Column(Numeric(10, 4))
+    supplier_rate_sqft = Column(Numeric(10, 4))
+    monthly_buyer_total = Column(Numeric(12, 2))
+    monthly_supplier_payout = Column(Numeric(12, 2))
+
+    # Signing timestamps
+    sent_at = Column(DateTime, nullable=False)
+    buyer_signed_at = Column(DateTime, nullable=True)
+    supplier_signed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+
+    # Timestamps
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationships
+    engagement = relationship("Engagement", backref="agreements")
+
+
+class PropertyQuestion(Base):
+    """Q&A question with AI routing for a property engagement."""
+
+    __tablename__ = "property_questions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    engagement_id = Column(String(36), ForeignKey("engagements.id"), nullable=False)
+    warehouse_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
+    buyer_id = Column(String(36), ForeignKey("buyers.id"), nullable=False)
+    question_text = Column(Text, nullable=False)
+
+    # Status
+    status = Column(String(30), nullable=False, default="submitted")  # QuestionStatus
+
+    # AI routing
+    ai_answer = Column(Text, nullable=True)
+    ai_confidence = Column(Float, nullable=True)
+
+    # Supplier routing
+    supplier_answer = Column(Text, nullable=True)
+
+    # Final answer
+    final_answer = Column(Text, nullable=True)
+    final_answer_source = Column(String(20), nullable=True)  # 'ai', 'supplier', 'admin'
+
+    # Supplier deadline tracking
+    routed_to_supplier_at = Column(DateTime, nullable=True)
+    supplier_answered_at = Column(DateTime, nullable=True)
+    supplier_deadline_at = Column(DateTime, nullable=True)
+
+    # Timer pause (post-tour deadline pause while Q&A open)
+    timer_paused_at = Column(DateTime, nullable=True)
+    timer_resumed_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=func.now())
+
+    # Relationships
+    engagement = relationship("Engagement", backref="questions")
+    warehouse = relationship("Warehouse", backref="property_questions")
+    buyer = relationship("Buyer", backref="property_questions")
+
+
+class PropertyKnowledgeEntry(Base):
+    """Property knowledge base entry built from Q&A answers."""
+
+    __tablename__ = "property_knowledge_entries"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    warehouse_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    source = Column(String(20), nullable=False)  # 'ai', 'supplier', 'admin'
+    source_question_id = Column(String(36), ForeignKey("property_questions.id"), nullable=True)
+    confidence = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationships
+    warehouse = relationship("Warehouse", backref="knowledge_entries")
+    source_question = relationship("PropertyQuestion", backref="knowledge_entries")
+
+
+class PaymentRecord(Base):
+    """Buyer/supplier payment tracking for an engagement period."""
+
+    __tablename__ = "payment_records"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    engagement_id = Column(String(36), ForeignKey("engagements.id"), nullable=False)
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+
+    # Amounts
+    buyer_amount = Column(Numeric(12, 2), nullable=False)
+    supplier_amount = Column(Numeric(12, 2), nullable=False)
+    wex_amount = Column(Numeric(12, 2), nullable=False)
+
+    # Statuses
+    buyer_status = Column(String(20), nullable=False, default="upcoming")  # BuyerPaymentStatus
+    supplier_status = Column(String(20), nullable=False, default="upcoming")  # SupplierPaymentStatus
+
+    # Payment timestamps
+    buyer_invoiced_at = Column(DateTime, nullable=True)
+    buyer_paid_at = Column(DateTime, nullable=True)
+    supplier_scheduled_at = Column(DateTime, nullable=True)
+    supplier_deposited_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationships
+    engagement = relationship("Engagement", backref="payment_records")

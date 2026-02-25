@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wex_platform.app.config import get_settings
-from wex_platform.domain.models import User
+from wex_platform.domain.models import Company, User
 
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -58,6 +58,16 @@ async def create_user(
         phone=phone,
     )
     db.add(user)
+    await db.flush()
+
+    # Auto-create a Company record for the new user
+    company_record = Company(name=user.name, type="individual")
+    db.add(company_record)
+    await db.flush()
+
+    user.company_id = company_record.id
+    user.company_role = "admin"
+
     await db.commit()
     await db.refresh(user)
     return user

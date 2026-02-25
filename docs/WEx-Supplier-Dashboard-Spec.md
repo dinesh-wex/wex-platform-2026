@@ -1,7 +1,7 @@
 # Supplier Dashboard — Developer Spec
 
 **For:** Frontend + Backend Developer
-**Context:** Supplier-facing dashboard for managing properties, deals, payments, and profile
+**Context:** Supplier-facing dashboard for managing properties, engagements, payments, and profile
 **Date:** February 2026
 
 ---
@@ -10,16 +10,16 @@
 
 ### What We're Building
 
-The supplier dashboard is the command center for warehouse owners who've joined the WEx network. It's where they manage their properties, respond to deals, track earnings, and optimize their listings. But it is NOT where most supplier interaction happens — SMS, email, and phone handle the real-time deal flow. The dashboard is the filing cabinet, not the front desk.
+The supplier dashboard is the command center for warehouse owners who've joined the WEx network. It's where they manage their properties, respond to engagements, track earnings, and optimize their listings. But it is NOT where most supplier interaction happens — SMS, email, and phone handle the real-time engagement flow. The dashboard is the filing cabinet, not the front desk.
 
 ### Design Philosophy
 
-**Set it and forget it.** Most suppliers will visit the dashboard during onboarding to configure their properties, then return only when something specific happens — a payment to verify, a deal to review, or a profile change to make. We design for the supplier who visits once a month, not the one who logs in daily.
+**Set it and forget it.** Most suppliers will visit the dashboard during onboarding to configure their properties, then return only when something specific happens — a payment to verify, an engagement to review, or a profile change to make. We design for the supplier who visits once a month, not the one who logs in daily.
 
 **Every screen answers one question:**
 - Portfolio page → "How's my portfolio doing?"
 - Property detail → "How's this property doing and how can it earn more?"
-- Deals page → "What needs my attention right now?"
+- Engagements page → "What needs my attention right now?"
 - Payments page → "Did I get paid?"
 
 **The system does the work, not the supplier.** Instead of expecting suppliers to study analytics dashboards and figure out what to optimize, the platform analyzes matching data, market conditions, and buyer demand behind the scenes and surfaces specific, actionable suggestions: "Do this → earn more." Every suggestion has a one-click action button. No interpretation required.
@@ -39,23 +39,23 @@ SMS/Email (daily, real-time)          Dashboard (monthly, review)
                                       • Manage account & team
 ```
 
-Most deals will be accepted or declined via a text message reply. The dashboard shows the same information in a structured view for suppliers who want the full picture, and it's where actions that require more thought (rate changes, configuration updates, agreement signing) happen.
+Most engagements will be accepted or declined via a text message reply. The dashboard shows the same information in a structured view for suppliers who want the full picture, and it's where actions that require more thought (rate changes, configuration updates, agreement signing) happen.
 
 ### Expected Outcomes
 
 **For suppliers:**
 - Clear visibility into earnings across their portfolio at a glance
-- Never miss a deal opportunity — action items surfaced prominently with time-sensitive indicators
+- Never miss an opportunity — action items surfaced prominently with time-sensitive indicators
 - Data-backed guidance on how to earn more (not generic tips — specific suggestions derived from actual buyer demand and near-miss matching data)
 - Easy property management without heavy form-filling (confirm inferred data, upload photos from phone, respond to targeted suggestions)
-- Confidence that the system is actively working for them (activity timeline shows matching activity even when deals aren't closing yet)
+- Confidence that the system is actively working for them (activity timeline shows matching activity even when engagements aren't closing yet)
 
 **For WEx:**
-- Higher supplier engagement and profile completeness → better matching → more deals closed
+- Higher supplier engagement and profile completeness → better matching → more engagements closed
 - Near-miss and response logging builds intelligence that improves matching and pricing over time
 - Suggestion engine nudges suppliers toward market-competitive rates and in-demand features without WEx ops team having to make individual calls
 - Team management allows property management companies to onboard multiple users, expanding supply without proportional ops effort
-- Structured deal flow reduces the chance of deals falling through due to missed communications
+- Structured engagement flow reduces the chance of engagements falling through due to missed communications
 
 **For the platform (data flywheel):**
 - Every suggestion response (even "No, I don't have office space") is stored as enrichment data
@@ -71,8 +71,8 @@ Most deals will be accepted or declined via a text message reply. The dashboard 
 ```
 /supplier                          → Portfolio Dashboard (landing page)
 /supplier/properties/[id]          → Property Detail + Edit
-/supplier/deals                    → Active Deals & History
-/supplier/deals/[id]               → Deal Detail + Timeline
+/supplier/engagements                    → Engagements (active, in-progress, past)
+/supplier/engagements/[id]               → Engagement Detail + Timeline
 /supplier/payments                 → Earnings & Payment History
 /supplier/account                  → Account Settings
 /supplier/account/team             → Team Management (invite users)
@@ -94,7 +94,7 @@ $1,740,960/yr                 $1.03/sqft        136,500 sqft          42%
 Protected by WEx Occupancy Guarantee
 ```
 
-- Total Projected Income = sum of (rate × rented sqft × 12) for all active deals + (rate × available sqft × 12) for listed but unrented space
+- Total Projected Income = sum of (rate × rented sqft × 12) for all active engagements + (rate × available sqft × 12) for listed but unrented space
 - Avg Rate = weighted average of supplier rates across portfolio
 - Active Capacity = total sqft listed across all in_network properties
 - Occupancy = rented sqft / available sqft across portfolio
@@ -105,15 +105,15 @@ A notification-style section that surfaces items needing supplier attention. Eac
 
 | Source | Display | Action Button |
 |--------|---------|---------------|
-| New deal ping (in-network match) | "A buyer needs 5,000 sqft storage in your area. $0.75/sqft for 6 months." | [Review Deal] → goes to deal detail |
-| DLA outreach response needed | "A buyer matched your property at 1221 Wilson Rd." | [View Opportunity] → goes to DLA page or deal detail |
+| New deal ping (in-network match) | "A buyer needs 5,000 sqft storage in your area. $0.75/sqft for 6 months." | [Review Engagement] → goes to engagement detail |
+| DLA outreach response needed | "A buyer matched your property at 1221 Wilson Rd." | [View Opportunity] → goes to DLA page or engagement detail |
 | Tour to confirm | "Tour requested for March 5 at 1221 Wilson Rd, 10:00 AM" | [Confirm Tour] / [Propose New Time] |
-| Agreement to sign | "Engagement agreement ready for Deal #1234" | [Review & Sign] |
-| Post-tour follow-up | "How did the tour go for Deal #1234?" | [Tour Went Well] / [Issue to Report] |
+| Agreement to sign | "Engagement agreement ready for Engagement #1234" | [Review & Sign] |
+| Post-tour follow-up | "How did the tour go for Engagement #1234?" | [Tour Went Well] / [Issue to Report] |
 
 When no actions pending: show "All caught up — your properties are actively matching with buyers." (not an empty state)
 
-**Backend:** `GET /api/supplier/actions` — returns pending items across all deal states, sorted by urgency (time-sensitive first).
+**Backend:** `GET /api/supplier/actions` — returns pending items across all engagement states, sorted by urgency (time-sensitive first).
 
 ### 2.3 Portfolio-Level AI Suggestions (below action required)
 
@@ -159,7 +159,7 @@ Each property card:
 | Revenue | rate × available_sqft × 12 | Projected annual |
 | Rate | TruthCore.target_rate_sqft | Supplier's rate, not buyer all-in |
 | Available sqft | TruthCore.available_sqft | Total listed on WEx |
-| Rented sqft | Sum of active Deal sqft for this property | |
+| Rented sqft | Sum of active engagement sqft for this property | |
 | Occupancy bar | rented / available | Visual progress bar |
 | Matching toggle | Enables/disables matching | When OFF → status = in_network_paused |
 
@@ -202,25 +202,132 @@ Where the supplier views, edits, and enriches a specific property. This is NOT a
 │  └─────────────────────────────────────────────────┘  │
 │                                                       │
 │  [Photos]  [Building Info]  [Configuration]           │
-│  [Pricing]  [Deals]  [Activity]                       │
+│  [Pricing]  [Engagements]  [Activity]                  │
 │                                                       │
 └───────────────────────────────────────────────────────┘
 ```
 
 ### 3.2 Profile Completeness Score
 
-Calculated from filled vs total fields across these categories:
+Not all fields are equal. Completeness is weighted by impact on matching — fields that directly determine whether a buyer match happens carry far more weight than informational fields.
 
-| Category | Fields Counted | Weight |
-|----------|---------------|--------|
-| Photos | At least 3 photos uploaded | 25% |
-| Building specs | All non-inferred fields confirmed | 20% |
-| Configuration | All TruthCore fields populated | 20% |
-| Pricing | Rate set + pricing model chosen | 15% |
-| Operating hours | Hours specified for each day | 10% |
-| Certifications | Relevant certifications confirmed or denied | 10% |
+**Tier 1 — Must-Have (60% of score)**
 
-Display as: "Profile 72% complete" with a simple progress indicator. Links to the first incomplete section.
+These fields are required for the clearing engine to match and for buyers to make tour decisions. A supplier who fills only these seven items has a fully matchable profile at 60%.
+
+| Field | DB Field | Weight | Why It Matters |
+|-------|----------|--------|----------------|
+| Photos | ≥ 3 photos uploaded | 15% | Properties with photos get 2x more tour requests. Primary visual decision factor for buyers. |
+| Available sqft | available_sqft | 10% | Core matching field — clearing engine can't match without it |
+| Target rate | target_rate_sqft | 10% | Core pricing field — buyer all-in rate calculated from this |
+| Clear height | clear_height_ft | 8% | Universal buyer concern — determines storage capacity |
+| Dock doors | dock_doors | 7% | Most buyers need loading access — shown on every results card |
+| Activity tier | activity_tier | 5% | Determines use-type compatibility (storage vs light ops vs distribution) |
+| Available from | available_from | 5% | Timing match — buyers filter by when they need space |
+
+**Tier 2 — Matching Boost (30% of score)**
+
+These map to buyer deal-breaker filters (Step 6 of buyer wizard). Missing = system must guess or exclude from deal-breaker matches. Filling these unlocks more precise matching.
+
+| Field | DB Field | Weight | Why It Matters |
+|-------|----------|--------|----------------|
+| Has office | has_office | 5% | Common buyer deal-breaker filter |
+| Weekend / 24/7 access | weekend_access, access_24_7 | 5% | Common buyer deal-breaker filter |
+| Min rentable sqft | min_rentable_sqft | 4% | Prevents mismatched size requests |
+| Min term | min_term_months | 4% | Prevents mismatched duration requests |
+| Parking | parking_spaces | 4% | Buyer deal-breaker for some segments |
+| Power supply | power_supply | 4% | Relevant for light ops / distribution buyers |
+| Sprinkler | sprinkler_system | 4% | Common requirement, especially for insured goods |
+
+**Tier 3 — Nice-to-Know (10% of score)**
+
+Informational fields that don't affect matching. Buyers don't filter on these. They appear in tour prep (post-commitment) or property detail, not on results cards.
+
+| Field | DB Field | Weight |
+|-------|----------|--------|
+| Construction type | construction_type | ~1.5% |
+| Zoning | zoning | ~1.5% |
+| Lot size | lot_size_acres | ~1.5% |
+| Year built | year_built | ~1.5% |
+| Building size (total) | building_sqft | ~1.5% |
+| Drive-in bays | drive_in_bays | ~1.5% |
+| All remaining fields | — | ~1% shared |
+
+**Certifications — NOT counted in base profile completeness.**
+
+Certifications (food_grade, fda_registered, hazmat_certified, c_tpat, temperature_controlled, foreign_trade_zone) are only relevant to specific buyer segments. Instead of asking every supplier to fill out six certification fields:
+
+- **Do NOT include certifications in the completeness score**
+- **Only surface certification questions via AI suggestions** when there is actual buyer demand in the supplier's area for that certification type
+- Example: If food storage buyers are searching in North Charleston → suggestion appears: "Food storage buyers are active in your area. Is your facility food grade?" → [Yes] / [No]
+- Both "Yes" and "No" are valuable — "No" prevents the question from reappearing and avoids false matches
+- A general storage warehouse should never be nagged about certifications that don't apply to them
+
+**Display:**
+
+Show as "Profile 72% complete" with a simple progress bar. Link to the highest-weight incomplete field (not the first alphabetically).
+
+**Suggestion priority follows the tiers:**
+1. Always nag about missing Tier 1 fields first (especially photos — highest single weight)
+2. Suggest Tier 2 fields when Tier 1 is complete
+3. Rarely or never prompt for Tier 3 fields — let suppliers fill them if they want
+4. Certification prompts only appear when demand-triggered
+
+**Backend calculation:**
+
+```python
+def calculate_profile_completeness(property) -> dict:
+    score = 0.0
+    missing = []
+    
+    # Tier 1 — Must-Have (60%)
+    tier1_fields = {
+        "photos": (property.photo_count >= 3, 0.15),
+        "available_sqft": (property.truth_core.available_sqft is not None, 0.10),
+        "target_rate": (property.truth_core.target_rate_sqft is not None and property.truth_core.target_rate_sqft > 0, 0.10),
+        "clear_height": (property.clear_height_ft is not None, 0.08),
+        "dock_doors": (property.dock_doors is not None, 0.07),
+        "activity_tier": (property.truth_core.activity_tier is not None, 0.05),
+        "available_from": (property.truth_core.available_from is not None, 0.05),
+    }
+    
+    # Tier 2 — Matching Boost (30%)
+    tier2_fields = {
+        "has_office": (property.truth_core.has_office is not None, 0.05),
+        "access": (property.truth_core.weekend_access is not None or property.truth_core.access_24_7 is not None, 0.05),
+        "min_rentable": (property.truth_core.min_rentable_sqft is not None, 0.04),
+        "min_term": (property.truth_core.min_term_months is not None, 0.04),
+        "parking": (property.parking_spaces is not None, 0.04),
+        "power": (property.power_supply is not None, 0.04),
+        "sprinkler": (property.sprinkler_system is not None, 0.04),
+    }
+    
+    # Tier 3 — Nice-to-Know (10%)
+    tier3_fields = {
+        "construction": (property.construction_type is not None, 0.015),
+        "zoning": (property.zoning is not None, 0.015),
+        "lot_size": (property.lot_size_acres is not None, 0.015),
+        "year_built": (property.year_built is not None, 0.015),
+        "building_sqft": (property.building_size_sqft is not None, 0.015),
+        "drive_in_bays": (property.drive_in_bays is not None, 0.015),
+    }
+    
+    for tier_name, fields in [("tier1", tier1_fields), ("tier2", tier2_fields), ("tier3", tier3_fields)]:
+        for field_name, (is_filled, weight) in fields.items():
+            if is_filled:
+                score += weight
+            else:
+                missing.append({"field": field_name, "tier": tier_name, "weight": weight})
+    
+    # Sort missing by weight descending — highest impact first
+    missing.sort(key=lambda x: x["weight"], reverse=True)
+    
+    return {
+        "score": round(score * 100),  # percentage
+        "missing": missing,
+        "top_action": missing[0] if missing else None,  # highest-weight missing field
+    }
+```
 
 ### 3.3 AI Suggestions — Property Specific
 
@@ -233,12 +340,13 @@ Same pattern as portfolio-level but specific to this property. Each suggestion h
 
 | Suggestion Type | Data Source | Example |
 |----------------|------------|---------|
-| Missing profile data | Profile completeness check | "Add photos to increase tour requests" → [Add Photos] |
+| Missing profile data (Tier 1) | Profile completeness — Tier 1 fields (see 3.2) | "Add photos to increase tour requests" → [Add Photos]. Always prioritize Tier 1 missing fields first. |
+| Missing profile data (Tier 2) | Profile completeness — Tier 2 fields (see 3.2) | "Specify weekend access hours — 3 buyers need it" → [Set Hours]. Only suggest when all Tier 1 fields are complete. |
 | Rate optimization | near_miss entries where reason = rate | "3 buyers this month matched everything except rate. Lowering $0.07 would match them." → [Adjust Rate] |
 | Feature demand | near_miss entries where reason = missing feature | "5 buyers need office space in your area. Do you have office available?" → [Yes, Add Office] / [No] |
 | Availability gap | near_miss where reason = timing | "2 buyers needed space this month but your earliest availability is too far out." → [Update Availability] |
-| Certification opportunity | Buyer search data for area + property goods compatibility | "Food storage buyers are active in Glen Burnie. If your facility is food-grade, add the certification." → [Add Certification] / [Not Applicable] |
-| Response time | supplier_response data | "Your average response time is 18 hours. Deals with <4 hour response close 3x more often." → [Enable SMS Notifications] |
+| Certification (demand-triggered) | Buyer search data for area + property goods compatibility | "Food storage buyers are active in Glen Burnie. Is your facility food-grade?" → [Yes, Add] / [No]. Only shown when real buyer demand exists for that certification in the supplier's area. NOT part of profile completeness. |
+| Response time | supplier_response data | "Your average response time is 18 hours. Engagements with <4 hour response close 3x more often." → [Enable SMS Notifications] |
 
 **Backend:** `GET /api/supplier/properties/{id}/suggestions` — queries near_miss, supplier_response, buyer search aggregates for this property's area and specs. Returns top 3 suggestions.
 
@@ -337,16 +445,15 @@ Operational configuration the supplier set during onboarding. All editable.
 | Operating Hours | Mon-Fri 7am-6pm | Day-by-day schedule editor |
 
 **Certifications sub-section:**
-| Certification | Status | Edit |
-|--------------|--------|------|
-| Food Grade | Not specified | [Yes] / [No] / [Not Sure] |
-| FDA Registered | Not specified | [Yes] / [No] |
-| Hazmat Certified | Not specified | [Yes] / [No] |
-| C-TPAT | Not specified | [Yes] / [No] |
-| Temperature Controlled | Not specified | [Yes] / [No] |
-| Foreign Trade Zone | Not specified | [Yes] / [No] |
 
-"Not specified" certifications contribute to profile incompleteness. Answering "No" is better than leaving blank — it prevents false matches and removes the suggestion prompt.
+Certifications are NOT shown as a default form to fill out. They appear here ONLY after the supplier has responded to an AI suggestion about a specific certification (e.g., "Is your facility food grade?" → supplier answered Yes or No). This prevents irrelevant certification questions from cluttering the page for suppliers they don't apply to.
+
+| Certification | Status | Source |
+|--------------|--------|--------|
+| Food Grade | Yes ✓ | Answered via suggestion Feb 15 |
+| Hazmat Certified | No | Answered via suggestion Feb 18 |
+
+If no certification questions have been triggered yet, this sub-section is hidden entirely. Certifications are NOT part of the profile completeness score — they are demand-triggered only (see Section 3.2).
 
 **Backend:** `PATCH /api/supplier/properties/{id}/config` — updates TruthCore fields.
 
@@ -363,17 +470,17 @@ When the supplier adjusts rate, show live update of projected revenue. Show mark
 
 **Backend:** `PATCH /api/supplier/properties/{id}/pricing`
 
-### 3.8 Deals Sub-section (within property detail)
+### 3.8 Engagements Sub-section (within property detail)
 
-List of all deals associated with this property.
+List of all engagements associated with this property.
 
-| Deal | Buyer Need | Sqft | Rate | Term | Status | Date |
-|------|-----------|------|------|------|--------|------|
+| Engagement | Buyer Need | Sqft | Rate | Term | Status | Date |
+|------------|-----------|------|------|------|--------|------|
 | #1234 | Storage, 5K sqft | 5,000 | $0.71 | 6 mo | Active | Jan 15, 2026 |
 | #1198 | Distribution, 10K | 10,000 | $0.71 | 12 mo | Tour Scheduled | Feb 20, 2026 |
 | #1102 | Storage, 8K | — | — | — | Declined by you | Dec 3, 2025 |
 
-Click row → goes to `/supplier/deals/[id]`
+Click row → goes to `/supplier/engagements/[id]`
 
 ### 3.9 Activity Log (within property detail)
 
@@ -389,30 +496,30 @@ Feb 10 — Joined WEx Network
 Feb 8  — EarnCheck completed
 ```
 
-This is a read-only timeline. Helps the supplier understand that the system is actively working on their behalf, even when deals aren't closing yet.
+This is a read-only timeline. Helps the supplier understand that the system is actively working on their behalf, even when engagements aren't closing yet.
 
-**Backend:** Assembled from multiple sources: ContextualMemory entries, Deal events, near_miss aggregates (daily summary), profile changes.
+**Backend:** Assembled from multiple sources: ContextualMemory entries, engagement events, near_miss aggregates (daily summary), profile changes.
 
 ---
 
-## 4. Deals Page (`/supplier/deals`)
+## 4. Engagements Page (`/supplier/engagements`)
 
-All deals across all properties. Tabbed by status.
+All engagements across all properties. Tabbed by status.
 
 ### 4.1 Tabs
 
 | Tab | What's Shown |
 |-----|-------------|
 | **Action Needed** | Deal pings awaiting response, tours to confirm, agreements to sign. Count badge on tab. |
-| **Active** | Deals with signed agreements, active leases. Currently earning revenue. |
-| **In Progress** | Accepted deals, scheduled tours, pending agreements. Moving toward close. |
-| **Past** | Completed leases, declined deals, expired pings. |
+| **Active** | Engagements with signed agreements, active leases. Currently earning revenue. |
+| **In Progress** | Accepted engagements, scheduled tours, pending agreements. Moving toward close. |
+| **Past** | Completed leases, declined engagements, expired pings. |
 
-### 4.2 Deal Card (list item)
+### 4.2 Engagement Card (list item)
 
 ```
 ┌───────────────────────────────────────────────────────┐
-│  Deal #1234                             IN PROGRESS   │
+│  Engagement #1234                       IN PROGRESS   │
 │                                                       │
 │  1221 Wilson Rd · 5,000 sqft · Storage                │
 │                                                       │
@@ -426,18 +533,18 @@ All deals across all properties. Tabbed by status.
 └───────────────────────────────────────────────────────┘
 ```
 
-### 4.3 Deal Detail (`/supplier/deals/[id]`)
+### 4.3 Engagement Detail (`/supplier/engagements/[id]`)
 
-Full timeline of the deal with all events and current state.
+Full timeline of the engagement with all events and current state.
 
-**Deal Summary** (top):
+**Engagement Summary** (top):
 - Property address, sqft, use type
 - Supplier rate, monthly payout, term, total
 - Current status with visual progress indicator
 
-**Deal Timeline** (main content):
+**Engagement Timeline** (main content):
 ```
-✓ Feb 20 — Deal matched: Buyer needs 5,000 sqft storage in Glen Burnie
+✓ Feb 20 — Matched: Buyer needs 5,000 sqft storage in Glen Burnie
 ✓ Feb 20 — You accepted (response time: 2 hours)
 ✓ Feb 21 — Buyer accepted match & signed WEx Guarantee
 ✓ Feb 22 — Tour scheduled: March 5, 10:00 AM
@@ -459,10 +566,10 @@ Full timeline of the deal with all events and current state.
 | Company: Hidden until tour | Company: Acme Distribution |
 | Contact: Via WEx only | Contact: Via WEx only |
 
-**Actions** (contextual based on deal status):
+**Actions** (contextual based on engagement status):
 - If tour pending confirmation: [Confirm Tour] / [Propose New Time]
 - If agreement pending: [Review & Sign Agreement]
-- If deal ping not yet responded: [Accept Deal] / [Decline] (with reason dropdown)
+- If deal ping not yet responded: [Accept] / [Decline] (with reason dropdown)
 
 ---
 
@@ -475,19 +582,19 @@ Simple ledger view. Answers: "Did I get paid?"
 ```
 TOTAL EARNED          THIS MONTH         NEXT DEPOSIT        PENDING
 $12,450.00            $4,260.00          $4,260.00           March 1, 2026
-                                         (3 active deals)
+                                         (3 active engagements)
 ```
 
 ### 5.2 Transaction History (table)
 
-| Date | Property | Deal | Type | Amount | Status |
-|------|----------|------|------|--------|--------|
+| Date | Property | Engagement | Type | Amount | Status |
+|------|----------|------------|------|--------|--------|
 | Feb 1, 2026 | 1221 Wilson Rd | #1234 | Monthly deposit | $3,550.00 | Deposited ✓ |
 | Feb 1, 2026 | 15001 S Figueroa | #1198 | Monthly deposit | $710.00 | Deposited ✓ |
 | Jan 1, 2026 | 1221 Wilson Rd | #1234 | Monthly deposit | $3,550.00 | Deposited ✓ |
 | Jan 1, 2026 | 15001 S Figueroa | #1198 | Monthly deposit | $710.00 | Deposited ✓ |
 
-**Filters:** Date range, property, deal
+**Filters:** Date range, property, engagement
 **Export:** [Download CSV] / [Download PDF Statement]
 
 ### 5.3 Phase 1 Note (no Stripe Connect yet)
@@ -540,7 +647,7 @@ Default all SMS and email ON. Supplier can disable but we should discourage disa
 
 **Roles:**
 - **Admin** — can edit properties, adjust rates, sign agreements, manage team, view payments
-- **Member** — can view properties and deals, confirm tours, respond to deal pings. Cannot change rates, sign agreements, or manage team.
+- **Member** — can view properties and engagements, confirm tours, respond to deal pings. Cannot change rates, sign agreements, or manage team.
 
 **Actions:**
 - [Invite Team Member] — enter email + role → sends invite email with signup link
@@ -626,8 +733,8 @@ SupplierResponse:
 - "Rate too low"
 - "Space not available at that time"
 - "Wrong use type for my facility"
-- "Deal term too short"
-- "Deal term too long"
+- "Term too short"
+- "Term too long"
 - "Sqft too small to be worth it"
 - "Already in discussions with another tenant"
 - "Other" (free text)
@@ -677,7 +784,10 @@ The suggestion engine reads from these three logs to generate recommendations. H
 | "Add office space" | `SELECT COUNT(*) FROM near_miss WHERE property_id = ? AND reasons @> '[{"field": "feature_missing", "detail": "%office%"}]' AND evaluated_at > now() - interval '30 days'` |
 | "Your response time is slow" | `SELECT AVG(response_time_hours) FROM supplier_response WHERE supplier_id = ? AND responded_at IS NOT NULL AND sent_at > now() - interval '30 days'` |
 | "Buyers skip your listing" | `SELECT COUNT(*) FROM buyer_engagement WHERE property_id = ? AND action_taken IN ('skipped', 'bounced') AND shown_at > now() - interval '30 days'` |
-| "Add photos" | Profile completeness check — no query needed, just check if photo count < 3 |
+| "Add photos" | Profile completeness Tier 1 check — photo count < 3. Highest-weight single field (15%). Always suggest first if missing. |
+| "Fill [Tier 1 field]" | Profile completeness Tier 1 check — `calculate_profile_completeness()` returns `top_action` with tier=tier1. Suggest in weight order. |
+| "Fill [Tier 2 field]" | Profile completeness Tier 2 check — only suggest when all Tier 1 fields are filled. |
+| "Is your facility [certification]?" | Only query when: `SELECT COUNT(*) FROM buyer_need WHERE location near property AND goods_type requires certification AND created_at > now() - interval '30 days'` returns > 0. Demand-triggered, not profile-triggered. |
 
 ---
 
@@ -711,13 +821,13 @@ The suggestion engine reads from these three logs to generate recommendations. H
 | GET | /api/upload/{property_id}/{token}/verify | Validate upload token |
 | POST | /api/upload/{property_id}/{token}/photos | Upload photos (multipart) |
 
-### Deals
+### Engagements
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /api/supplier/deals | List all deals (filterable by status) |
-| GET | /api/supplier/deals/{id} | Deal detail + timeline |
-| POST | /api/supplier/deals/{id}/respond | Accept or decline deal ping |
-| POST | /api/supplier/deals/{id}/tour/confirm | Confirm or propose new tour time |
+| GET | /api/supplier/engagements | List all engagements (filterable by status) |
+| GET | /api/supplier/engagements/{id} | Engagement detail + timeline |
+| POST | /api/supplier/engagements/{id}/respond | Accept or decline deal ping |
+| POST | /api/supplier/engagements/{id}/tour/confirm | Confirm or propose new tour time |
 
 ### Payments
 | Method | Path | Description |

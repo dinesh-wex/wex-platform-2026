@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +38,8 @@ class UserResponse(BaseModel):
     name: str
     role: str
     company: str | None = None
+    company_id: str | None = None
+    company_role: str | None = None
     phone: str | None = None
     is_active: bool
     email_verified: bool
@@ -485,3 +487,21 @@ class AgentLogResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# LLM Layer 2 — Feature Evaluation
+# ---------------------------------------------------------------------------
+
+
+class FeatureEvalMatch(BaseModel):
+    """Single warehouse feature evaluation from LLM Layer 2."""
+    warehouse_id: str
+    feature_score: int = Field(ge=0, le=100, description="Feature alignment score 0-100")
+    instant_book_eligible: bool
+    reasoning: str = Field(max_length=500, description="2-3 sentence buyer-facing explanation")
+
+
+class FeatureEvalResponse(BaseModel):
+    """LLM Layer 2 response — feature evaluation + reasoning for all candidates."""
+    matches: list[FeatureEvalMatch]

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { AnimatePresence } from "framer-motion";
 import Phase1Hook from "@/components/activation/Phase1Hook";
@@ -23,9 +24,27 @@ import {
 import { copy } from "@/config/flowCopy";
 import { api } from "@/lib/api";
 
-export default function SupplierActivationWizard() {
+export default function SupplierActivationWizardPage() {
+  return (
+    <Suspense>
+      <SupplierActivationWizard />
+    </Suspense>
+  );
+}
+
+function SupplierActivationWizard() {
+  const searchParams = useSearchParams();
   const [step, setStepRaw] = useState<Phase>(1);
-  const [entryIntent, setEntryIntent] = useState<'earncheck' | 'onboard' | 'returning'>('earncheck');
+
+  // Determine entry intent from URL params — read synchronously to avoid race
+  const intentParam = searchParams.get("intent");
+  const onboardParam = searchParams.get("onboard");
+  const returningParam = searchParams.get("returning");
+  const [entryIntent] = useState<'earncheck' | 'onboard' | 'returning'>(
+    returningParam === "true" ? 'returning'
+      : (intentParam === "onboard" || onboardParam === "true") ? 'onboard'
+      : 'earncheck'
+  );
 
   // Scroll to top on every phase transition (fixes mobile scroll position)
   const setStep = (next: Phase) => {
@@ -33,16 +52,9 @@ export default function SupplierActivationWizard() {
     window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
-  // Track page view on mount + detect entry intent
+  // Track page view on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-
-    // Detect entry intent
-    if (params.get("returning") === "true") {
-      setEntryIntent('returning');
-    } else if (params.get("intent") === "onboard" || params.get("onboard") === "true") {
-      setEntryIntent('onboard');
-    }
 
     // Detect test mode from ?test=1 and persist in sessionStorage
     if (params.get("test") === "1") {

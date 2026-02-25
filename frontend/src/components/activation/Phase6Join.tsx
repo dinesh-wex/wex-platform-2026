@@ -16,6 +16,7 @@ import {
 import { api, signup as apiSignup } from '@/lib/api';
 import { setToken } from '@/lib/auth';
 import { trackEvent } from '@/lib/analytics';
+import { useSupplier } from '@/components/supplier/SupplierAuthProvider';
 
 interface Phase6JoinProps {
   truthCore: TruthCore;
@@ -68,6 +69,7 @@ function isValidEmail(email: string): boolean {
 export default function Phase6Join(props: Phase6JoinProps) {
   const { truthCore, buildingData, setMemories } = props;
   const router = useRouter();
+  const { login } = useSupplier();
   const [isActive, setIsActive] = useState(false);
   const [activating, setActivating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +118,7 @@ export default function Phase6Join(props: Phase6JoinProps) {
     setActivating(true);
     setError(null);
 
-    // 1. Try to create account on backend
+    // 1. Try to create account on backend, then log in via auth context
     let signupSucceeded = false;
     try {
       const fullName = `${firstName.trim()} ${lastName.trim()}`;
@@ -124,11 +126,24 @@ export default function Phase6Join(props: Phase6JoinProps) {
       if (result?.access_token) {
         setToken(result.access_token);
         signupSucceeded = true;
+        // Log in through auth provider so context state is updated
+        try {
+          await login(email, password);
+        } catch {
+          // Token already set — auth provider will pick it up on next mount
+        }
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : '';
-      // If email already registered, continue with localStorage-only mode
-      if (!message.includes('already registered')) {
+      // If email already registered, try logging in with the password
+      if (message.includes('already registered')) {
+        try {
+          await login(email, password);
+          signupSucceeded = true;
+        } catch {
+          console.warn('Login after duplicate signup failed');
+        }
+      } else {
         console.warn('Signup failed, continuing with local mode:', message);
       }
     }
@@ -156,9 +171,15 @@ export default function Phase6Join(props: Phase6JoinProps) {
     };
 
     // 3. Try to activate warehouse on backend
+    // If signup/login succeeded, use authenticated call (assigns to new user's company).
+    // If it failed, use anonymous call to avoid leaking a previous user's session.
     try {
       if (buildingData?.id) {
-        await api.activateWarehouse(buildingData.id, payload);
+        if (signupSucceeded) {
+          await api.activateWarehouse(buildingData.id, payload);
+        } else {
+          await api.activateWarehouseAnon(buildingData.id, payload);
+        }
       }
     } catch {
       // Backend unavailable — continue with localStorage
@@ -473,13 +494,15 @@ export default function Phase6Join(props: Phase6JoinProps) {
                 </div>
 
                 {/* Agreement Checkbox */}
-                <label className="flex items-start gap-3 cursor-pointer mb-5 group">
-                  <input
-                    type="checkbox"
-                    checked={agreementAccepted}
-                    onChange={(e) => setAgreementAccepted(e.target.checked)}
-                    className="mt-0.5 w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                  />
+                <label className="flex items-start gap-3 cursor-pointer mb-5 group select-none">
+                  <div className="shrink-0 mt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={agreementAccepted}
+                      onChange={(e) => setAgreementAccepted(e.target.checked)}
+                      className="w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                    />
+                  </div>
                   <span className="text-slate-600 text-xs leading-relaxed group-hover:text-slate-800 transition-colors">
                     I agree to the WEx Network Agreement and authorize Warehouse Exchange
                     to list my property and facilitate tenant placements on my behalf.
@@ -491,23 +514,29 @@ export default function Phase6Join(props: Phase6JoinProps) {
                   <p className="text-red-500 text-xs text-center mb-3">{error}</p>
                 )}
 
+                {/* Validation hint — show what's missing */}
+                {!formValid && (email || firstName || password) && (
+                  <p className="text-slate-400 text-xs text-center mb-3">
+                    {!nameValid && 'First and last name required. '}
+                    {!emailValid && 'Valid email required. '}
+                    {!passwordValid && 'Password must be 8+ characters. '}
+                    {!agreementAccepted && 'Please accept the agreement.'}
+                  </p>
+                )}
+
                 {/* CTA Button */}
-                <motion.button
+                <button
                   onClick={handleJoin}
                   disabled={!formValid || activating}
-                  animate={{
-                    backgroundColor: formValid ? '#059669' : '#94a3b8',
-                    boxShadow: formValid
-                      ? '0 10px 30px -10px rgba(16, 185, 129, 0.5)'
-                      : '0 0 0 0 transparent',
-                  }}
-                  transition={{ duration: 0.3 }}
-                  className="w-full text-white text-lg font-bold py-4 rounded-xl transition-all flex justify-center items-center gap-2 disabled:cursor-not-allowed"
-                  style={{ opacity: formValid ? 1 : 0.5 }}
+                  className={`w-full text-white text-lg font-bold py-4 rounded-xl transition-all flex justify-center items-center gap-2 ${
+                    formValid
+                      ? 'bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-600/25 cursor-pointer'
+                      : 'bg-slate-400 cursor-not-allowed opacity-50'
+                  }`}
                 >
                   <ShieldCheck size={20} />
                   {activating ? 'Activating...' : 'Join the WEx Network'}
-                </motion.button>
+                </button>
 
                 <p className="text-xs text-slate-400 mt-4 max-w-xs mx-auto text-center">
                   By clicking, you accept the WEx Capacity Agreement and grant programmatic matching rights.

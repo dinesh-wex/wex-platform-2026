@@ -40,6 +40,7 @@ dependencies = [
 
     # Auth
     "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.0,<5.0",  # bcrypt 5.x breaks passlib compatibility
     "python-jose[cryptography]>=3.3.0",
 
     # External services

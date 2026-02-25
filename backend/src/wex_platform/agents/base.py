@@ -10,6 +10,7 @@ Compliance, Orchestrator) inherits from BaseAgent, which provides:
 - Multi-turn chat support
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -118,6 +119,7 @@ class BaseAgent:
         prompt: str,
         system_instruction: Optional[str] = None,
         json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> AgentResult:
         """Generate a single-turn response from Gemini.
 
@@ -138,10 +140,14 @@ class BaseAgent:
                 model_name=self.model_name,
                 temperature=self.temperature,
                 json_mode=json_mode,
+                response_schema=response_schema,
                 system_instruction=system_instruction,
             )
 
-            response = await model.generate_content_async(prompt)
+            response = await asyncio.wait_for(
+                model.generate_content_async(prompt),
+                timeout=120,  # 2 min hard limit — prevents indefinite hangs
+            )
             latency_ms = int((time.time() - start_time) * 1000)
 
             # Extract token usage from response metadata
@@ -197,6 +203,7 @@ class BaseAgent:
         self,
         prompt: str,
         system_instruction: Optional[str] = None,
+        response_schema: dict | None = None,
     ) -> AgentResult:
         """Generate a response and parse it as JSON.
 
@@ -216,6 +223,7 @@ class BaseAgent:
             prompt=prompt,
             system_instruction=system_instruction,
             json_mode=True,
+            response_schema=response_schema,
         )
 
         if not result.ok:

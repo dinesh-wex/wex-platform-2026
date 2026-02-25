@@ -9,6 +9,33 @@ from wex_platform.agents.prompts.clearing import CLEARING_SYSTEM_PROMPT, CLEARIN
 
 logger = logging.getLogger(__name__)
 
+FEATURE_EVAL_SYSTEM_PROMPT = """You evaluate warehouse-buyer FEATURE alignment and generate match reasoning.
+
+The composite match score has ALREADY been calculated deterministically. Your ONLY jobs:
+1. Score FEATURE alignment (0-100) based on buyer's specific requirements vs warehouse specs
+2. Write a 2-3 sentence buyer-facing "Why This Space" explanation
+3. Determine instant_book_eligible (true/false)
+
+DO NOT recalculate location, size, use_type, timing, or budget scores.
+
+REASONING RULES (shown directly to the buyer):
+- Write like a top commercial RE broker. Confident, specific, no fluff.
+- ONLY reference features the buyer explicitly asked for
+- Lead with the #1 match reason
+- 2-3 SHORT sentences max. Use digits for numbers. Use "SF" not "sqft".
+- Never mention: trust levels, scoring internals, system metadata
+"""
+
+FEATURE_EVAL_PROMPT = """Evaluate feature alignment for these warehouses against the buyer's requirements:
+
+BUYER USE TYPE: {use_type}
+BUYER REQUIREMENTS: {requirements}
+
+WAREHOUSES ({warehouse_count} candidates):
+{warehouse_details}
+
+Score each warehouse's FEATURE alignment (0-100) and write buyer-facing reasoning."""
+
 
 class ClearingAgent(BaseAgent):
     """Matches buyer needs against active warehouse supply.
@@ -105,3 +132,68 @@ class ClearingAgent(BaseAgent):
         )
 
         return result
+
+    async def evaluate_features(
+        self,
+        buyer_need: dict,
+        warehouses: list[dict],
+        deterministic_scores: dict[str, dict],
+    ) -> AgentResult:
+        """Layer 2: LLM evaluates feature alignment and generates reasoning.
+
+        Only evaluates features (15% weight) and generates buyer-facing reasoning.
+        All other scoring dimensions are computed deterministically in match_scorer.py.
+        """
+        from wex_platform.domain.schemas import FeatureEvalResponse
+
+        FEATURE_EVAL_SCHEMA = FeatureEvalResponse.model_json_schema()
+
+        # Build compact prompt with just what LLM needs
+        warehouse_details = []
+        for wh in warehouses:
+            tc = wh.get("truth_core", {})
+            wh_scores = deterministic_scores.get(wh["id"], {})
+            detail = (
+                f"Warehouse {wh['id']}:\n"
+                f"  City: {wh.get('city', '?')}, State: {wh.get('state', '?')}\n"
+                f"  Available: {tc.get('min_sqft', 0):,} - {tc.get('max_sqft', 0):,} sqft\n"
+                f"  Activity Tier: {tc.get('activity_tier', '?')}\n"
+                f"  Clear Height: {tc.get('clear_height_ft', '?')} ft\n"
+                f"  Dock Doors: {tc.get('dock_doors_receiving', 0)} receiving, "
+                f"{tc.get('dock_doors_shipping', 0)} shipping, {tc.get('drive_in_bays', 0)} drive-in\n"
+                f"  Office: {tc.get('has_office_space', False)}, Sprinkler: {tc.get('has_sprinkler', False)}\n"
+                f"  Parking: {tc.get('parking_spaces', 0)}, Power: {tc.get('power_supply', 'N/A')}\n"
+                f"  Constraints: {json.dumps(tc.get('constraints', {}))}\n"
+                f"  Pre-computed scores: location={wh_scores.get('location_score', '?')}, "
+                f"size={wh_scores.get('size_score', '?')}, budget={wh_scores.get('budget_score', '?')}\n"
+                f"  Distance: {wh_scores.get('distance_miles', '?')} miles"
+            )
+            warehouse_details.append(detail)
+
+        prompt = FEATURE_EVAL_PROMPT.format(
+            use_type=buyer_need.get("use_type", "general storage"),
+            requirements=json.dumps(buyer_need.get("requirements", {})),
+            warehouse_count=len(warehouses),
+            warehouse_details="\n\n".join(warehouse_details),
+        )
+
+        result = await self.generate_json(
+            prompt=prompt,
+            system_instruction=FEATURE_EVAL_SYSTEM_PROMPT,
+            response_schema=FEATURE_EVAL_SCHEMA,
+        )
+
+        if not result.ok:
+            return result
+
+        # Pydantic validation as defense-in-depth
+        try:
+            validated = FeatureEvalResponse.model_validate(result.data)
+            return AgentResult.success(
+                data=[m.model_dump() for m in validated.matches],
+                tokens_used=result.tokens_used,
+                latency_ms=result.latency_ms,
+            )
+        except Exception as exc:
+            logger.warning("Pydantic validation failed: %s", exc)
+            return AgentResult.failure(f"Validation error: {exc}")

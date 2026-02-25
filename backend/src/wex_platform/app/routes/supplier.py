@@ -20,6 +20,8 @@ from sqlalchemy.orm import selectinload
 
 from wex_platform.infra.database import get_db
 from wex_platform.domain.models import (
+    User,
+    Company,
     Warehouse,
     TruthCore,
     ContextualMemory,
@@ -33,6 +35,23 @@ from wex_platform.domain.models import (
 )
 from wex_platform.domain.schemas import TruthCoreCreate, TruthCoreResponse
 from wex_platform.services.pricing_engine import calculate_default_buyer_rate
+from wex_platform.services.auth_service import create_access_token, decode_token
+import hashlib
+
+
+async def get_optional_user(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> Optional["User"]:
+    """Optional auth: returns User if valid Bearer token present, else None."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.removeprefix("Bearer ")
+    payload = decode_token(token)
+    if not payload or "sub" not in payload:
+        return None
+    result = await db.execute(select(User).where(User.id == payload["sub"]))
+    return result.scalar_one_or_none()
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/supplier", tags=["supplier"])
@@ -197,6 +216,8 @@ class WarehouseListItem(BaseModel):
     primary_image_url: Optional[str] = None
     activation_status: Optional[str] = None
     supplier_rate_per_sqft: Optional[float] = None
+    supplier_status: Optional[str] = None
+    status: Optional[str] = None  # frontend-friendly alias
     memory_count: int = 0
     created_at: Optional[datetime] = None
 
@@ -323,75 +344,87 @@ async def supplier_login(
     body: SupplierLoginRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Log in a supplier by email and return their warehouses.
+    """Demo supplier login by email — creates user if needed, assigns unowned warehouses.
 
-    Looks up warehouses where owner_email matches and returns the supplier's
-    identity info along with their warehouse list.
+    Returns JWT token + supplier profile for the dashboard auth flow.
     """
-    result = await db.execute(
+    email = body.email.strip().lower()
+
+    # 1. Find or create User record
+    result = await db.execute(select(User).where(func.lower(User.email) == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        # Auto-create supplier user for demo login (no password required for demo)
+        name = email.split("@")[0].replace(".", " ").replace("-", " ").title()
+        company = email.split("@")[1].split(".")[0].replace("-", " ").title() if "@" in email else None
+        user = User(
+            id=str(uuid.uuid4()),
+            email=email,
+            password_hash="demo_" + hashlib.sha256(email.encode()).hexdigest()[:40],
+            name=name,
+            role="supplier",
+            company=company,
+            is_active=True,
+            email_verified=True,
+        )
+        db.add(user)
+        await db.flush()
+
+        # Auto-create a Company record for the new user
+        company_record = Company(name=user.name, type="individual")
+        db.add(company_record)
+        await db.flush()
+
+        user.company_id = company_record.id
+        user.company_role = "admin"
+
+    user.last_login_at = datetime.now(timezone.utc)
+
+    # 2. Find warehouses owned by this user's company
+    # Correct access control query: WHERE company_id = user.company_id
+    wh_result = await db.execute(
         select(Warehouse)
-        .where(func.lower(Warehouse.owner_email) == func.lower(body.email))
-        .options(
-            selectinload(Warehouse.truth_core),
-            selectinload(Warehouse.memories),
-        )
+        .where(Warehouse.company_id == user.company_id)
+        .options(selectinload(Warehouse.truth_core), selectinload(Warehouse.memories))
     )
-    warehouses = result.scalars().all()
+    warehouses = list(wh_result.scalars().all())
 
-    if not warehouses:
-        raise HTTPException(
-            status_code=404,
-            detail="No warehouses found for this email address",
-        )
+    await db.commit()
 
-    # Take owner info from the first warehouse
-    first = warehouses[0]
+    # 4. Issue JWT token
+    token = create_access_token(user.id, user.role)
 
-    warehouse_list = []
-    for wh in warehouses:
-        activation = None
-        rate = None
-        if wh.truth_core:
-            activation = wh.truth_core.activation_status
-            rate = wh.truth_core.supplier_rate_per_sqft
-
-        warehouse_list.append(
-            WarehouseListItem(
-                id=wh.id,
-                owner_name=wh.owner_name,
-                address=wh.address,
-                city=wh.city,
-                state=wh.state,
-                zip=wh.zip,
-                building_size_sqft=wh.building_size_sqft,
-                year_built=wh.year_built,
-                construction_type=wh.construction_type,
-                primary_image_url=wh.primary_image_url,
-                activation_status=activation,
-                supplier_rate_per_sqft=rate,
-                memory_count=len(wh.memories) if wh.memories else 0,
-                created_at=wh.created_at,
-            ).model_dump()
-        )
-
+    # 5. Return in the format the frontend expects: { token, supplier }
     return {
-        "owner_name": first.owner_name,
-        "owner_email": first.owner_email,
-        "owner_phone": first.owner_phone,
-        "warehouses": warehouse_list,
+        "token": token,
+        "supplier": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "company": user.company,
+            "company_id": user.company_id,
+            "company_role": user.company_role,
+            "phone": user.phone,
+            "role": user.role,
+        },
     }
 
 
 @router.get("/warehouses", response_model=list[WarehouseListItem])
 async def list_warehouses(
+    request: Request,
     status: Optional[str] = Query(None, description="Filter by activation status: on|off"),
-    owner_email: Optional[str] = Query(None, description="Filter warehouses by owner email"),
+    company_id: Optional[str] = Query(None, description="Filter warehouses by company_id (preferred)"),
+    owner_email: Optional[str] = Query(None, description="Filter warehouses by owner email (deprecated, use company_id)"),
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
     """Return all warehouses with truth-core summaries.
 
     ISOLATION: Only supplier_rate is visible. No buyer pricing data is exposed.
-    When owner_email is provided, only warehouses belonging to that supplier are returned.
+    When company_id is provided, only warehouses belonging to that company are returned.
+    Falls back to owner_email filter for backward compatibility.
     """
     query = (
         select(Warehouse)
@@ -401,8 +434,25 @@ async def list_warehouses(
         )
     )
 
-    if owner_email is not None:
+    if company_id is not None:
+        # Preferred: explicit company_id filter
+        query = query.where(Warehouse.company_id == company_id)
+    elif owner_email is not None:
+        # Deprecated fallback: filter by owner_email for backward compat
+        logging.getLogger(__name__).warning(
+            "[deprecation] owner_email param used in warehouse query — migrate to company_id (email=%s)",
+            owner_email,
+        )
         query = query.where(func.lower(Warehouse.owner_email) == func.lower(owner_email))
+    elif current_user and current_user.company_id:
+        # Auth-based default: show only the authenticated user's company warehouses
+        query = query.where(Warehouse.company_id == current_user.company_id)
+    else:
+        # No filter and no auth — return empty for safety
+        logging.getLogger(__name__).warning(
+            "[access] list_warehouses called with no filter and no auth — returning empty"
+        )
+        return []
 
     result = await db.execute(query)
     warehouses = result.scalars().all()
@@ -420,6 +470,17 @@ async def list_warehouses(
             if activation != status:
                 continue
 
+        # Map activation_status / supplier_status to frontend-friendly status
+        # Must mirror _derive_frontend_status from supplier_dashboard.py
+        if activation == "on":
+            frontend_status = "in_network"
+        elif activation == "off":
+            frontend_status = "in_network_paused"
+        elif wh.supplier_status in ("onboarding", "third_party"):
+            frontend_status = "onboarding"
+        else:
+            frontend_status = wh.supplier_status or "onboarding"
+
         items.append(
             WarehouseListItem(
                 id=wh.id,
@@ -434,6 +495,8 @@ async def list_warehouses(
                 primary_image_url=wh.primary_image_url,
                 activation_status=activation,
                 supplier_rate_per_sqft=rate,
+                supplier_status=wh.supplier_status,
+                status=frontend_status,
                 memory_count=len(wh.memories) if wh.memories else 0,
                 created_at=wh.created_at,
             )
@@ -843,11 +906,14 @@ async def get_warehouse(
 async def activate_warehouse(
     warehouse_id: str,
     body: TruthCoreCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
     """Create or update a TruthCore to activate a warehouse listing.
 
     Creates a ToggleHistory record and a SupplierAgreement.
+    If authenticated, assigns the warehouse to the current user.
     """
     # Verify warehouse exists
     wh_result = await db.execute(
@@ -856,6 +922,22 @@ async def activate_warehouse(
     warehouse = wh_result.scalar_one_or_none()
     if not warehouse:
         raise HTTPException(status_code=404, detail="Warehouse not found")
+
+    # Assign warehouse to authenticated user's company
+    # created_by is AUDIT ONLY. Never use for access control.
+    # Correct access control query: WHERE company_id = user.company_id
+    if current_user and not warehouse.company_id:
+        warehouse.company_id = current_user.company_id
+        warehouse.created_by = current_user.id
+        # Also set contact fields for display purposes
+        warehouse.owner_email = current_user.email
+        warehouse.owner_name = current_user.name
+        warehouse.owner_phone = current_user.phone
+    elif not current_user and not warehouse.company_id:
+        logging.getLogger(__name__).warning(
+            "[ownership] activate_warehouse called without auth — warehouse %s will be orphaned (no company_id)",
+            warehouse_id,
+        )
 
     # Mark warehouse as in-network so clearing engine includes it in Tier 1
     if warehouse.supplier_status != "in_network":
@@ -1027,6 +1109,14 @@ async def toggle_activation(
     if body.status not in ("on", "off"):
         raise HTTPException(status_code=400, detail="Status must be 'on' or 'off'")
 
+    # Load warehouse so we can update supplier_status too
+    wh_result = await db.execute(
+        select(Warehouse).where(Warehouse.id == warehouse_id)
+    )
+    warehouse = wh_result.scalar_one_or_none()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail="Warehouse not found")
+
     tc_result = await db.execute(
         select(TruthCore).where(TruthCore.warehouse_id == warehouse_id)
     )
@@ -1057,6 +1147,9 @@ async def toggle_activation(
     if body.status == "off":
         grace_until = now + timedelta(hours=48)
         truth_core.toggle_reason = body.reason
+        warehouse.supplier_status = "in_network_paused"
+    else:
+        warehouse.supplier_status = "in_network"
 
     # Update truth core
     truth_core.activation_status = body.status
@@ -1073,6 +1166,8 @@ async def toggle_activation(
         grace_period_until=grace_until,
     )
     db.add(toggle)
+
+    await db.commit()
 
     return {
         "warehouse_id": warehouse_id,
@@ -1685,7 +1780,7 @@ async def onboard_supplier(
     )
     db.add(toggle)
 
-    await db.flush()
+    await db.commit()
 
     return {
         "ok": True,
@@ -1804,13 +1899,14 @@ async def confirm_tour(
 
 @router.get("/tours")
 async def get_upcoming_tours(
-    owner_email: Optional[str] = Query(None, description="Filter by supplier email"),
+    company_id: Optional[str] = Query(None, description="Filter by supplier company_id (preferred)"),
+    owner_email: Optional[str] = Query(None, description="Filter by supplier email (deprecated, use company_id)"),
     db: AsyncSession = Depends(get_db),
 ):
     """List upcoming tours for a supplier's warehouses.
 
     Returns deals with tour_status in ('requested', 'confirmed', 'rescheduled')
-    for warehouses owned by the given email.
+    for warehouses owned by the given company.
     """
     query = (
         select(Deal)
@@ -1819,7 +1915,12 @@ async def get_upcoming_tours(
         .order_by(Deal.tour_scheduled_at.asc())
     )
 
-    if owner_email:
+    if company_id:
+        query = query.join(Warehouse).where(
+            Warehouse.company_id == company_id
+        )
+    elif owner_email:
+        # Deprecated fallback for backward compatibility
         query = query.join(Warehouse).where(
             func.lower(Warehouse.owner_email) == func.lower(owner_email)
         )

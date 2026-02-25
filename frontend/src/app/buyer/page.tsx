@@ -318,7 +318,7 @@ function AgentFlow({
                   <input
                     autoFocus
                     type="text"
-                    placeholder="I need space in Phoenix..."
+                    placeholder="City, zip code, or neighborhood..."
                     className="w-full bg-transparent text-xl md:text-2xl text-slate-900 placeholder:text-slate-400 px-6 py-4 outline-none font-medium"
                     value={intent.location}
                     onChange={(e) => setIntent({ ...intent, location: e.target.value })}

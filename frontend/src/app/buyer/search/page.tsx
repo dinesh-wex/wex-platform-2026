@@ -129,7 +129,7 @@ function BuyerSearchChatContent() {
   /* ---------------------------------------------------------------- */
   /*  Demo Simulation                                                  */
   /* ---------------------------------------------------------------- */
-  function simulateDemoResponse(userText: string) {
+  async function simulateDemoResponse(userText: string) {
     const lower = userText.toLowerCase();
     let agentMsg = "";
 
@@ -138,6 +138,43 @@ function BuyerSearchChatContent() {
     if (currentStep === 1) {
       const location = userText.length > 3 ? userText : "Dallas, TX";
       updateSummaryField("location", location);
+
+      // After step 1 location capture, try NLP extraction
+      try {
+        const extraction = await api.extractIntent({ text: userText });
+        const fields = extraction?.fields || {};
+
+        // Pre-fill whatever was extracted
+        if (fields.size_sqft) {
+          demoBuyerSqftRef.current = fields.size_sqft;
+          updateSummaryField("size_sqft", `${Number(fields.size_sqft).toLocaleString()} sqft`);
+        }
+        if (fields.use_type) {
+          updateSummaryField("use_type", fields.use_type.replace(/_/g, ' '));
+        }
+        if (fields.timing) {
+          updateSummaryField("timing", fields.timing);
+        }
+        if (fields.budget_per_sqft) {
+          updateSummaryField("budget", `$${fields.budget_per_sqft}/sqft`);
+        } else if (fields.budget_monthly) {
+          updateSummaryField("budget", `~$${Number(fields.budget_monthly).toLocaleString()}/mo`);
+        }
+        if (fields.requirements && fields.requirements.length > 0) {
+          updateSummaryField("requirements", fields.requirements.join(", "));
+        }
+
+        // Count pre-filled fields to decide agent message
+        const prefilledCount = Object.keys(fields).filter(k => !['location', 'lat', 'lng', 'city', 'state'].includes(k)).length;
+        if (prefilledCount >= 2) {
+          // Modify the agent response to acknowledge extraction
+          // The agent message should mention the pre-filled fields
+        }
+      } catch (e) {
+        // Extraction failed — continue step-by-step (no impact on flow)
+        console.log("Intent extraction failed, continuing step-by-step", e);
+      }
+
       setCurrentStep(2);
       agentMsg =
         "Great choice! How much warehouse space do you need? Give me an approximate square footage, or describe your operation and I'll help estimate.";

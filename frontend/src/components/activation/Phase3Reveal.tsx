@@ -43,7 +43,7 @@ export default function Phase3Reveal({
   const rates = getRegionalRates(buildingData?.state);
   const [prevRevenue, setPrevRevenue] = useState(0);
   const totalSqft = buildingData?.building_size_sqft || 80000;
-  const defaultSqft = Math.max(30000, Math.round(totalSqft * 0.1));
+  const defaultSqft = Math.min(totalSqft, Math.max(2000, Math.round(totalSqft * 0.4)));
   const [hasMovedSlider, setHasMovedSlider] = useState(false);
   const [showEarncheckInfo, setShowEarncheckInfo] = useState(false);
 

@@ -33,16 +33,37 @@ router = APIRouter(prefix="/api/search", tags=["search"])
 SESSION_EXPIRY_HOURS = 48
 
 
-def _parse_location(req: SearchRequest) -> tuple[str | None, str | None]:
-    """Extract city/state from the location string or explicit fields."""
+async def _parse_location(req: SearchRequest) -> tuple[str | None, str | None, float | None, float | None]:
+    """Extract city/state/lat/lng from location input using geocoding.
+
+    Accepts: "Phoenix, AZ", "85281", "downtown LA", "123 Main St, Dallas, TX"
+    Returns: (city, state, lat, lng)
+    """
     if req.city and req.state:
-        return req.city.strip(), req.state.strip().upper()
+        city, state = req.city.strip(), req.state.strip().upper()[:2]
+        # Still geocode for coordinates
+        try:
+            from wex_platform.services.geocoding_service import geocode_location
+            geo = await geocode_location(f"{city}, {state}")
+            return city, state, geo.lat if geo else None, geo.lng if geo else None
+        except Exception:
+            return city, state, None, None
+
     if req.location:
+        try:
+            from wex_platform.services.geocoding_service import geocode_location
+            geo = await geocode_location(req.location)
+            if geo:
+                return geo.city, geo.state, geo.lat, geo.lng
+        except Exception:
+            pass
+        # Fallback: comma-split
         parts = [p.strip() for p in req.location.split(",")]
         if len(parts) >= 2:
-            return parts[0], parts[-1].strip().upper()[:2]
-        return parts[0], None
-    return None, None
+            return parts[0], parts[-1].strip().upper()[:2], None, None
+        return parts[0], None, None, None
+
+    return None, None, None, None
 
 
 def _parse_sqft(req: SearchRequest) -> tuple[int | None, int | None]:
@@ -64,7 +85,7 @@ async def anonymous_search(
     Creates a temporary BuyerNeed (buyer_id=NULL), runs clearing, caches
     results in a SearchSession, and returns a session token.
     """
-    city, state = _parse_location(req)
+    city, state, lat, lng = await _parse_location(req)
     min_sqft, max_sqft = _parse_sqft(req)
 
     # 1. Create an anonymous BuyerNeed (no buyer_id)
@@ -74,6 +95,8 @@ async def anonymous_search(
         buyer_id=None,  # Anonymous — no account required
         city=city,
         state=state,
+        lat=lat,
+        lng=lng,
         min_sqft=min_sqft,
         max_sqft=max_sqft,
         use_type=req.use_type,
@@ -115,7 +138,7 @@ async def anonymous_search(
             "match_id": m.get("match_id"),
             "warehouse_id": m.get("warehouse_id"),
             "confidence": round(m.get("match_score", 0)),
-            "neighborhood": f"{wh.get('city', '')}, {wh.get('state', '')}",
+            "neighborhood": wh.get("neighborhood") or f"{wh.get('city', '')}, {wh.get('state', '')}",
             "primary_image_url": wh.get("primary_image_url"),
             "address": wh.get("address", ""),
             "description": wh.get("description", ""),
@@ -270,3 +293,33 @@ async def promote_session(
         "session_token": session_record.token,
         "message": "Session promoted to buyer need",
     }
+
+
+@router.post("/extract")
+async def extract_intent(req: dict):
+    """NLP extraction from freeform buyer input for smart pre-fill."""
+    text = req.get("text", "")
+    if not text.strip():
+        return {"fields": {}, "confidence": 0}
+
+    from wex_platform.services.intake_extractor import IntakeExtractor
+    extractor = IntakeExtractor()
+    result = await extractor.extract(text)
+
+    fields = result.data if result.ok else {}
+
+    # Geocode extracted location if present
+    if fields.get("location"):
+        try:
+            from wex_platform.services.geocoding_service import geocode_location
+            geo = await geocode_location(fields["location"])
+            if geo:
+                fields["lat"] = geo.lat
+                fields["lng"] = geo.lng
+                fields["city"] = geo.city
+                fields["state"] = geo.state
+        except Exception:
+            pass
+
+    confidence = min(0.95, len(fields) * 0.15) if fields else 0
+    return {"fields": fields, "confidence": round(confidence, 2)}
