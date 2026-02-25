@@ -140,11 +140,20 @@ export default function Phase3Reveal({
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
-              className="text-xl font-bold text-slate-900 leading-tight mb-1"
+              className="text-xl font-bold text-slate-900 leading-tight mb-0.5"
             >
               {truthCore.address || buildingData?.address || '123 Industrial Blvd'}
             </motion.h2>
-            <div className="mb-6" />
+            {/* City/Neighborhood + Zip — conditional formatting */}
+            {(buildingData?.city || buildingData?.neighborhood || buildingData?.zip) && (
+              <p className="text-sm text-slate-400 mb-5">
+                {buildingData?.neighborhood
+                  ? `${buildingData.neighborhood} · ${buildingData.city || ''}${buildingData.state ? `, ${buildingData.state}` : ''} ${buildingData.zip || ''}`
+                  : `${buildingData.city || ''}${buildingData.state ? `, ${buildingData.state}` : ''} ${buildingData.zip || ''}`
+                }
+              </p>
+            )}
+            {!(buildingData?.city || buildingData?.neighborhood || buildingData?.zip) && <div className="mb-6" />}
 
             {/* The Money */}
             {copy.phase3.eyebrow && (

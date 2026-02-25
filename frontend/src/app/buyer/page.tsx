@@ -280,6 +280,25 @@ function AgentFlow({
   // Get goods options filtered by selected use type
   const availableGoods = GOODS_TYPE_OPTIONS[intent.useType] || GOODS_TYPE_OPTIONS.storage;
 
+  // Step labels and summaries for progress stepper
+  const STEP_LABELS = ["Location", "Use Type", "Goods", "Size", "Timeline", "Must-Haves", "Review"];
+  function stepSummary(stepIdx: number): string {
+    switch (stepIdx) {
+      case 0: return intent.location || "Location";
+      case 1: return USE_TYPE_LABELS[intent.useType] || intent.useType || "Use Type";
+      case 2: return intent.goodsType || "Goods";
+      case 3: return intent.sqft ? `${intent.sqft.toLocaleString()} sqft` : "Size";
+      case 4: {
+        const parts = [];
+        if (intent.timing) parts.push(intent.timing);
+        if (intent.duration) parts.push(intent.duration);
+        return parts.length > 0 ? parts.join(" · ") : "Timeline";
+      }
+      case 5: return intent.amenities.length > 0 ? intent.amenities.slice(0, 2).join(", ") + (intent.amenities.length > 2 ? "…" : "") : "Must-Haves";
+      default: return STEP_LABELS[stepIdx] || "";
+    }
+  }
+
   return (
     <div className="h-full w-full relative" onClick={resetIdle}>
       {/* Daylight Cinematic Background */}
@@ -291,6 +310,73 @@ function AgentFlow({
         {/* Subtle warm radial glow */}
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-emerald-100/40 via-transparent to-transparent" />
       </div>
+
+      {/* Breadcrumb — simple text below header */}
+      {step >= 2 && (
+        <div className="absolute top-[76px] left-0 right-0 z-40 flex justify-center px-6">
+          <div className="bg-white rounded-full px-5 py-1.5 shadow-sm border border-slate-100 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => { resetIdle(); setStep((s) => Math.max(1, s - 1)); }}
+              className="text-xs text-slate-400 hover:text-slate-700 transition-colors"
+            >
+              &#8592; Back
+            </button>
+
+            {step > 1 && intent.location && (
+              <>
+                <span className="text-slate-200">&#124;</span>
+                <button type="button" onClick={() => { resetIdle(); setStep(1); }} className="text-xs text-slate-500 hover:text-emerald-600 transition-colors">
+                  {intent.location}
+                </button>
+              </>
+            )}
+            {step > 2 && intent.useType && (
+              <>
+                <span className="text-slate-200">&#8250;</span>
+                <button type="button" onClick={() => { resetIdle(); setStep(2); }} className="text-xs text-slate-500 hover:text-emerald-600 transition-colors">
+                  {USE_TYPE_LABELS[intent.useType] || intent.useType}
+                </button>
+              </>
+            )}
+            {step > 3 && intent.goodsType && (
+              <>
+                <span className="text-slate-200">&#8250;</span>
+                <button type="button" onClick={() => { resetIdle(); setStep(3); }} className="text-xs text-slate-500 hover:text-emerald-600 transition-colors">
+                  {intent.goodsType}
+                </button>
+              </>
+            )}
+            {step > 4 && intent.sqft && (
+              <>
+                <span className="text-slate-200">&#8250;</span>
+                <button type="button" onClick={() => { resetIdle(); setStep(4); }} className="text-xs text-slate-500 hover:text-emerald-600 transition-colors">
+                  {intent.sqft.toLocaleString()} sqft
+                </button>
+              </>
+            )}
+            {step > 5 && intent.timing && (
+              <>
+                <span className="text-slate-200">&#8250;</span>
+                <button type="button" onClick={() => { resetIdle(); setStep(5); }} className="text-xs text-slate-500 hover:text-emerald-600 transition-colors">
+                  {intent.timing}
+                </button>
+              </>
+            )}
+            {step > 6 && intent.amenities.length > 0 && (
+              <>
+                <span className="text-slate-200">&#8250;</span>
+                <button type="button" onClick={() => { resetIdle(); setStep(6); }} className="text-xs text-slate-500 hover:text-emerald-600 transition-colors">
+                  {intent.amenities.length} features
+                </button>
+              </>
+            )}
+
+            <span className="text-slate-200">&#8250;</span>
+            <span className="text-xs font-semibold text-emerald-600">{STEP_LABELS[step - 1]}</span>
+          </div>
+        </div>
+      )}
 
       {/* Agent Content */}
       <div className="relative z-10 h-full flex flex-col justify-center items-center px-6 max-w-5xl mx-auto">
@@ -305,10 +391,10 @@ function AgentFlow({
               className="w-full text-center"
             >
               <h1 className="text-5xl md:text-7xl font-bold tracking-tight text-slate-900 mb-6 drop-shadow-sm">
-                Find capacity.
+                Find warehouse space.
               </h1>
               <p className="text-xl md:text-2xl text-slate-500 font-medium mb-12 max-w-2xl mx-auto">
-                The clearinghouse for flexible industrial space.
+                Short-term or long-term. Matched in hours, not months.
               </p>
 
               {/* Solid White Card Input */}
@@ -318,7 +404,7 @@ function AgentFlow({
                   <input
                     autoFocus
                     type="text"
-                    placeholder="City, zip code, or neighborhood..."
+                    placeholder="City, state, zip code, or neighborhood..."
                     className="w-full bg-transparent text-xl md:text-2xl text-slate-900 placeholder:text-slate-400 px-6 py-4 outline-none font-medium"
                     value={intent.location}
                     onChange={(e) => setIntent({ ...intent, location: e.target.value })}

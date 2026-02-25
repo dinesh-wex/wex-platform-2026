@@ -1,8 +1,12 @@
 """Application configuration via Pydantic Settings."""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings
+
+# Resolve .env from backend/ regardless of CWD
+_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
 class Settings(BaseSettings):
@@ -41,7 +45,7 @@ class Settings(BaseSettings):
     # General
     debug: bool = True
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    model_config = {"env_file": str(_ENV_FILE), "env_file_encoding": "utf-8", "extra": "ignore"}
 
     @property
     def cors_origins_list(self) -> list[str]:

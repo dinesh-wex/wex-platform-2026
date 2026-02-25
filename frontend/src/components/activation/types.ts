@@ -26,6 +26,7 @@ export interface BuildingData {
   city?: string;
   state?: string;
   zip?: string;
+  neighborhood?: string;
   building_size_sqft?: number;
   lot_size_acres?: number;
   year_built?: number;

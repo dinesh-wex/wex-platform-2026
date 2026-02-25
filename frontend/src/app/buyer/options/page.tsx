@@ -61,6 +61,7 @@ interface MatchOption {
   location: {
     city: string;
     state: string;
+    zip?: string;
     neighborhood?: string;
     distance_miles?: number | null;
   };
@@ -154,7 +155,8 @@ function mapApiToMatchOption(raw: any): MatchOption {
     location: {
       city: raw.city || "",
       state: raw.state || "",
-      neighborhood: raw.neighborhood || raw.address || "",
+      zip: raw.zip || "",
+      neighborhood: raw.neighborhood || "",
       distance_miles: raw.distance_miles ?? null,
     },
     property: {
@@ -377,16 +379,22 @@ function Tier1Card({
   allocatedSqft: number;
 }) {
   // Derive display strings with fallbacks
-  const neighborhood =
-    option.location.neighborhood ||
-    (option.location.city
-      ? `${option.location.city}, ${option.location.state}`
-      : "Industrial Area");
+  const neighborhood = option.location.neighborhood || "";
+  const cityStateZip = [
+    option.location.city,
+    option.location.state ? `, ${option.location.state}` : "",
+    option.location.zip ? ` ${option.location.zip}` : "",
+  ].join("").trim() || "Industrial Area";
+
+  // Neighborhood · City, State Zip  (or just City, State Zip if no neighborhood)
+  const locationSubline = neighborhood
+    ? `${neighborhood} · ${cityStateZip}`
+    : cityStateZip;
 
   // City, State heading — fallback to neighborhood if city empty
   const cityState = option.location.city
     ? `${option.location.city}${option.location.state ? `, ${option.location.state}` : ""}`
-    : neighborhood;
+    : neighborhood || "Industrial Area";
 
   const propertyMeta = [
     option.property.type,
@@ -425,18 +433,24 @@ function Tier1Card({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start mb-8 border-b border-slate-100 pb-8">
           {/* Location — spans 2 columns */}
           <div className="md:col-span-2">
-            <div className="flex items-center gap-2 text-slate-500 text-sm font-bold uppercase tracking-widest mb-2">
-              <MapPin size={16} /> {neighborhood}
+            <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center gap-1.5 text-slate-500 text-sm font-bold uppercase tracking-widest">
+                <MapPin size={16} className="flex-shrink-0" />
+                {neighborhood || cityState}
+              </div>
               {option.location.distance_miles != null && (
-                <span className="text-xs font-semibold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full ml-1">
+                <span className="text-xs font-semibold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full flex-shrink-0">
                   {option.location.distance_miles < 1 ? '<1' : Math.round(option.location.distance_miles)} mi away
                 </span>
               )}
             </div>
             {/* Anti-circumvention: NO STREET ADDRESS */}
-            <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-2">
+            <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-1">
               {cityState}
             </h2>
+            <p className="text-sm text-slate-400 mb-2">
+              {locationSubline}
+            </p>
             <p className="text-slate-500 font-medium">
               {propertyMeta}
             </p>
@@ -1322,11 +1336,17 @@ function OptionsContent() {
     setLoading(true);
     setError(null);
 
-    // Try cached results from localStorage first (set during search)
+    // Try cached results matching THIS session token
     let cached: any = null;
     try {
       const stored = localStorage.getItem("wex_search_session");
-      if (stored) cached = JSON.parse(stored);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        // Only use cache if it matches the current session token
+        if (parsed.session_token === token) {
+          cached = parsed;
+        }
+      }
     } catch {
       /* ignore */
     }
@@ -1336,6 +1356,17 @@ function OptionsContent() {
       const demo = buildDemoOptions();
       setTier1(demo.tier1);
       setTier2(demo.tier2);
+      setLoading(false);
+      return;
+    }
+
+    // If we have matching cached results from the search that just ran, use them
+    // (avoids an extra API call since anonymousSearch already returned the data)
+    if (cached && (cached.tier1?.length > 0 || cached.tier2?.length > 0)) {
+      const t1: MatchOption[] = (cached.tier1 || []).map(mapApiToMatchOption);
+      const t2: MatchOption[] = (cached.tier2 || []).map(mapApiToMatchOption);
+      setTier1(t1.sort((a: MatchOption, b: MatchOption) => b.match_score - a.match_score));
+      setTier2(t2);
       setLoading(false);
       return;
     }
@@ -1361,18 +1392,10 @@ function OptionsContent() {
         setTier2(demo.tier2);
       }
     } catch {
-      // Backend unavailable -- try cached results, then demo
-      if (
-        cached &&
-        (cached.tier1?.length > 0 || cached.tier2?.length > 0)
-      ) {
-        setTier1((cached.tier1 || []).map(mapApiToMatchOption));
-        setTier2((cached.tier2 || []).map(mapApiToMatchOption));
-      } else {
-        const demo = buildDemoOptions();
-        setTier1(demo.tier1);
-        setTier2(demo.tier2);
-      }
+      // Backend unavailable -- use demo data
+      const demo = buildDemoOptions();
+      setTier1(demo.tier1);
+      setTier2(demo.tier2);
     } finally {
       setLoading(false);
     }

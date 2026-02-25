@@ -87,6 +87,7 @@ export default function Phase2Processing({
               city: bld.city,
               state: bld.state,
               zip: bld.zip,
+              neighborhood: bld.neighborhood || bld.truth_core?.neighborhood as string | undefined,
               building_size_sqft: bld.building_size_sqft,
               lot_size_acres: bld.lot_size_acres,
               year_built: bld.year_built,

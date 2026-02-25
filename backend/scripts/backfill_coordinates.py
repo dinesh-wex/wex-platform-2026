@@ -1,11 +1,8 @@
-"""One-time backfill script: geocode warehouses missing lat/lng.
+"""Backfill script: geocode warehouses missing lat/lng or neighborhood.
 
 Usage:
     cd backend
-    python -m scripts.backfill_coordinates
-
-Or from project root:
-    python backend/scripts/backfill_coordinates.py
+    python scripts/backfill_coordinates.py
 
 Requires GOOGLE_MAPS_API_KEY in .env (already configured).
 """
@@ -23,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 async def backfill():
-    from sqlalchemy import select, or_
+    from sqlalchemy import select, or_, and_
     from wex_platform.app.config import get_settings
     from wex_platform.infra.database import async_session, init_db
     from wex_platform.domain.models import Warehouse
@@ -39,18 +36,27 @@ async def backfill():
     geo = GeocodingService(settings.google_maps_api_key)
 
     async with async_session() as session:
-        # Find warehouses missing coordinates
+        # Find warehouses missing coordinates OR missing neighborhood
         stmt = select(Warehouse).where(
-            or_(Warehouse.lat.is_(None), Warehouse.lng.is_(None))
+            or_(
+                Warehouse.lat.is_(None),
+                Warehouse.lng.is_(None),
+                Warehouse.neighborhood.is_(None),
+            )
         )
         result = await session.execute(stmt)
         warehouses = result.scalars().all()
 
         if not warehouses:
-            logger.info("All warehouses already have coordinates. Nothing to do.")
+            logger.info("All warehouses already have coordinates and neighborhood. Nothing to do.")
             return
 
-        logger.info("Found %d warehouses missing coordinates.", len(warehouses))
+        needs_coords = sum(1 for w in warehouses if w.lat is None or w.lng is None)
+        needs_neighborhood = sum(1 for w in warehouses if w.lat is not None and w.neighborhood is None)
+        logger.info(
+            "Found %d warehouses to process (%d missing coordinates, %d missing neighborhood only).",
+            len(warehouses), needs_coords, needs_neighborhood,
+        )
 
         updated = 0
         failed = 0
@@ -82,6 +88,7 @@ async def backfill():
                 failed += 1
                 continue
 
+            # Always update coordinates
             wh.lat = geo_result.lat
             wh.lng = geo_result.lng
 

@@ -415,7 +415,7 @@ class ClearingEngine:
 
             tier2_results.append({
                 "warehouse_id": wh_id,
-                "neighborhood": wh_dict.get("city", "Unknown"),
+                "neighborhood": wh_dict.get("neighborhood") or wh_dict.get("city", "Unknown"),
                 "match_score": match_data.get("composite_score", 0),
                 "sqft": wh_dict.get("building_size_sqft"),
                 "building_type": wh_dict.get("property_type", "warehouse"),
@@ -605,6 +605,8 @@ class ClearingEngine:
         buyer_radius = buyer_need.radius_miles or 25
         max_radius = min(buyer_radius, 50)
 
+        buyer_has_coords = buyer_need.lat is not None and buyer_need.lng is not None
+
         for wh in warehouses:
             tc = wh.truth_core
             if not tc:
@@ -615,13 +617,28 @@ class ClearingEngine:
                 continue
 
             # ---- GEO GATE ----
-            if buyer_need.lat and buyer_need.lng and wh.lat and wh.lng:
+            wh_has_coords = wh.lat is not None and wh.lng is not None
+
+            if buyer_has_coords and wh_has_coords:
+                # Best path: coordinate-based distance check
                 dist = _haversine_miles(buyer_need.lat, buyer_need.lng, wh.lat, wh.lng)
                 if dist > max_radius:
                     continue
+            elif buyer_has_coords and not wh_has_coords:
+                # Buyer has coords but warehouse doesn't — fall back to state match
+                if buyer_need.state and wh.state:
+                    if buyer_need.state.upper() != wh.state.upper():
+                        continue
+                else:
+                    # Can't verify geo at all — skip this warehouse
+                    continue
             elif buyer_need.state and wh.state:
+                # No buyer coords — state-level fallback
                 if buyer_need.state.upper() != wh.state.upper():
                     continue
+            else:
+                # No geo info on either side — skip
+                continue
 
             candidates.append(wh)
 
@@ -696,6 +713,7 @@ class ClearingEngine:
                 "address": wh.address,
                 "city": wh.city,
                 "state": wh.state,
+                "zip": wh.zip,
                 "building_size_sqft": wh.building_size_sqft,
                 "property_type": wh.property_type,
                 "primary_image_url": wh.primary_image_url,

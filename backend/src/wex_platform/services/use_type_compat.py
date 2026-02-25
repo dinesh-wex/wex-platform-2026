@@ -28,6 +28,7 @@ NEED_MAP: dict[str, set[str]] = {
     "storage_office":        {"storage", "office"},
     "ecommerce_fulfillment": {"storage", "light_assembly"},
     "distribution":          {"storage"},
+    "light_ops":             {"storage", "light_assembly"},
     "cold_storage":          {"cold_storage"},
     "food_grade":            {"cold_storage", "food_grade"},
     "manufacturing_light":   {"light_assembly"},

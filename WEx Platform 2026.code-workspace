@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../wex-clearing-house"
+		},
+		{
+			"path": "../wex-leasing-service-python"
+		},
+		{
+			"path": "../../Aircall Test"
+		},
+		{
+			"path": "../wex-warehouse-description"
+		}
+	],
+	"settings": {}
+}

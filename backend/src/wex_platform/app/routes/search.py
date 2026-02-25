@@ -126,8 +126,7 @@ async def anonymous_search(
         tier1_results = clearing_result.get("tier1_matches", [])
         tier2_results = clearing_result.get("tier2_matches", [])
     except Exception as exc:
-        logger.warning("Clearing engine failed for anonymous search: %s", exc)
-        # Non-fatal — return empty results rather than 500
+        logger.warning("Clearing engine failed for anonymous search: %s", exc, exc_info=True)
 
     # 3. Build buyer-safe results (strip internal fields)
     tier1_safe = []
@@ -144,6 +143,7 @@ async def anonymous_search(
             "description": wh.get("description", ""),
             "city": wh.get("city", ""),
             "state": wh.get("state", ""),
+            "zip": wh.get("zip", ""),
             "available_sqft": tc.get("max_sqft", req.size_sqft),
             "building_size_sqft": wh.get("building_size_sqft"),
             "buyer_rate": m.get("buyer_rate", 0),
@@ -211,7 +211,7 @@ async def anonymous_search(
         session_token=token,
         tier1=tier1_safe,
         tier2=tier2_safe,
-        expires_at=expires,
+        expires_at=expires.isoformat(),
     )
 
 
