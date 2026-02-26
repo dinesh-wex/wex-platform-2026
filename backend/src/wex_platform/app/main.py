@@ -1,5 +1,6 @@
 """FastAPI application entry point for the WEx Platform 2026 API."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,13 +11,31 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from wex_platform.app.config import get_settings
-from wex_platform.infra.database import init_db
+from wex_platform.infra.database import async_session, init_db
+from wex_platform.services.hold_monitor import check_hold_expiry_warnings, expire_holds
+
+logger = logging.getLogger(__name__)
+
+
+async def hold_monitor_loop():
+    """Run hold monitoring jobs every 15 minutes."""
+    while True:
+        try:
+            async with async_session() as db:
+                await check_hold_expiry_warnings(db)
+                expired_count = await expire_holds(db)
+                if expired_count:
+                    logger.info("Hold monitor: expired %d holds", expired_count)
+        except Exception as e:
+            logger.error("Hold monitor error: %s", e)
+        await asyncio.sleep(15 * 60)  # 15 minutes
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: initialize database on startup."""
     await init_db()
+    asyncio.create_task(hold_monitor_loop())
     yield
 
 
@@ -61,7 +80,7 @@ from wex_platform.app.routes.enrichment import router as enrichment_router
 from wex_platform.app.routes.search import router as search_router
 from wex_platform.app.routes.supplier_dashboard import router as supplier_dashboard_router, upload_router
 from wex_platform.app.routes.engagement import router as engagement_router, buyer_payments_router
-from wex_platform.app.routes.qa import router as qa_router, knowledge_router, admin_knowledge_router
+from wex_platform.app.routes.qa import router as qa_router, knowledge_router, admin_knowledge_router, anonymous_qa_router
 from wex_platform.app.routes.admin_engagements import router as admin_engagements_router, payment_admin_router
 from wex_platform.app.routes.seed_engagements import router as seed_router
 
@@ -83,6 +102,7 @@ app.include_router(buyer_payments_router)
 app.include_router(qa_router)
 app.include_router(knowledge_router)
 app.include_router(admin_knowledge_router)
+app.include_router(anonymous_qa_router)
 app.include_router(admin_engagements_router)
 app.include_router(payment_admin_router)
 app.include_router(seed_router)

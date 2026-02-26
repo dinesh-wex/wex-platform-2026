@@ -19,6 +19,7 @@ import {
   EyeOff,
 } from "lucide-react";
 import AgreementCheckbox from "@/components/ui/AgreementCheckbox";
+import HoldCountdown from "@/components/ui/HoldCountdown";
 import { api, storeAuthToken } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
@@ -55,6 +56,8 @@ export interface TourBookingFlowProps {
   onClose: () => void;
   deal: DealInfo;
   warehouse: WarehouseInfo;
+  /** Flow type: "reserve_tour" (4-step) or "book_instantly" (3-step) */
+  flowType?: "reserve_tour" | "book_instantly";
   /** Called when the entire flow completes */
   onComplete: (result: {
     tourDate: string;
@@ -106,6 +109,26 @@ function StepIndicator({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pricing Summary Bar                                                */
+/* ------------------------------------------------------------------ */
+function PricingSummaryBar({ deal, holdExpiresAt }: { deal: DealInfo; holdExpiresAt?: string }) {
+  return (
+    <div className="px-6 py-3 bg-slate-800/50 border-b border-slate-700/60 flex items-center justify-between text-sm">
+      <div className="flex items-center gap-2 text-slate-300">
+        <span>{deal.sqft_allocated?.toLocaleString()} sqft</span>
+        <span className="text-slate-600">&middot;</span>
+        <span>${deal.monthly_payment?.toLocaleString()}/mo</span>
+        <span className="text-slate-600">&middot;</span>
+        <span>{deal.term_months} months</span>
+        <span className="text-slate-600">&middot;</span>
+        <span>${(deal.monthly_payment * deal.term_months)?.toLocaleString()}</span>
+      </div>
+      {holdExpiresAt && <HoldCountdown holdExpiresAt={holdExpiresAt} format="held_for" />}
     </div>
   );
 }
@@ -365,10 +388,12 @@ function StepSignGuarantee({
   dealId,
   onSigned,
   onError,
+  flowType = "reserve_tour",
 }: {
   dealId: string;
-  onSigned: (warehouse: WarehouseInfo) => void;
+  onSigned: (warehouse: WarehouseInfo, holdExpiresAt?: string) => void;
   onError: (msg: string) => void;
+  flowType?: "reserve_tour" | "book_instantly";
 }) {
   const [accepted, setAccepted] = useState(false);
   const [signing, setSigning] = useState(false);
@@ -377,7 +402,7 @@ function StepSignGuarantee({
     if (!accepted) return;
     setSigning(true);
     try {
-      await api.signGuarantee(dealId);
+      const guaranteeRes = await api.signGuarantee(dealId);
       // New engagement endpoint returns flat engagement data
       // Fetch property details separately after guarantee is signed
       let warehouseData: any = {};
@@ -386,7 +411,17 @@ function StepSignGuarantee({
       } catch {
         // Property fetch failed — continue with what we have
       }
-      onSigned(warehouseData);
+
+      // For instant book flow, also call the instant book API
+      if (flowType === "book_instantly") {
+        try {
+          await api.confirmInstantBook(dealId);
+        } catch {
+          // Instant book API failed — continue to confirmation anyway
+        }
+      }
+
+      onSigned(warehouseData, guaranteeRes?.hold_expires_at);
     } catch (err: any) {
       onError(err.message || "Failed to sign guarantee");
     } finally {
@@ -403,14 +438,34 @@ function StepSignGuarantee({
     >
       <div className="text-center mb-2">
         <div className="w-14 h-14 rounded-full bg-blue-500/15 flex items-center justify-center mx-auto mb-3">
-          <Lock className="w-7 h-7 text-blue-400" />
+          <Shield className="w-7 h-7 text-blue-400" />
         </div>
         <h3 className="text-lg font-bold text-white">
-          Sign WEx Occupancy Guarantee
+          Your space is protected by WEx.
         </h3>
-        <p className="text-sm text-slate-400 mt-1">
-          The property address will be revealed after you sign.
-        </p>
+      </div>
+
+      <div className="bg-slate-800/60 rounded-xl border border-slate-700/50 p-4 space-y-2.5">
+        <div className="flex items-start gap-2.5">
+          <span className="text-emerald-400 shrink-0">&#10003;</span>
+          <p className="text-sm text-slate-300">This space and rate are held for 72 hours</p>
+        </div>
+        <div className="flex items-start gap-2.5">
+          <span className="text-emerald-400 shrink-0">&#10003;</span>
+          <p className="text-sm text-slate-300">Your rate is locked — no renegotiation after the tour</p>
+        </div>
+        <div className="flex items-start gap-2.5">
+          <span className="text-emerald-400 shrink-0">&#10003;</span>
+          <p className="text-sm text-slate-300">Payment goes through WEx, never directly to the owner</p>
+        </div>
+        <div className="flex items-start gap-2.5">
+          <span className="text-emerald-400 shrink-0">&#10003;</span>
+          <p className="text-sm text-slate-300">WEx handles disputes if the space doesn&#39;t match what&#39;s described</p>
+        </div>
+        <div className="flex items-start gap-2.5">
+          <span className="text-emerald-400 shrink-0">&#10003;</span>
+          <p className="text-sm text-slate-300">Your contact info stays private until the tour is confirmed</p>
+        </div>
       </div>
 
       <AgreementCheckbox
@@ -427,12 +482,12 @@ function StepSignGuarantee({
         {signing ? (
           <>
             <Loader2 className="w-5 h-5 animate-spin" />
-            Signing...
+            {flowType === "book_instantly" ? "Booking..." : "Confirming..."}
           </>
         ) : (
           <>
-            <Unlock className="w-5 h-5" />
-            Sign & Reveal Address
+            {flowType === "book_instantly" ? "Confirm & Book This Space" : "Confirm & See the Space"}
+            <ChevronRight className="w-5 h-5" />
           </>
         )}
       </button>
@@ -440,7 +495,7 @@ function StepSignGuarantee({
       <div className="flex items-center justify-center gap-1.5">
         <Shield className="w-3.5 h-3.5 text-emerald-400" />
         <p className="text-xs text-slate-500">
-          Anti-circumvention protection for both parties
+          WEx Occupancy Guarantee active
         </p>
       </div>
     </motion.div>
@@ -466,10 +521,22 @@ function StepScheduleTour({
   const [notes, setNotes] = useState("");
   const [scheduling, setScheduling] = useState(false);
 
-  // Build a minimum date (tomorrow)
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const minDate = tomorrow.toISOString().split("T")[0];
+  // Build a minimum date (24 hours from now)
+  const minDateTime = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const minDate = minDateTime.toISOString().split("T")[0];
+
+  // Generate time options: 8:00 AM through 5:00 PM, 30-minute increments
+  const timeOptions: { value: string; label: string }[] = [];
+  for (let h = 8; h <= 17; h++) {
+    for (const m of [0, 30]) {
+      if (h === 17 && m === 30) break; // Stop at 5:00 PM
+      const value = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      const h12 = h > 12 ? h - 12 : h === 0 ? 12 : h;
+      const ampm = h >= 12 ? "PM" : "AM";
+      const label = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+      timeOptions.push({ value, label });
+    }
+  }
 
   async function handleSchedule() {
     if (!date || !time) return;
@@ -488,8 +555,12 @@ function StepScheduleTour({
     }
   }
 
+  const propertyImageUrl = warehouse.primary_image_url;
   const streetViewUrl = warehouse.address
     ? api.streetViewUrl(warehouse.address)
+    : null;
+  const mapsUrl = warehouse.address
+    ? `https://maps.google.com/?q=${encodeURIComponent(warehouse.address)}`
     : null;
 
   return (
@@ -499,7 +570,7 @@ function StepScheduleTour({
       exit={{ opacity: 0, y: -10 }}
       className="px-6 py-6 space-y-5"
     >
-      {/* Address Revealed Banner */}
+      {/* Your Reserved Space Banner */}
       <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center shrink-0">
@@ -507,7 +578,7 @@ function StepScheduleTour({
           </div>
           <div>
             <p className="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-1">
-              Address Revealed
+              YOUR RESERVED SPACE
             </p>
             <p className="text-white font-bold text-lg leading-tight">
               {warehouse.address || "Address loading..."}
@@ -516,13 +587,30 @@ function StepScheduleTour({
               {warehouse.city}, {warehouse.state}{" "}
               {warehouse.zip && warehouse.zip}
             </p>
+            {mapsUrl && (
+              <a
+                href={mapsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-1.5"
+              >
+                <MapPin className="w-3 h-3" />
+                Open in Maps
+              </a>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Satellite / Street View Image */}
+      {/* Property Photo / Street View */}
       <div className="rounded-xl overflow-hidden border border-slate-700/60 bg-slate-800 h-48">
-        {streetViewUrl ? (
+        {propertyImageUrl ? (
+          <img
+            src={propertyImageUrl}
+            alt={warehouse.address || "Property photo"}
+            className="w-full h-full object-cover"
+          />
+        ) : streetViewUrl ? (
           <img
             src={streetViewUrl}
             alt={warehouse.address || "Property view"}
@@ -541,9 +629,11 @@ function StepScheduleTour({
       {/* Property Quick Stats */}
       <div className="grid grid-cols-3 gap-3">
         <div className="bg-slate-800/60 rounded-lg p-3 text-center border border-slate-700/40">
-          <p className="text-xs text-slate-500 mb-1">Size</p>
+          <p className="text-xs text-slate-500 mb-1">Available</p>
           <p className="text-sm font-bold text-white">
-            {warehouse.building_size_sqft
+            {deal.sqft_allocated
+              ? `${deal.sqft_allocated.toLocaleString()} sqft`
+              : warehouse.building_size_sqft
               ? `${warehouse.building_size_sqft.toLocaleString()} sqft`
               : "--"}
           </p>
@@ -590,34 +680,23 @@ function StepScheduleTour({
               className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               <option value="">Select time</option>
-              <option value="09:00">9:00 AM</option>
-              <option value="09:30">9:30 AM</option>
-              <option value="10:00">10:00 AM</option>
-              <option value="10:30">10:30 AM</option>
-              <option value="11:00">11:00 AM</option>
-              <option value="11:30">11:30 AM</option>
-              <option value="12:00">12:00 PM</option>
-              <option value="12:30">12:30 PM</option>
-              <option value="13:00">1:00 PM</option>
-              <option value="13:30">1:30 PM</option>
-              <option value="14:00">2:00 PM</option>
-              <option value="14:30">2:30 PM</option>
-              <option value="15:00">3:00 PM</option>
-              <option value="15:30">3:30 PM</option>
-              <option value="16:00">4:00 PM</option>
-              <option value="16:30">4:30 PM</option>
+              {timeOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
             </select>
           </div>
         </div>
 
         <div className="mt-3">
           <label className="block text-xs text-slate-400 mb-1.5">
-            Notes (optional)
+            Notes <span className="text-slate-500">(optional)</span>
           </label>
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Any special requests or questions for the tour..."
+            placeholder="Any special requests or access instructions"
             rows={2}
             className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
           />
@@ -636,8 +715,8 @@ function StepScheduleTour({
           </>
         ) : (
           <>
-            <Calendar className="w-5 h-5" />
-            Schedule Tour
+            Schedule My Tour
+            <ChevronRight className="w-5 h-5" />
           </>
         )}
       </button>
@@ -652,11 +731,13 @@ function StepConfirmation({
   warehouse,
   tourDate,
   tourTime,
+  holdExpiresAt,
   onDone,
 }: {
   warehouse: WarehouseInfo;
   tourDate: string;
   tourTime: string;
+  holdExpiresAt?: string;
   onDone: () => void;
 }) {
   // Format date nicely
@@ -675,6 +756,17 @@ function StepConfirmation({
   const h12 = h > 12 ? h - 12 : h === 0 ? 12 : h;
   const formattedTime = `${h12}:${minutes} ${ampm}`;
 
+  // Format hold expiry
+  const formattedHoldExpiry = holdExpiresAt
+    ? new Date(holdExpiresAt).toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : null;
+
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -686,9 +778,9 @@ function StepConfirmation({
       </div>
 
       <div>
-        <h3 className="text-xl font-bold text-white mb-1">Tour Scheduled!</h3>
+        <h3 className="text-xl font-bold text-white mb-1">Space Reserved!</h3>
         <p className="text-sm text-slate-400">
-          The supplier will confirm within 12 hours.
+          Tour request sent. Supplier confirms within 12 hours.
         </p>
       </div>
 
@@ -698,7 +790,7 @@ function StepConfirmation({
           <MapPin className="w-5 h-5 text-blue-400 mt-0.5 shrink-0" />
           <div>
             <p className="text-xs text-slate-500 uppercase tracking-wider">
-              Location
+              Address
             </p>
             <p className="text-sm text-white font-medium">
               {warehouse.address || "Address on file"}
@@ -732,7 +824,116 @@ function StepConfirmation({
             <p className="text-sm text-white font-medium">{formattedTime}</p>
           </div>
         </div>
+
+        {formattedHoldExpiry && (
+          <>
+            <div className="h-px bg-slate-700/50" />
+            <div className="flex items-start gap-3">
+              <Lock className="w-5 h-5 text-blue-400 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-xs text-slate-500 uppercase tracking-wider">
+                  Hold Expires
+                </p>
+                <p className="text-sm text-white font-medium">{formattedHoldExpiry}</p>
+              </div>
+            </div>
+          </>
+        )}
       </div>
+
+      <p className="text-xs text-slate-400">
+        We&apos;ll notify you by email (and SMS if you provided your number) when confirmed.
+      </p>
+
+      <div className="space-y-3">
+        <button
+          onClick={onDone}
+          className="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+        >
+          View My Deals
+          <ChevronRight className="w-4 h-4" />
+        </button>
+
+        <div className="flex items-center justify-center gap-1.5">
+          <Shield className="w-3.5 h-3.5 text-emerald-400" />
+          <p className="text-xs text-slate-500">
+            <span role="img" aria-label="shield">&#x1F6E1;</span> WEx Occupancy Guarantee active
+          </p>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Step 3 (Book Instantly): Confirmation — Space Booked!              */
+/* ------------------------------------------------------------------ */
+function StepBookConfirmation({
+  deal,
+  onDone,
+}: {
+  deal: DealInfo;
+  onDone: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      className="px-6 py-8 text-center space-y-5"
+    >
+      <div className="w-20 h-20 rounded-full bg-emerald-500/15 flex items-center justify-center mx-auto">
+        <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+      </div>
+
+      <div>
+        <h3 className="text-xl font-bold text-white mb-1">Space Booked!</h3>
+        <p className="text-sm text-slate-400">
+          Agreement is being prepared.
+        </p>
+      </div>
+
+      {/* Agreement Info */}
+      <div className="bg-slate-800/60 rounded-xl border border-slate-700/50 p-5 text-left space-y-3">
+        <div className="flex items-start gap-3">
+          <Lock className="w-5 h-5 text-blue-400 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-xs text-slate-500 uppercase tracking-wider">
+              Status
+            </p>
+            <p className="text-sm text-white font-medium">Instant Book Confirmed</p>
+          </div>
+        </div>
+
+        <div className="h-px bg-slate-700/50" />
+
+        <div className="flex items-start gap-3">
+          <Building2 className="w-5 h-5 text-blue-400 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-xs text-slate-500 uppercase tracking-wider">
+              Space
+            </p>
+            <p className="text-sm text-white font-medium">
+              {deal.sqft_allocated?.toLocaleString()} sqft &middot; ${deal.monthly_payment?.toLocaleString()}/mo
+            </p>
+          </div>
+        </div>
+
+        <div className="h-px bg-slate-700/50" />
+
+        <div className="flex items-start gap-3">
+          <Calendar className="w-5 h-5 text-blue-400 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-xs text-slate-500 uppercase tracking-wider">
+              Term
+            </p>
+            <p className="text-sm text-white font-medium">{deal.term_months} months</p>
+          </div>
+        </div>
+      </div>
+
+      <p className="text-sm text-slate-400">
+        Your agreement will be sent to your email shortly.
+      </p>
 
       <div className="space-y-3">
         <button
@@ -762,11 +963,17 @@ export default function TourBookingFlow({
   onClose,
   deal,
   warehouse: initialWarehouse,
+  flowType = "reserve_tour",
   onComplete,
 }: TourBookingFlowProps) {
+  const isInstantBook = flowType === "book_instantly";
+  const totalSteps = isInstantBook ? 3 : 4;
+
   // Determine initial step based on deal state
   const getInitialStep = () => {
-    if (deal.guarantee_signed_at) return 3; // Already signed, skip to schedule
+    if (deal.guarantee_signed_at) {
+      return isInstantBook ? 3 : 3; // Skip to schedule (reserve) or confirmation (instant)
+    }
     return 1; // Start from contact confirmation
   };
 
@@ -774,22 +981,29 @@ export default function TourBookingFlow({
   const [warehouse, setWarehouse] = useState<WarehouseInfo>(initialWarehouse);
   const [tourDate, setTourDate] = useState("");
   const [tourTime, setTourTime] = useState("");
+  const [holdExpiresAt, setHoldExpiresAt] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
-  const totalSteps = 4;
 
   // Reset state when modal opens
   useEffect(() => {
     if (open) {
       setStep(getInitialStep());
       setWarehouse(initialWarehouse);
+      setHoldExpiresAt(undefined);
       setError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, deal.id]);
 
-  function handleGuaranteeSigned(revealedWarehouse: WarehouseInfo) {
+  function handleGuaranteeSigned(revealedWarehouse: WarehouseInfo, holdExpiry?: string) {
     setWarehouse({ ...warehouse, ...revealedWarehouse });
-    setStep(3);
+    if (holdExpiry) setHoldExpiresAt(holdExpiry);
+    if (isInstantBook) {
+      // Skip tour scheduling, go straight to confirmation (step 3)
+      setStep(3);
+    } else {
+      setStep(3);
+    }
   }
 
   function handleTourScheduled(date: string, time: string) {
@@ -834,8 +1048,9 @@ export default function TourBookingFlow({
               {/* Header */}
               <div className="px-6 pt-5 pb-0 flex items-start justify-between shrink-0">
                 <div>
-                  <h2 className="text-lg font-bold text-white">
-                    Schedule Your Tour
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Lock className="w-5 h-5 text-blue-400" />
+                    {isInstantBook ? "Book Instantly" : "Reserve & Tour"}
                   </h2>
                   <p className="text-xs text-slate-400 mt-0.5">
                     Step {step} of {totalSteps}
@@ -851,6 +1066,9 @@ export default function TourBookingFlow({
 
               {/* Step Indicators */}
               <StepIndicator currentStep={step} totalSteps={totalSteps} />
+
+              {/* Pricing Summary Bar */}
+              <PricingSummaryBar deal={deal} holdExpiresAt={step >= 3 ? holdExpiresAt : undefined} />
 
               {/* Error Banner */}
               {error && (
@@ -877,9 +1095,11 @@ export default function TourBookingFlow({
                       dealId={deal.id}
                       onSigned={handleGuaranteeSigned}
                       onError={setError}
+                      flowType={flowType}
                     />
                   )}
-                  {step === 3 && (
+                  {/* Reserve & Tour: Step 3 = Schedule Tour, Step 4 = Confirmation */}
+                  {!isInstantBook && step === 3 && (
                     <StepScheduleTour
                       key="step3"
                       warehouse={warehouse}
@@ -888,12 +1108,21 @@ export default function TourBookingFlow({
                       onError={setError}
                     />
                   )}
-                  {step === 4 && (
+                  {!isInstantBook && step === 4 && (
                     <StepConfirmation
                       key="step4"
                       warehouse={warehouse}
                       tourDate={tourDate}
                       tourTime={tourTime}
+                      holdExpiresAt={holdExpiresAt}
+                      onDone={handleDone}
+                    />
+                  )}
+                  {/* Book Instantly: Step 3 = Book Confirmation (no tour scheduling) */}
+                  {isInstantBook && step === 3 && (
+                    <StepBookConfirmation
+                      key="step3-book"
+                      deal={deal}
                       onDone={handleDone}
                     />
                   )}

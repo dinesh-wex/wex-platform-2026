@@ -11,8 +11,17 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
-from wex_platform.domain.models import Warehouse, TruthCore, ContextualMemory
+from wex_platform.domain.models import (
+    Warehouse,
+    TruthCore,
+    Property,
+    PropertyKnowledge,
+    PropertyListing,
+    ContextualMemory,
+)
 
 # ---------------------------------------------------------------------------
 # Enrichment questions -- asked one at a time via SMS / email
@@ -43,7 +52,7 @@ ENRICHMENT_QUESTIONS = [
         "id": "office_sqft",
         "question": "Does your space include office area? If so, approximately how many sqft?",
         "type": "text",
-        "field": "has_office_space",
+        "field": "has_office",
         "priority": 4,
     },
     {
@@ -96,7 +105,7 @@ _MAX_PER_WEEK = 2
 
 
 class EnrichmentService:
-    """Manages progressive enrichment of warehouse profiles post-onboarding."""
+    """Manages progressive enrichment of property profiles post-onboarding."""
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -106,7 +115,7 @@ class EnrichmentService:
     # ------------------------------------------------------------------
 
     async def get_next_question(self, warehouse_id: str) -> dict | None:
-        """Determine the next unanswered enrichment question for a warehouse.
+        """Determine the next unanswered enrichment question for a property.
 
         Returns the highest-priority unanswered question dict (with ``id``,
         ``question``, ``type``, ``priority``), or ``None`` if all questions
@@ -129,7 +138,8 @@ class EnrichmentService:
         """Store an enrichment response.
 
         * Saves to ContextualMemory (memory_type = ``enrichment_response``).
-        * If the question maps to a TruthCore field, updates it directly.
+        * If the question maps to a PropertyKnowledge field, updates it directly.
+        * Falls back to TruthCore for legacy properties without PropertyKnowledge.
         * Returns confirmation + next question (if any).
         """
         question = _QUESTION_MAP.get(question_id)
@@ -146,12 +156,21 @@ class EnrichmentService:
             confidence=1.0,
             metadata_={"question_id": question_id, "question_text": question["question"]},
         )
+
+        # Also link to Property if it exists
+        prop_result = await self.db.execute(
+            select(Property).where(Property.id == warehouse_id)
+        )
+        prop = prop_result.scalar_one_or_none()
+        if prop:
+            memory.property_id = warehouse_id
+
         self.db.add(memory)
 
-        # 2. If the question has a mapped TruthCore field, update it
+        # 2. If the question has a mapped field, update PropertyKnowledge (preferred) or TruthCore (fallback)
         field_name = question.get("field")
         if field_name:
-            await self._update_truth_core_field(warehouse_id, field_name, response, question)
+            await self._update_knowledge_field(warehouse_id, field_name, response, question)
 
         await self.db.commit()
 
@@ -165,7 +184,7 @@ class EnrichmentService:
         }
 
     async def get_profile_completeness(self, warehouse_id: str) -> dict:
-        """Calculate how complete a warehouse profile is.
+        """Calculate how complete a property profile is.
 
         Returns::
 
@@ -189,24 +208,39 @@ class EnrichmentService:
         }
 
     async def store_photos(self, warehouse_id: str, photo_urls: list[str]) -> dict:
-        """Store uploaded photos to the warehouse record.
+        """Store uploaded photos to the property record.
 
-        Appends new URLs to the existing ``warehouse.image_urls`` list.
+        Appends new URLs to the existing image_urls list.
+        Tries Property first, falls back to Warehouse.
         """
-        stmt = select(Warehouse).where(Warehouse.id == warehouse_id)
-        result = await self.db.execute(stmt)
-        warehouse = result.scalar_one_or_none()
-        if warehouse is None:
-            raise ValueError(f"Warehouse {warehouse_id} not found")
+        # Try Property table first
+        prop_result = await self.db.execute(
+            select(Property).where(Property.id == warehouse_id)
+        )
+        prop = prop_result.scalar_one_or_none()
 
-        existing: list[str] = warehouse.image_urls or []
-        # Avoid duplicates
-        new_urls = [url for url in photo_urls if url not in existing]
-        warehouse.image_urls = existing + new_urls
+        if prop:
+            existing: list[str] = prop.image_urls or []
+            new_urls = [url for url in photo_urls if url not in existing]
+            prop.image_urls = existing + new_urls
+            flag_modified(prop, "image_urls")
 
-        # If no primary image yet, set the first uploaded photo
-        if not warehouse.primary_image_url and new_urls:
-            warehouse.primary_image_url = new_urls[0]
+            if not prop.primary_image_url and new_urls:
+                prop.primary_image_url = new_urls[0]
+        else:
+            # Fallback to Warehouse
+            stmt = select(Warehouse).where(Warehouse.id == warehouse_id)
+            result = await self.db.execute(stmt)
+            warehouse = result.scalar_one_or_none()
+            if warehouse is None:
+                raise ValueError(f"Property/Warehouse {warehouse_id} not found")
+
+            existing = warehouse.image_urls or []
+            new_urls = [url for url in photo_urls if url not in existing]
+            warehouse.image_urls = existing + new_urls
+
+            if not warehouse.primary_image_url and new_urls:
+                warehouse.primary_image_url = new_urls[0]
 
         # Also record as a contextual memory
         memory = ContextualMemory(
@@ -218,14 +252,18 @@ class EnrichmentService:
             confidence=1.0,
             metadata_={"question_id": "photos", "photo_urls": new_urls},
         )
+        if prop:
+            memory.property_id = warehouse_id
         self.db.add(memory)
 
         await self.db.commit()
 
+        total_photos = len((prop.image_urls if prop else warehouse.image_urls) or [])
+
         return {
             "stored": True,
             "new_photos": len(new_urls),
-            "total_photos": len(warehouse.image_urls),
+            "total_photos": total_photos,
         }
 
     async def schedule_next_followup(self, warehouse_id: str) -> dict:
@@ -292,7 +330,7 @@ class EnrichmentService:
         }
 
     async def get_enrichment_history(self, warehouse_id: str) -> list[dict]:
-        """Get all enrichment responses for a warehouse, newest first."""
+        """Get all enrichment responses for a property, newest first."""
         stmt = (
             select(ContextualMemory)
             .where(
@@ -343,20 +381,17 @@ class EnrichmentService:
                 answered.add(meta["question_id"])
         return answered
 
-    async def _update_truth_core_field(
+    async def _update_knowledge_field(
         self,
         warehouse_id: str,
         field_name: str,
         response: str,
         question: dict,
     ) -> None:
-        """Update the corresponding TruthCore column from an enrichment answer."""
-        stmt = select(TruthCore).where(TruthCore.warehouse_id == warehouse_id)
-        result = await self.db.execute(stmt)
-        truth_core = result.scalar_one_or_none()
-        if truth_core is None:
-            return  # No truth core yet; skip
+        """Update the corresponding PropertyKnowledge column from an enrichment answer.
 
+        Falls back to TruthCore for legacy properties without PropertyKnowledge.
+        """
         # Type coercion based on question type / field
         value: object = response
         if question.get("type") == "number":
@@ -373,13 +408,52 @@ class EnrichmentService:
                 value = float("".join(c for c in response if c.isdigit() or c == "."))
             except ValueError:
                 pass
-        elif field_name == "has_office_space":
+        elif field_name in ("has_office", "has_office_space"):
             # Parse boolean-ish answer
             lower = response.lower().strip()
             if lower in ("no", "none", "n/a", "0"):
                 value = False
             else:
                 value = True
+
+        # Try PropertyKnowledge first
+        pk_result = await self.db.execute(
+            select(PropertyKnowledge).where(PropertyKnowledge.property_id == warehouse_id)
+        )
+        pk = pk_result.scalar_one_or_none()
+
+        if pk:
+            # Map field names: enrichment uses TruthCore names, PropertyKnowledge may differ
+            pk_field_map = {
+                "has_office_space": "has_office",
+                "dock_doors_receiving": "dock_doors_receiving",
+                "clear_height_ft": "clear_height_ft",
+                "parking_spaces": "parking_spaces",
+                "power_supply": "power_supply",
+                "has_office": "has_office",
+            }
+            pk_field = pk_field_map.get(field_name, field_name)
+
+            if hasattr(pk, pk_field):
+                setattr(pk, pk_field, value)
+
+                # Update field_provenance for PROVENANCE_FIELDS
+                if pk_field in PropertyKnowledge.PROVENANCE_FIELDS:
+                    provenance = dict(pk.field_provenance or {})
+                    provenance[pk_field] = {
+                        "source": "enrichment",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    pk.field_provenance = provenance
+                    flag_modified(pk, "field_provenance")
+                return
+
+        # Fallback to TruthCore
+        stmt = select(TruthCore).where(TruthCore.warehouse_id == warehouse_id)
+        result = await self.db.execute(stmt)
+        truth_core = result.scalar_one_or_none()
+        if truth_core is None:
+            return  # No truth core yet; skip
 
         if hasattr(truth_core, field_name):
             setattr(truth_core, field_name, value)

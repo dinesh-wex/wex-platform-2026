@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wex_platform.app.config import get_settings
-from wex_platform.domain.models import DLAToken, Warehouse
+from wex_platform.domain.models import DLAToken, Warehouse, Property, PropertyContact
 from wex_platform.infra.database import get_db
 from wex_platform.services.sms_service import SMSService
 
@@ -131,18 +131,33 @@ async def aircall_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     logger.info("Inbound SMS from %s: %s", from_number, text[:100])
 
     # ── Find the supplier's most recent pending DLA token ────────────
-    # Match by phone number on the warehouse owner
+    # Match by phone number on PropertyContact (new schema) or Warehouse (legacy)
     result = await db.execute(
         select(DLAToken)
-        .join(Warehouse, Warehouse.id == DLAToken.warehouse_id)
+        .join(PropertyContact, PropertyContact.property_id == DLAToken.warehouse_id)
         .where(
-            Warehouse.owner_phone == from_number,
+            PropertyContact.phone == from_number,
+            PropertyContact.is_primary == True,
             DLAToken.status.in_(["pending", "interested"]),
         )
         .order_by(DLAToken.created_at.desc())
         .limit(1)
     )
     dla_token = result.scalar_one_or_none()
+
+    # Fall back to legacy Warehouse.owner_phone lookup
+    if not dla_token:
+        result = await db.execute(
+            select(DLAToken)
+            .join(Warehouse, Warehouse.id == DLAToken.warehouse_id)
+            .where(
+                Warehouse.owner_phone == from_number,
+                DLAToken.status.in_(["pending", "interested"]),
+            )
+            .order_by(DLAToken.created_at.desc())
+            .limit(1)
+        )
+        dla_token = result.scalar_one_or_none()
 
     sms_service = SMSService()
 
@@ -181,6 +196,9 @@ async def _handle_supplier_reply(
     if STOP_PATTERN.search(text):
         dla_token.status = "declined"
         dla_token.decline_reason = "STOP reply"
+        prop = await db.get(Property, dla_token.warehouse_id)
+        if prop:
+            prop.relationship_status = "declined"
         warehouse = await db.get(Warehouse, dla_token.warehouse_id)
         if warehouse:
             warehouse.supplier_status = "declined"
@@ -197,6 +215,8 @@ async def _handle_supplier_reply(
         dla_token.supplier_rate = counter_rate
         dla_token.status = "rate_decided"
         dla_token.rate_accepted = False
+        # Update both new and legacy models
+        prop = await db.get(Property, dla_token.warehouse_id)
         warehouse = await db.get(Warehouse, dla_token.warehouse_id)
 
         await db.commit()
@@ -216,6 +236,9 @@ async def _handle_supplier_reply(
     # YES / positive
     if POSITIVE_PATTERNS.search(text):
         dla_token.status = "interested"
+        prop = await db.get(Property, dla_token.warehouse_id)
+        if prop:
+            prop.relationship_status = "interested"
         warehouse = await db.get(Warehouse, dla_token.warehouse_id)
         if warehouse:
             warehouse.supplier_status = "interested"
@@ -237,6 +260,9 @@ async def _handle_supplier_reply(
     if NEGATIVE_PATTERNS.search(text):
         dla_token.status = "declined"
         dla_token.decline_reason = f"SMS reply: {text[:200]}"
+        prop = await db.get(Property, dla_token.warehouse_id)
+        if prop:
+            prop.relationship_status = "declined"
         warehouse = await db.get(Warehouse, dla_token.warehouse_id)
         if warehouse:
             warehouse.supplier_status = "declined"

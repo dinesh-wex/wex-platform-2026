@@ -15,7 +15,7 @@ from sqlalchemy import select, and_, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from wex_platform.domain.models import Warehouse, TruthCore
+from wex_platform.domain.models import Property, PropertyKnowledge, PropertyListing
 from wex_platform.infra.database import get_db
 
 router = APIRouter(prefix="/api/browse", tags=["browse"])
@@ -59,20 +59,20 @@ def _building_type_label(property_type: Optional[str]) -> str:
     return mapping.get(property_type or "", "Warehouse")
 
 
-def _extract_features(tc: TruthCore) -> list[dict]:
-    """Build feature list from TruthCore boolean/int fields."""
+def _extract_features(pk: PropertyKnowledge) -> list[dict]:
+    """Build feature list from PropertyKnowledge fields."""
     features = []
-    if tc.dock_doors_receiving and tc.dock_doors_receiving > 0:
+    if pk.dock_doors_receiving and pk.dock_doors_receiving > 0:
         features.append({"key": "dock", "label": "Dock Doors"})
-    if tc.has_office_space:
+    if pk.has_office:
         features.append({"key": "office", "label": "Office"})
-    if tc.has_sprinkler:
+    if pk.has_sprinkler:
         features.append({"key": "climate", "label": "Climate"})
-    if tc.power_supply:
+    if pk.power_supply:
         features.append({"key": "power", "label": "Power"})
-    if tc.parking_spaces and tc.parking_spaces > 0:
+    if pk.parking_spaces and pk.parking_spaces > 0:
         features.append({"key": "parking", "label": "Parking"})
-    if tc.clear_height_ft and tc.clear_height_ft >= 20:
+    if pk.clear_height_ft and pk.clear_height_ft >= 20:
         features.append({"key": "24_7", "label": "24/7"})
     return features
 
@@ -99,31 +99,35 @@ async def get_listings(
     Does NOT return: exact address, exact sqft, exact rate, owner info, supplier name.
     """
 
-    # Base query: only in-network warehouses with a TruthCore
+    # Base query: only active properties with a PropertyListing and PropertyKnowledge
     query = (
-        select(Warehouse)
-        .options(joinedload(Warehouse.truth_core))
-        .where(Warehouse.supplier_status == "in_network")
+        select(Property)
+        .options(
+            joinedload(Property.knowledge),
+            joinedload(Property.listing),
+        )
+        .where(Property.relationship_status == "active")
     )
 
     # --- Filters ---
     conditions = []
+    need_pk_join = False
+    need_pl_join = False
 
     if city:
-        conditions.append(Warehouse.city.ilike(f"%{city}%"))
+        conditions.append(Property.city.ilike(f"%{city}%"))
     if state:
-        conditions.append(Warehouse.state.ilike(f"%{state}%"))
+        conditions.append(Property.state.ilike(f"%{state}%"))
 
-    # Sqft filters apply to TruthCore.max_sqft (available space)
+    # Sqft filters apply to PropertyListing.max_sqft (available space)
     if min_sqft is not None:
-        conditions.append(TruthCore.max_sqft >= min_sqft)
-        query = query.join(TruthCore, TruthCore.warehouse_id == Warehouse.id)
+        conditions.append(PropertyListing.max_sqft >= min_sqft)
+        need_pl_join = True
     if max_sqft is not None:
-        conditions.append(TruthCore.max_sqft <= max_sqft)
-        if min_sqft is None:
-            query = query.join(TruthCore, TruthCore.warehouse_id == Warehouse.id)
+        conditions.append(PropertyListing.max_sqft <= max_sqft)
+        need_pl_join = True
 
-    # Use type maps to activity_tier on TruthCore
+    # Use type maps to activity_tier on PropertyKnowledge
     if use_type and use_type.lower() != "any":
         use_type_map = {
             "storage": "storage_only",
@@ -131,27 +135,30 @@ async def get_listings(
             "distribution": "distribution",
         }
         mapped = use_type_map.get(use_type.lower(), use_type.lower())
-        conditions.append(TruthCore.activity_tier == mapped)
-        if min_sqft is None and max_sqft is None:
-            query = query.join(TruthCore, TruthCore.warehouse_id == Warehouse.id)
+        conditions.append(PropertyKnowledge.activity_tier == mapped)
+        need_pk_join = True
 
     # Feature filters
     if features:
         feature_list = [f.strip().lower() for f in features.split(",") if f.strip()]
-        already_joined = min_sqft is not None or max_sqft is not None or (use_type and use_type.lower() != "any")
-        if not already_joined:
-            query = query.join(TruthCore, TruthCore.warehouse_id == Warehouse.id)
+        need_pk_join = True
         for feat in feature_list:
             if feat == "dock":
-                conditions.append(TruthCore.dock_doors_receiving > 0)
+                conditions.append(PropertyKnowledge.dock_doors_receiving > 0)
             elif feat == "office":
-                conditions.append(TruthCore.has_office_space == True)  # noqa: E712
+                conditions.append(PropertyKnowledge.has_office == True)  # noqa: E712
             elif feat == "climate":
-                conditions.append(TruthCore.has_sprinkler == True)  # noqa: E712
+                conditions.append(PropertyKnowledge.has_sprinkler == True)  # noqa: E712
             elif feat == "power":
-                conditions.append(TruthCore.power_supply.isnot(None))
+                conditions.append(PropertyKnowledge.power_supply.isnot(None))
             elif feat == "parking":
-                conditions.append(TruthCore.parking_spaces > 0)
+                conditions.append(PropertyKnowledge.parking_spaces > 0)
+
+    # Add joins as needed
+    if need_pl_join:
+        query = query.join(PropertyListing, PropertyListing.property_id == Property.id)
+    if need_pk_join:
+        query = query.join(PropertyKnowledge, PropertyKnowledge.property_id == Property.id)
 
     if conditions:
         query = query.where(and_(*conditions))
@@ -166,27 +173,28 @@ async def get_listings(
     query = query.offset(offset).limit(per_page)
 
     result = await db.execute(query)
-    warehouses = result.unique().scalars().all()
+    properties = result.unique().scalars().all()
 
     # --- Build response with CONTROLLED visibility ---
     listings = []
-    for wh in warehouses:
-        tc = wh.truth_core
-        if not tc:
+    for prop in properties:
+        pk = prop.knowledge
+        pl = prop.listing
+        if not pk or not pl:
             continue
 
         listing = {
-            "id": wh.id,
+            "id": prop.id,
             "location": {
-                "city": wh.city or "Unknown",
-                "state": wh.state or "",
-                "display": f"{wh.city or 'Unknown'}, {wh.state or ''}".strip(", "),
+                "city": prop.city or "Unknown",
+                "state": prop.state or "",
+                "display": f"{prop.city or 'Unknown'}, {prop.state or ''}".strip(", "),
             },
-            "sqft_range": _sqft_range(tc.max_sqft),
-            "rate_range": _rate_range(tc.supplier_rate_per_sqft),
-            "building_type": _building_type_label(wh.property_type),
-            "features": _extract_features(tc),
-            "has_image": bool(wh.primary_image_url),
+            "sqft_range": _sqft_range(pl.max_sqft),
+            "rate_range": _rate_range(pl.supplier_rate_per_sqft),
+            "building_type": _building_type_label(prop.property_type),
+            "features": _extract_features(pk),
+            "has_image": bool(prop.primary_image_url),
         }
         listings.append(listing)
 
@@ -206,15 +214,15 @@ async def get_locations(
 ):
     """Return distinct city/state pairs for autocomplete, filtered by query."""
     query = (
-        select(Warehouse.city, Warehouse.state)
-        .where(Warehouse.supplier_status == "in_network")
-        .where(Warehouse.city.isnot(None))
+        select(Property.city, Property.state)
+        .where(Property.relationship_status == "active")
+        .where(Property.city.isnot(None))
         .distinct()
     )
 
     if q:
         query = query.where(
-            Warehouse.city.ilike(f"%{q}%") | Warehouse.state.ilike(f"%{q}%")
+            Property.city.ilike(f"%{q}%") | Property.state.ilike(f"%{q}%")
         )
 
     query = query.limit(20)

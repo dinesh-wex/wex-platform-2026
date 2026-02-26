@@ -397,6 +397,40 @@ async def supplier_answer_question(
 
 
 # ---------------------------------------------------------------------------
+# Anonymous Property Questions (no auth required)
+# ---------------------------------------------------------------------------
+
+anonymous_qa_router = APIRouter(prefix="/api", tags=["anonymous-qa"])
+
+
+class AnonymousQuestionRequest(BaseModel):
+    question_text: str
+    session_token: Optional[str] = None
+    email: Optional[str] = None
+
+
+@anonymous_qa_router.post("/properties/{warehouse_id}/questions/anonymous")
+async def submit_anonymous_question(
+    warehouse_id: str,
+    body: AnonymousQuestionRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Anonymous buyer asks a question about a property. No auth required."""
+    question = PropertyQuestion(
+        id=str(uuid.uuid4()),
+        engagement_id=None,  # No engagement yet
+        warehouse_id=warehouse_id,
+        buyer_id=None,  # Anonymous
+        question_text=body.question_text,
+        status=QuestionStatus.SUBMITTED.value,
+    )
+    db.add(question)
+    await db.commit()
+    return {"ok": True, "message": "Your question has been sent. WEx will follow up via email."}
+
+
+# ---------------------------------------------------------------------------
 # Property Knowledge Base (admin-managed)
 # ---------------------------------------------------------------------------
 

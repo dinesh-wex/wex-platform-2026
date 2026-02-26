@@ -299,6 +299,10 @@ class EngagementEventType(str, Enum):
     CANCELLED = "cancelled"
     REMINDER_SENT = "reminder_sent"
     NOTE_ADDED = "note_added"
+    HOLD_EXTENDED = "hold_extended"
+    HOLD_EXPIRED = "hold_expired"
+    HOLD_WARNING_24H = "hold_warning_24h"
+    HOLD_WARNING_4H = "hold_warning_4h"
 
 
 class EngagementActor(str, Enum):
@@ -362,3 +366,72 @@ class SupplierPaymentStatus(str, Enum):
     UPCOMING = "upcoming"
     SCHEDULED = "scheduled"
     DEPOSITED = "deposited"
+
+
+# ---------------------------------------------------------------------------
+# Property Pipeline Enums (v2 schema)
+# ---------------------------------------------------------------------------
+
+
+class RelationshipStatus(str, Enum):
+    """Supplier relationship status in the property pipeline."""
+
+    PROSPECT = "prospect"
+    CONTACTED = "contacted"
+    INTERESTED = "interested"
+    EARNCHECK_ONLY = "earncheck_only"
+    ACTIVE = "active"
+    DECLINED = "declined"
+    UNRESPONSIVE = "unresponsive"
+    CHURNED = "churned"
+
+
+class PropertySource(str, Enum):
+    """How a property was originally discovered."""
+
+    EARNCHECK = "earncheck"
+    COSTAR = "costar"
+    MANUAL = "manual"
+    PUBLIC_RECORDS = "public_records"
+    BROKER = "broker"
+
+
+class PropertyEventType(str, Enum):
+    """Type of event in the property lifecycle audit trail."""
+
+    DISCOVERED = "discovered"
+    OUTREACH_SENT = "outreach_sent"
+    RESPONSE_RECEIVED = "response_received"
+    EARNCHECK_STARTED = "earncheck_started"
+    EARNCHECK_COMPLETED = "earncheck_completed"
+    ACTIVATED = "activated"
+    PAUSED = "paused"
+    DEACTIVATED = "deactivated"
+    DECLINED = "declined"
+    PRICE_CHANGED = "price_changed"
+    DATA_ENRICHED = "data_enriched"
+
+
+class ContactRole(str, Enum):
+    """Role of a contact associated with a property."""
+
+    OWNER = "owner"
+    MANAGER = "manager"
+    BROKER = "broker"
+    EMERGENCY = "emergency"
+
+
+class PricingMode(str, Enum):
+    """How a property's listing price is determined."""
+
+    AUTO = "auto"
+    MANUAL = "manual"
+
+
+class EnrichmentSource(str, Enum):
+    """Source of data enrichment for property knowledge fields."""
+
+    AI = "ai"
+    SUPPLIER = "supplier"
+    MANUAL = "manual"
+    THIRD_PARTY = "third_party"

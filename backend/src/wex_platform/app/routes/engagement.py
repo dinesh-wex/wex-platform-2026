@@ -28,9 +28,13 @@ from wex_platform.domain.models import (
     EngagementAgreement,
     EngagementEvent,
     PaymentRecord,
+    Property,
+    PropertyContact,
+    PropertyKnowledge,
+    PropertyListing,
     User,
-    Warehouse,
 )
+from wex_platform.services.property_serializer import serialize_property_as_warehouse
 from wex_platform.infra.database import get_db
 from wex_platform.services.engagement_state_machine import (
     EngagementStateMachine,
@@ -59,6 +63,7 @@ class DealPingDeclineRequest(BaseModel):
 class TourRequestBody(BaseModel):
     preferred_date: Optional[str] = None
     preferred_time: Optional[str] = None
+    tour_notes: Optional[str] = None
 
 
 class TourConfirmRequest(BaseModel):
@@ -131,6 +136,13 @@ class EngagementBuyerView(BaseModel):
     # Instant book
     instant_book_requested_at: Optional[str] = None
     instant_book_confirmed_at: Optional[str] = None
+
+    # Hold
+    hold_expires_at: Optional[str] = None
+    hold_extended: bool = False
+    hold_extended_at: Optional[str] = None
+    hold_extended_until: Optional[str] = None
+    tour_notes: Optional[str] = None
 
     # Agreement
     agreement_sent_at: Optional[str] = None
@@ -208,6 +220,13 @@ class EngagementSupplierView(BaseModel):
     instant_book_requested_at: Optional[str] = None
     instant_book_confirmed_at: Optional[str] = None
 
+    # Hold
+    hold_expires_at: Optional[str] = None
+    hold_extended: bool = False
+    hold_extended_at: Optional[str] = None
+    hold_extended_until: Optional[str] = None
+    tour_notes: Optional[str] = None
+
     # Agreement
     agreement_sent_at: Optional[str] = None
     agreement_signed_at: Optional[str] = None
@@ -282,6 +301,11 @@ class EngagementAdminView(BaseModel):
     tour_outcome: Optional[str] = None
     instant_book_requested_at: Optional[str] = None
     instant_book_confirmed_at: Optional[str] = None
+    hold_expires_at: Optional[str] = None
+    hold_extended: bool = False
+    hold_extended_at: Optional[str] = None
+    hold_extended_until: Optional[str] = None
+    tour_notes: Optional[str] = None
     agreement_sent_at: Optional[str] = None
     agreement_signed_at: Optional[str] = None
     onboarding_started_at: Optional[str] = None
@@ -424,6 +448,11 @@ def serialize_engagement(engagement: Engagement, role: str, actor: EngagementAct
             tour_outcome=engagement.tour_outcome,
             instant_book_requested_at=_dt(engagement.instant_book_requested_at),
             instant_book_confirmed_at=_dt(engagement.instant_book_confirmed_at),
+            hold_expires_at=_dt(engagement.hold_expires_at),
+            hold_extended=engagement.hold_extended or False,
+            hold_extended_at=_dt(engagement.hold_extended_at),
+            hold_extended_until=_dt(engagement.hold_extended_until),
+            tour_notes=engagement.tour_notes,
             agreement_sent_at=_dt(engagement.agreement_sent_at),
             agreement_signed_at=_dt(engagement.agreement_signed_at),
             onboarding_started_at=_dt(engagement.onboarding_started_at),
@@ -480,6 +509,11 @@ def serialize_engagement(engagement: Engagement, role: str, actor: EngagementAct
             tour_outcome=engagement.tour_outcome,
             instant_book_requested_at=_dt(engagement.instant_book_requested_at),
             instant_book_confirmed_at=_dt(engagement.instant_book_confirmed_at),
+            hold_expires_at=_dt(engagement.hold_expires_at),
+            hold_extended=engagement.hold_extended or False,
+            hold_extended_at=_dt(engagement.hold_extended_at),
+            hold_extended_until=_dt(engagement.hold_extended_until),
+            tour_notes=engagement.tour_notes,
             agreement_sent_at=_dt(engagement.agreement_sent_at),
             agreement_signed_at=_dt(engagement.agreement_signed_at),
             onboarding_started_at=_dt(engagement.onboarding_started_at),
@@ -528,6 +562,11 @@ def serialize_engagement(engagement: Engagement, role: str, actor: EngagementAct
             tour_outcome=engagement.tour_outcome,
             instant_book_requested_at=_dt(engagement.instant_book_requested_at),
             instant_book_confirmed_at=_dt(engagement.instant_book_confirmed_at),
+            hold_expires_at=_dt(engagement.hold_expires_at),
+            hold_extended=engagement.hold_extended or False,
+            hold_extended_at=_dt(engagement.hold_extended_at),
+            hold_extended_until=_dt(engagement.hold_extended_until),
+            tour_notes=engagement.tour_notes,
             agreement_sent_at=_dt(engagement.agreement_sent_at),
             agreement_signed_at=_dt(engagement.agreement_signed_at),
             onboarding_started_at=_dt(engagement.onboarding_started_at),
@@ -872,6 +911,72 @@ async def link_buyer(
     return serialize_engagement(engagement, "buyer", EngagementActor.BUYER)
 
 
+# --- Hold Extension ---
+
+
+@router.post("/{engagement_id}/hold/extend")
+async def extend_hold(
+    engagement_id: str,
+    request: Request,
+    user: User = Depends(get_current_user_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Buyer requests a one-time 24-hour hold extension."""
+    engagement = await _get_engagement_or_404(db, engagement_id)
+    if user:
+        _check_access(engagement, user)
+
+    if engagement.hold_extended:
+        raise HTTPException(status_code=400, detail="Hold has already been extended once")
+
+    if not engagement.hold_expires_at:
+        raise HTTPException(status_code=400, detail="No active hold on this engagement")
+
+    now = datetime.now(timezone.utc)
+    hold_expires = engagement.hold_expires_at
+    if hasattr(hold_expires, 'tzinfo') and hold_expires.tzinfo is None:
+        hold_expires = hold_expires.replace(tzinfo=timezone.utc)
+    if now > hold_expires:
+        raise HTTPException(status_code=400, detail="Hold has already expired")
+
+    # Valid pre-decision states
+    valid_statuses = {
+        EngagementStatus.ADDRESS_REVEALED.value,
+        EngagementStatus.TOUR_REQUESTED.value,
+        EngagementStatus.TOUR_CONFIRMED.value,
+        EngagementStatus.TOUR_RESCHEDULED.value,
+        EngagementStatus.TOUR_COMPLETED.value,
+    }
+    status_str = engagement.status if isinstance(engagement.status, str) else engagement.status.value
+    if status_str not in valid_statuses:
+        raise HTTPException(status_code=400, detail="Hold extension not available in current state")
+
+    from datetime import timedelta
+    engagement.hold_extended = True
+    engagement.hold_extended_at = now
+    new_expiry = hold_expires + timedelta(hours=24)
+    engagement.hold_extended_until = new_expiry
+    engagement.hold_expires_at = new_expiry
+
+    event = EngagementEvent(
+        id=str(uuid.uuid4()),
+        engagement_id=engagement.id,
+        event_type=EngagementEventType.HOLD_EXTENDED.value,
+        actor=EngagementActor.BUYER.value,
+        actor_id=user.id,
+        from_status=engagement.status if isinstance(engagement.status, str) else engagement.status.value,
+        to_status=engagement.status if isinstance(engagement.status, str) else engagement.status.value,
+        data={"new_expiry": new_expiry.isoformat()},
+    )
+    db.add(event)
+    await db.commit()
+
+    logger.info("Engagement %s: hold extended to %s", engagement.id, new_expiry.isoformat())
+    role = user.role if user else "buyer"
+    actor = _actor_for_role(role)
+    return serialize_engagement(engagement, role, actor)
+
+
 # --- Guarantee ---
 
 
@@ -894,6 +999,17 @@ async def sign_guarantee(
     engagement.guarantee_signed_at = now
     engagement.guarantee_ip_address = request.client.host if request.client else None
     engagement.guarantee_terms_version = "v1.0"  # Hardcoded for Inc 1
+
+    from datetime import timedelta
+    engagement.hold_expires_at = now + timedelta(hours=72)
+
+    # Claim sqft allocation — prevents double-booking
+    pl_result = await db.execute(
+        select(PropertyListing).where(PropertyListing.property_id == engagement.warehouse_id)
+    )
+    pl = pl_result.scalar_one_or_none()
+    if pl and engagement.sqft:
+        pl.available_sqft = (pl.available_sqft or 0) - engagement.sqft
 
     actor_id = user.id if user else "anonymous"
 
@@ -978,23 +1094,36 @@ async def get_property_details(
             detail="Property details available after guarantee is signed",
         )
 
+    from sqlalchemy.orm import selectinload
+
     result = await db.execute(
-        select(Warehouse).where(Warehouse.id == engagement.warehouse_id)
+        select(Property)
+        .where(Property.id == engagement.warehouse_id)
+        .options(
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.contacts),
+        )
     )
-    warehouse = result.scalar_one_or_none()
-    if not warehouse:
-        raise HTTPException(status_code=404, detail="Warehouse not found")
+    prop = result.scalar_one_or_none()
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
 
     logger.info("Engagement %s: property details retrieved by user %s", engagement.id, user.id if user else "anonymous")
 
+    pk = prop.knowledge
+    primary_contact = None
+    if prop.contacts:
+        primary_contact = next((c for c in prop.contacts if c.is_primary), prop.contacts[0] if prop.contacts else None)
+
     return {
-        "id": warehouse.id,
-        "name": warehouse.owner_name,
-        "address": warehouse.address,
-        "city": warehouse.city,
-        "state": warehouse.state,
-        "zip_code": warehouse.zip,
-        "total_sqft": warehouse.building_size_sqft,
+        "id": prop.id,
+        "name": primary_contact.name if primary_contact else None,
+        "address": prop.address,
+        "city": prop.city,
+        "state": prop.state,
+        "zip_code": prop.zip,
+        "total_sqft": pk.building_size_sqft if pk else None,
         "available_sqft": engagement.sqft,
     }
 
@@ -1024,6 +1153,7 @@ async def request_tour(
         except (ValueError, TypeError):
             pass
     engagement.tour_requested_time = body.preferred_time
+    engagement.tour_notes = body.tour_notes
 
     actor_id = user.id if user else "anonymous"
 
@@ -1132,6 +1262,20 @@ async def reschedule_tour(
     role = user.role if user else "buyer"
     actor_enum = _actor_for_role(role)
     engagement.tour_rescheduled_by = actor_enum.value
+
+    # Auto-extend hold if proposed tour + 48hr decision window exceeds current hold
+    from datetime import timedelta
+    if engagement.hold_expires_at:
+        proposed_dt = datetime.fromisoformat(body.new_date)
+        decision_deadline = proposed_dt + timedelta(hours=48)
+        hold_expires = engagement.hold_expires_at
+        if hasattr(hold_expires, 'tzinfo') and hold_expires.tzinfo is None:
+            hold_expires = hold_expires.replace(tzinfo=timezone.utc)
+        if hasattr(decision_deadline, 'tzinfo') and decision_deadline.tzinfo is None:
+            decision_deadline = decision_deadline.replace(tzinfo=timezone.utc)
+        if decision_deadline > hold_expires:
+            engagement.hold_expires_at = decision_deadline
+
     actor_id = user.id if user else "anonymous"
 
     try:
@@ -1165,7 +1309,8 @@ async def request_instant_book(
     if user:
         _check_access(engagement, user)
 
-    engagement.instant_book_requested_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    engagement.instant_book_requested_at = now
     engagement.path = "instant_book"
     actor_id = user.id if user else "anonymous"
 
@@ -1177,6 +1322,50 @@ async def request_instant_book(
             actor_id,
             EngagementEventType.INSTANT_BOOK_REQUESTED,
         )
+
+        # Auto-confirm and generate agreement
+        await _transition_engagement(
+            db, engagement,
+            EngagementStatus.BUYER_CONFIRMED,
+            EngagementActor.SYSTEM,
+            "system",
+            EngagementEventType.BUYER_CONFIRMED,
+            extra_data={"path": "instant_book"},
+        )
+
+        # Auto-generate and send agreement (same pattern as submit_tour_outcome)
+        from datetime import timedelta
+        agreement = EngagementAgreement(
+            id=str(uuid.uuid4()),
+            engagement_id=engagement.id,
+            version=1,
+            status="pending",
+            terms_text=_generate_agreement_terms(engagement),
+            buyer_rate_sqft=engagement.buyer_rate_sqft,
+            supplier_rate_sqft=engagement.supplier_rate_sqft,
+            monthly_buyer_total=engagement.monthly_buyer_total,
+            monthly_supplier_payout=engagement.monthly_supplier_payout,
+            sent_at=now,
+            expires_at=now + timedelta(hours=72),
+        )
+        db.add(agreement)
+
+        await _transition_engagement(
+            db, engagement,
+            EngagementStatus.AGREEMENT_SENT,
+            EngagementActor.SYSTEM,
+            "system",
+            EngagementEventType.AGREEMENT_SENT,
+        )
+
+        # Claim sqft
+        pl_result = await db.execute(
+            select(PropertyListing).where(PropertyListing.property_id == engagement.warehouse_id)
+        )
+        pl = pl_result.scalar_one_or_none()
+        if pl and engagement.sqft:
+            pl.available_sqft = (pl.available_sqft or 0) - engagement.sqft
+
         await db.commit()
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))

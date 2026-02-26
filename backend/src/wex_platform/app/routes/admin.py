@@ -18,8 +18,9 @@ from sqlalchemy.orm import selectinload
 
 from wex_platform.infra.database import get_db
 from wex_platform.domain.models import (
-    Warehouse,
-    TruthCore,
+    Property,
+    PropertyKnowledge,
+    PropertyListing,
     Buyer,
     BuyerLedger,
     Deal,
@@ -69,17 +70,17 @@ async def get_overview(db: AsyncSession = Depends(get_db)):
 
     Returns aggregate counts and economics across the entire clearinghouse.
     """
-    # Total warehouses
+    # Total properties
     total_wh_result = await db.execute(
-        select(func.count()).select_from(Warehouse)
+        select(func.count()).select_from(Property)
     )
     total_warehouses = total_wh_result.scalar() or 0
 
-    # Active / inactive warehouse counts
+    # Active / inactive property counts (via PropertyListing activation_status)
     active_wh_result = await db.execute(
         select(func.count())
-        .select_from(TruthCore)
-        .where(TruthCore.activation_status == "on")
+        .select_from(PropertyListing)
+        .where(PropertyListing.activation_status == "on")
     )
     active_warehouses = active_wh_result.scalar() or 0
     inactive_warehouses = total_warehouses - active_warehouses
@@ -142,43 +143,51 @@ async def get_overview(db: AsyncSession = Depends(get_db)):
 
 @router.get("/warehouses")
 async def list_warehouses(db: AsyncSession = Depends(get_db)):
-    """All warehouses with truth core data, activation status, and supplier rates.
+    """All properties with listing data, activation status, and supplier rates.
 
     Admin has full visibility -- no economic isolation.
     """
     result = await db.execute(
-        select(Warehouse).options(
-            selectinload(Warehouse.truth_core),
-            selectinload(Warehouse.deals),
+        select(Property).options(
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
         )
     )
-    warehouses = result.scalars().all()
+    properties = result.scalars().all()
 
     items = []
-    for wh in warehouses:
+    for prop in properties:
         activation_status = None
         supplier_rate = None
         available_sqft = None
+        building_size_sqft = None
 
-        if wh.truth_core:
-            tc = wh.truth_core
-            activation_status = tc.activation_status
-            supplier_rate = tc.supplier_rate_per_sqft
-            available_sqft = tc.max_sqft
+        pk = prop.knowledge
+        pl = prop.listing
 
-        # Count current active placements
-        active_placements = 0
-        if wh.deals:
-            active_placements = sum(
-                1 for d in wh.deals if d.status in ("active", "confirmed")
-            )
+        if pl:
+            activation_status = pl.activation_status
+            supplier_rate = pl.supplier_rate_per_sqft
+            available_sqft = pl.max_sqft
+
+        if pk:
+            building_size_sqft = pk.building_size_sqft
+
+        # Count current active placements via Deal table
+        deal_count_result = await db.execute(
+            select(func.count())
+            .select_from(Deal)
+            .where(Deal.warehouse_id == prop.id)
+            .where(Deal.status.in_(("active", "confirmed")))
+        )
+        active_placements = deal_count_result.scalar() or 0
 
         items.append({
-            "id": wh.id,
-            "address": wh.address,
-            "city": wh.city,
-            "state": wh.state,
-            "building_size_sqft": wh.building_size_sqft,
+            "id": prop.id,
+            "address": prop.address,
+            "city": prop.city,
+            "state": prop.state,
+            "building_size_sqft": building_size_sqft,
             "activation_status": activation_status,
             "supplier_rate": supplier_rate,
             "available_sqft": available_sqft,

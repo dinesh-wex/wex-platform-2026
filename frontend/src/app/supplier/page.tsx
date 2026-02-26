@@ -488,6 +488,7 @@ function SupplierDashboard() {
               label="Projected Income"
               value={totalProjected}
               format="currency"
+              decimals={0}
               suffix="/yr"
               sublabel={loading ? "Loading..." : undefined}
               hero
@@ -501,6 +502,7 @@ function SupplierDashboard() {
               value={parseFloat(avgRate.toFixed(2))}
               prefix="$"
               suffix="/sqft"
+              decimals={2}
               sublabel={warehousesWithRate.length > 0 ? `Across ${warehousesWithRate.length} ${warehousesWithRate.length === 1 ? "property" : "properties"}` : undefined}
             />
             <MetricCard

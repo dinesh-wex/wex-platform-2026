@@ -358,6 +358,14 @@ export const api = {
   getBuyerPayments: () =>
     fetchAPI('/api/buyer/payments'),
 
+  // Hold management
+  extendHold: (engagementId: string) =>
+    fetchAPI(`/api/engagements/${engagementId}/hold/extend`, { method: "POST" }),
+
+  // Anonymous Q&A
+  submitAnonymousQuestion: (warehouseId: string, body: { question_text: string; session_token?: string; email?: string }) =>
+    fetchAPI(`/api/properties/${warehouseId}/questions/anonymous`, { method: "POST", body: JSON.stringify(body) }),
+
   // Health
   health: () => fetchAPI('/health'),
 

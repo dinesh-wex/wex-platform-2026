@@ -21,6 +21,11 @@ from wex_platform.app.config import get_settings
 from wex_platform.domain.models import (
     Warehouse,
     TruthCore,
+    Property,
+    PropertyKnowledge,
+    PropertyListing,
+    PropertyContact,
+    PropertyEvent,
     BuyerNeed,
     Buyer,
     ContextualMemory,
@@ -55,10 +60,11 @@ class DLAService:
         Returns:
             The 32-character hex token string.
         """
-        # Verify warehouse and buyer need exist
+        # Verify property/warehouse and buyer need exist
+        prop = await self.db.get(Property, warehouse_id)
         warehouse = await self.db.get(Warehouse, warehouse_id)
-        if not warehouse:
-            raise ValueError(f"Warehouse {warehouse_id} not found")
+        if not prop and not warehouse:
+            raise ValueError(f"Property {warehouse_id} not found")
 
         buyer_need = await self.db.get(BuyerNeed, buyer_need_id)
         if not buyer_need:
@@ -86,9 +92,20 @@ class DLAService:
         )
         self.db.add(dla_token)
 
-        # Update warehouse outreach tracking
-        warehouse.last_outreach_at = datetime.now(timezone.utc)
-        warehouse.outreach_count = (warehouse.outreach_count or 0) + 1
+        # Update outreach tracking on legacy Warehouse if it exists
+        if warehouse:
+            warehouse.last_outreach_at = datetime.now(timezone.utc)
+            warehouse.outreach_count = (warehouse.outreach_count or 0) + 1
+
+        # Also log a PropertyEvent on the new schema
+        if prop:
+            outreach_event = PropertyEvent(
+                property_id=warehouse_id,
+                event_type="dla_outreach",
+                actor="system",
+                metadata_={"buyer_need_id": buyer_need_id, "token": token},
+            )
+            self.db.add(outreach_event)
 
         await self.db.commit()
 
@@ -119,14 +136,27 @@ class DLAService:
         """
         dla_token = await self._get_valid_token(token)
 
-        # Load warehouse with truth core
-        result = await self.db.execute(
+        # Load property (new schema first, fall back to legacy)
+        prop_result = await self.db.execute(
+            select(Property)
+            .options(
+                selectinload(Property.knowledge),
+                selectinload(Property.listing),
+                selectinload(Property.contacts),
+            )
+            .where(Property.id == dla_token.warehouse_id)
+        )
+        prop = prop_result.scalar_one_or_none()
+
+        # Also load legacy warehouse for backward compat
+        wh_result = await self.db.execute(
             select(Warehouse)
             .options(selectinload(Warehouse.truth_core))
             .where(Warehouse.id == dla_token.warehouse_id)
         )
-        warehouse = result.scalar_one_or_none()
-        if not warehouse:
+        warehouse = wh_result.scalar_one_or_none()
+
+        if not prop and not warehouse:
             raise ValueError("Property not found")
 
         # Load buyer need (anonymized)
@@ -135,32 +165,62 @@ class DLAService:
             raise ValueError("Buyer requirement no longer active")
 
         # Build property data (full — supplier sees their own property)
-        tc = warehouse.truth_core
-        property_data = {
-            "warehouse_id": warehouse.id,
-            "address": warehouse.address,
-            "city": warehouse.city,
-            "state": warehouse.state,
-            "zip": warehouse.zip,
-            "building_size_sqft": warehouse.building_size_sqft,
-            "year_built": warehouse.year_built,
-            "construction_type": warehouse.construction_type,
-            "property_type": warehouse.property_type,
-            "primary_image_url": warehouse.primary_image_url,
-            "owner_name": warehouse.owner_name,
-        }
-
-        if tc:
-            property_data.update({
-                "clear_height_ft": tc.clear_height_ft,
-                "dock_doors_receiving": tc.dock_doors_receiving,
-                "dock_doors_shipping": tc.dock_doors_shipping,
-                "drive_in_bays": tc.drive_in_bays,
-                "parking_spaces": tc.parking_spaces,
-                "has_office_space": tc.has_office_space,
-                "has_sprinkler": tc.has_sprinkler,
-                "power_supply": tc.power_supply,
-            })
+        if prop:
+            pk = prop.knowledge
+            # Get primary contact name
+            primary_contact = next(
+                (c for c in (prop.contacts or []) if c.is_primary), None
+            )
+            property_data = {
+                "warehouse_id": prop.id,
+                "address": prop.address,
+                "city": prop.city,
+                "state": prop.state,
+                "zip": prop.zip,
+                "building_size_sqft": pk.building_size_sqft if pk else None,
+                "year_built": pk.year_built if pk else None,
+                "construction_type": pk.construction_type if pk else None,
+                "property_type": prop.property_type,
+                "primary_image_url": prop.primary_image_url,
+                "owner_name": primary_contact.name if primary_contact else None,
+            }
+            if pk:
+                property_data.update({
+                    "clear_height_ft": pk.clear_height_ft,
+                    "dock_doors_receiving": pk.dock_doors_receiving,
+                    "dock_doors_shipping": pk.dock_doors_shipping,
+                    "drive_in_bays": pk.drive_in_bays,
+                    "parking_spaces": pk.parking_spaces,
+                    "has_office_space": pk.has_office,
+                    "has_sprinkler": pk.has_sprinkler,
+                    "power_supply": pk.power_supply,
+                })
+        else:
+            tc = warehouse.truth_core
+            property_data = {
+                "warehouse_id": warehouse.id,
+                "address": warehouse.address,
+                "city": warehouse.city,
+                "state": warehouse.state,
+                "zip": warehouse.zip,
+                "building_size_sqft": warehouse.building_size_sqft,
+                "year_built": warehouse.year_built,
+                "construction_type": warehouse.construction_type,
+                "property_type": warehouse.property_type,
+                "primary_image_url": warehouse.primary_image_url,
+                "owner_name": warehouse.owner_name,
+            }
+            if tc:
+                property_data.update({
+                    "clear_height_ft": tc.clear_height_ft,
+                    "dock_doors_receiving": tc.dock_doors_receiving,
+                    "dock_doors_shipping": tc.dock_doors_shipping,
+                    "drive_in_bays": tc.drive_in_bays,
+                    "parking_spaces": tc.parking_spaces,
+                    "has_office_space": tc.has_office_space,
+                    "has_sprinkler": tc.has_sprinkler,
+                    "power_supply": tc.power_supply,
+                })
 
         # Build anonymized buyer requirement (no name, company, email)
         buyer_requirement = {
@@ -179,13 +239,17 @@ class DLAService:
         }
 
         # Get market rate range
-        market_range = await self._get_market_range(warehouse.zip or "")
+        zip_code = (prop.zip if prop else None) or (warehouse.zip if warehouse else "") or ""
+        market_range = await self._get_market_range(zip_code)
 
         # Track that supplier opened the link
         if dla_token.status == "pending":
             dla_token.status = "interested"
             dla_token.last_step_reached = "property_confirm"
-            warehouse.supplier_status = "interested"
+            if prop:
+                prop.relationship_status = "interested"
+            if warehouse:
+                warehouse.supplier_status = "interested"
             await self.db.commit()
 
         return {
@@ -216,44 +280,82 @@ class DLAService:
             Dict with suggested_rate, market_low, market_high, and
             competing_spaces count.
         """
+        prop = await self.db.get(Property, warehouse_id)
         warehouse = await self.db.get(Warehouse, warehouse_id)
         buyer_need = await self.db.get(BuyerNeed, buyer_need_id)
 
-        if not warehouse or not buyer_need:
+        if (not prop and not warehouse) or not buyer_need:
             return {"suggested_rate": 0, "market_low": 0, "market_high": 0, "competing_spaces": 0}
 
+        # Determine zip and state from new or legacy model
+        prop_zip = (prop.zip if prop else None) or (warehouse.zip if warehouse else "") or ""
+        prop_state = (prop.state if prop else None) or (warehouse.state if warehouse else "")
+
         # 1. Get market rates from cache
-        market_range = await self._get_market_range(warehouse.zip or "")
+        market_range = await self._get_market_range(prop_zip)
 
         # 2. Get Tier 1 rates in the same area (confirmed in-network rates)
+        # Try new schema first (PropertyListing + Property)
         tier1_result = await self.db.execute(
-            select(TruthCore.supplier_rate_per_sqft)
-            .join(Warehouse, Warehouse.id == TruthCore.warehouse_id)
+            select(PropertyListing.supplier_rate_per_sqft)
+            .join(Property, Property.id == PropertyListing.property_id)
             .where(
                 and_(
-                    Warehouse.supplier_status == "in_network",
-                    TruthCore.activation_status == "on",
-                    Warehouse.state == warehouse.state,
+                    Property.relationship_status == "active",
+                    PropertyListing.activation_status == "on",
+                    Property.state == prop_state,
                 )
             )
         )
         tier1_rates = [r[0] for r in tier1_result.all() if r[0] is not None]
 
+        # Fall back to legacy if no new-schema rates found
+        if not tier1_rates:
+            tier1_legacy = await self.db.execute(
+                select(TruthCore.supplier_rate_per_sqft)
+                .join(Warehouse, Warehouse.id == TruthCore.warehouse_id)
+                .where(
+                    and_(
+                        Warehouse.supplier_status == "in_network",
+                        TruthCore.activation_status == "on",
+                        Warehouse.state == prop_state,
+                    )
+                )
+            )
+            tier1_rates = [r[0] for r in tier1_legacy.all() if r[0] is not None]
+
         # 3. Count competing spaces within buyer budget
         competing_query = await self.db.execute(
             select(func.count())
-            .select_from(TruthCore)
-            .join(Warehouse, Warehouse.id == TruthCore.warehouse_id)
+            .select_from(PropertyListing)
+            .join(Property, Property.id == PropertyListing.property_id)
             .where(
                 and_(
-                    Warehouse.supplier_status == "in_network",
-                    TruthCore.activation_status == "on",
-                    Warehouse.state == warehouse.state,
-                    TruthCore.supplier_rate_per_sqft <= (buyer_need.max_budget_per_sqft or 999),
+                    Property.relationship_status == "active",
+                    PropertyListing.activation_status == "on",
+                    Property.state == prop_state,
+                    PropertyListing.supplier_rate_per_sqft <= (buyer_need.max_budget_per_sqft or 999),
                 )
             )
         )
         competing_spaces = competing_query.scalar() or 0
+
+        # Also count legacy competing spaces
+        if competing_spaces == 0:
+            competing_legacy = await self.db.execute(
+                select(func.count())
+                .select_from(TruthCore)
+                .join(Warehouse, Warehouse.id == TruthCore.warehouse_id)
+                .where(
+                    and_(
+                        Warehouse.supplier_status == "in_network",
+                        TruthCore.activation_status == "on",
+                        Warehouse.state == prop_state,
+                        TruthCore.supplier_rate_per_sqft <= (buyer_need.max_budget_per_sqft or 999),
+                    )
+                )
+            )
+            competing_spaces = competing_legacy.scalar() or 0
 
         # 4. Calculate suggested rate
         # Priority: buyer budget ceiling > market median > tier 1 average
@@ -314,6 +416,7 @@ class DLAService:
 
         # Load buyer need for budget context
         buyer_need = await self.db.get(BuyerNeed, dla_token.buyer_need_id)
+        prop = await self.db.get(Property, dla_token.warehouse_id)
         warehouse = await self.db.get(Warehouse, dla_token.warehouse_id)
 
         dla_token.rate_accepted = accepted
@@ -342,21 +445,39 @@ class DLAService:
             # Calculate how many competing spaces are within buyer budget
             buyer_budget = buyer_need.max_budget_per_sqft if buyer_need else 0
             competing = 0
-            if buyer_budget and warehouse:
+            prop_state = (prop.state if prop else None) or (warehouse.state if warehouse else "")
+            if buyer_budget and prop_state:
+                # Try new schema first
                 competing_result = await self.db.execute(
                     select(func.count())
-                    .select_from(TruthCore)
-                    .join(Warehouse, Warehouse.id == TruthCore.warehouse_id)
+                    .select_from(PropertyListing)
+                    .join(Property, Property.id == PropertyListing.property_id)
                     .where(
                         and_(
-                            Warehouse.supplier_status == "in_network",
-                            TruthCore.activation_status == "on",
-                            Warehouse.state == warehouse.state,
-                            TruthCore.supplier_rate_per_sqft <= buyer_budget,
+                            Property.relationship_status == "active",
+                            PropertyListing.activation_status == "on",
+                            Property.state == prop_state,
+                            PropertyListing.supplier_rate_per_sqft <= buyer_budget,
                         )
                     )
                 )
                 competing = competing_result.scalar() or 0
+                # Fall back to legacy
+                if competing == 0 and warehouse:
+                    competing_legacy = await self.db.execute(
+                        select(func.count())
+                        .select_from(TruthCore)
+                        .join(Warehouse, Warehouse.id == TruthCore.warehouse_id)
+                        .where(
+                            and_(
+                                Warehouse.supplier_status == "in_network",
+                                TruthCore.activation_status == "on",
+                                Warehouse.state == warehouse.state,
+                                TruthCore.supplier_rate_per_sqft <= buyer_budget,
+                            )
+                        )
+                    )
+                    competing = competing_legacy.scalar() or 0
 
             await self.db.commit()
 
@@ -404,30 +525,61 @@ class DLAService:
         """
         dla_token = await self._get_valid_token(token, allow_statuses=["rate_decided"])
 
-        warehouse = await self.db.execute(
+        # Load new schema
+        prop_result = await self.db.execute(
+            select(Property)
+            .options(selectinload(Property.listing), selectinload(Property.contacts))
+            .where(Property.id == dla_token.warehouse_id)
+        )
+        prop = prop_result.scalar_one_or_none()
+
+        # Load legacy schema
+        wh_result = await self.db.execute(
             select(Warehouse)
             .options(selectinload(Warehouse.truth_core))
             .where(Warehouse.id == dla_token.warehouse_id)
         )
-        warehouse = warehouse.scalar_one_or_none()
-        if not warehouse:
+        warehouse = wh_result.scalar_one_or_none()
+
+        if not prop and not warehouse:
             raise ValueError("Property not found")
 
         buyer_need = await self.db.get(BuyerNeed, dla_token.buyer_need_id)
 
-        # 1. Flip supplier status to in_network
-        warehouse.supplier_status = "in_network"
-        warehouse.onboarded_at = datetime.now(timezone.utc)
+        # 1. Flip status to active/in_network
+        if prop:
+            prop.relationship_status = "active"
+        if warehouse:
+            warehouse.supplier_status = "in_network"
+            warehouse.onboarded_at = datetime.now(timezone.utc)
 
-        # 2. Activate truth core if exists
-        tc = warehouse.truth_core
+        # 2. Activate listing (new schema) and truth core (legacy)
+        if prop and prop.listing:
+            pl = prop.listing
+            pl.activation_status = "on"
+            pl.activated_at = datetime.now(timezone.utc)
+            if dla_token.supplier_rate:
+                pl.supplier_rate_per_sqft = dla_token.supplier_rate
+
+        tc = warehouse.truth_core if warehouse else None
         if tc:
             tc.activation_status = "on"
             tc.toggled_at = datetime.now(timezone.utc)
             tc.toggle_reason = "DLA agreement confirmed"
-            # Update rate to the agreed rate
             if dla_token.supplier_rate:
                 tc.supplier_rate_per_sqft = dla_token.supplier_rate
+
+        # Log PropertyEvent for DLA confirmation
+        if prop:
+            self.db.add(PropertyEvent(
+                property_id=prop.id,
+                event_type="dla_confirmed",
+                actor="system",
+                metadata_={
+                    "buyer_need_id": dla_token.buyer_need_id,
+                    "rate_agreed": dla_token.supplier_rate,
+                },
+            ))
 
         # 3. Update DLA token
         dla_token.status = "confirmed"
@@ -467,14 +619,22 @@ class DLAService:
 
         await self.db.commit()
 
+        property_id = prop.id if prop else (warehouse.id if warehouse else dla_token.warehouse_id)
         logger.info(
-            "DLA confirmed: warehouse %s now in_network (token %s)",
-            warehouse.id,
+            "DLA confirmed: property %s now active/in_network (token %s)",
+            property_id,
             token,
         )
 
         # 6. Buyer notification (async — fire and forget)
         buyer_notification = None
+        city = (prop.city if prop else None) or (warehouse.city if warehouse else "")
+        bldg_sqft = None
+        if prop and prop.knowledge:
+            bldg_sqft = prop.knowledge.building_size_sqft
+        elif warehouse:
+            bldg_sqft = warehouse.building_size_sqft
+
         if buyer_need:
             buyer = await self.db.get(Buyer, buyer_need.buyer_id)
             if buyer:
@@ -484,16 +644,16 @@ class DLAService:
                     "buyer_phone": buyer.phone,
                     "message": (
                         f"Good news — a new space just confirmed availability for your "
-                        f"requirements. {warehouse.city or ''}, "
-                        f"{warehouse.building_size_sqft or 'N/A'} sqft, "
+                        f"requirements. {city or ''}, "
+                        f"{bldg_sqft or 'N/A'} sqft, "
                         f"${dla_token.supplier_rate:.2f}/sqft."
                     ),
                 }
 
         return {
             "status": "confirmed",
-            "warehouse_id": warehouse.id,
-            "supplier_status": "in_network",
+            "warehouse_id": property_id,
+            "supplier_status": "active",
             "rate_agreed": dla_token.supplier_rate,
             "buyer_notification": buyer_notification,
         }
@@ -524,9 +684,10 @@ class DLAService:
         if not dla_token:
             raise ValueError("Invalid token")
 
+        prop = await self.db.get(Property, dla_token.warehouse_id)
         warehouse = await self.db.get(Warehouse, dla_token.warehouse_id)
 
-        # Map outcome to supplier_status
+        # Map outcome to relationship_status (new) / supplier_status (legacy)
         status_map = {
             "declined": "declined",
             "no_response": "unresponsive",
@@ -536,6 +697,10 @@ class DLAService:
 
         dla_token.status = outcome
         dla_token.decline_reason = reason
+
+        if prop:
+            new_rel_status = status_map.get(outcome, prop.relationship_status)
+            prop.relationship_status = new_rel_status
 
         if warehouse:
             new_status = status_map.get(outcome, warehouse.supplier_status)
@@ -602,8 +767,25 @@ class DLAService:
         if not buyer_need:
             raise ValueError(f"Buyer need {buyer_need_id} not found")
 
-        # Query off-network candidates
-        result = await self.db.execute(
+        # Query off-network candidates from new schema
+        prop_result = await self.db.execute(
+            select(Property)
+            .options(
+                selectinload(Property.knowledge),
+                selectinload(Property.listing),
+                selectinload(Property.contacts),
+                selectinload(Property.memories),
+            )
+            .where(
+                Property.relationship_status.in_(
+                    ["prospect", "earncheck_only", "interested"]
+                )
+            )
+        )
+        properties = prop_result.scalars().all()
+
+        # Also query legacy off-network candidates
+        wh_result = await self.db.execute(
             select(Warehouse)
             .options(
                 selectinload(Warehouse.truth_core),
@@ -614,18 +796,49 @@ class DLAService:
                     Warehouse.supplier_status.in_(
                         ["third_party", "earncheck_only", "interested"]
                     ),
-                    # Exclude recently outreached (max 1 outreach per 30 days)
-                    # This is enforced via outreach_count and last_outreach_at
                 )
             )
         )
-        warehouses = result.scalars().all()
+        warehouses = wh_result.scalars().all()
 
         # Score and filter candidates
         scored = []
         now = datetime.now(timezone.utc)
+        seen_ids = set()
 
+        # Score new-schema properties first
+        for p in properties:
+            seen_ids.add(p.id)
+            primary_contact = next(
+                (c for c in (p.contacts or []) if c.is_primary), None
+            )
+            # Skip if no phone for SMS outreach
+            if not primary_contact or not primary_contact.phone:
+                continue
+
+            score = self._score_property_candidate(p, buyer_need)
+            if score > 0:
+                scored.append({
+                    "warehouse_id": p.id,
+                    "owner_name": primary_contact.name if primary_contact else None,
+                    "owner_phone": primary_contact.phone if primary_contact else None,
+                    "owner_email": primary_contact.email if primary_contact else None,
+                    "address": p.address,
+                    "city": p.city,
+                    "state": p.state,
+                    "zip": p.zip,
+                    "building_size_sqft": p.knowledge.building_size_sqft if p.knowledge else None,
+                    "property_type": p.property_type,
+                    "supplier_status": p.relationship_status,
+                    "score": score,
+                    "outreach_count": 0,
+                })
+
+        # Score legacy warehouses (skip already-seen IDs)
         for wh in warehouses:
+            if wh.id in seen_ids:
+                continue
+
             # Skip if outreached in last 30 days
             if wh.last_outreach_at:
                 days_since = (now - wh.last_outreach_at).days
@@ -661,6 +874,55 @@ class DLAService:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _score_property_candidate(self, prop: Property, buyer_need: BuyerNeed) -> float:
+        """Score a new-schema Property candidate against a buyer need."""
+        score = 0.0
+        pk = prop.knowledge
+        pl = prop.listing
+
+        # Size match (up to 40 points)
+        wh_sqft = (pk.building_size_sqft if pk else None) or (pl.max_sqft if pl else 0)
+        need_sqft = buyer_need.max_sqft or buyer_need.min_sqft or 0
+
+        if wh_sqft and need_sqft:
+            ratio = min(wh_sqft, need_sqft) / max(wh_sqft, need_sqft)
+            score += ratio * 40
+
+        # Location match (up to 30 points)
+        if buyer_need.state and prop.state:
+            if buyer_need.state.upper() == prop.state.upper():
+                score += 15
+                if buyer_need.city and prop.city:
+                    if buyer_need.city.lower() == prop.city.lower():
+                        score += 15
+                    elif buyer_need.city.lower() in (prop.city or "").lower():
+                        score += 10
+
+        # Previous engagement bonus (up to 20 points)
+        if prop.relationship_status == "earncheck_only":
+            score += 20
+        elif prop.relationship_status == "interested":
+            score += 15
+        elif prop.relationship_status == "prospect":
+            score += 5
+
+        # Data completeness (up to 10 points)
+        data_fields = [
+            pk.building_size_sqft if pk else None,
+            pk.year_built if pk else None,
+            pk.construction_type if pk else None,
+            prop.property_type,
+        ]
+        primary_contact = next(
+            (c for c in (prop.contacts or []) if c.is_primary), None
+        )
+        if primary_contact:
+            data_fields.extend([primary_contact.name, primary_contact.phone])
+        populated = sum(1 for f in data_fields if f)
+        score += (populated / max(len(data_fields), 1)) * 10
+
+        return round(score, 1)
 
     def _score_candidate(self, warehouse: Warehouse, buyer_need: BuyerNeed) -> float:
         """Score an off-network candidate against a buyer need.

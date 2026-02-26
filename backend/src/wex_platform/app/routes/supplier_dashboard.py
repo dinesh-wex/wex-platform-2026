@@ -26,8 +26,11 @@ from sqlalchemy.orm.attributes import flag_modified
 from wex_platform.infra.database import get_db
 from wex_platform.domain.models import (
     User,
-    Warehouse,
-    TruthCore,
+    Property,
+    PropertyKnowledge,
+    PropertyListing,
+    PropertyContact,
+    PropertyEvent,
     Deal,
     SupplierAgreement,
     SupplierLedger,
@@ -36,6 +39,7 @@ from wex_platform.domain.models import (
     BuyerEngagement,
     UploadToken,
 )
+from wex_platform.services.property_serializer import serialize_property_as_warehouse, serialize_truth_core_compat
 from wex_platform.app.routes.auth import get_current_user_dep
 
 logger = logging.getLogger(__name__)
@@ -165,23 +169,26 @@ class PhotoReorderRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helper: get supplier's warehouses
+# Helper: get supplier's properties (via PropertyContact join)
 # ---------------------------------------------------------------------------
 
 
-async def _get_supplier_warehouses(
+async def _get_supplier_properties(
     db: AsyncSession, user: User
-) -> list[Warehouse]:
-    """Return all warehouses belonging to the current supplier."""
+) -> list[Property]:
+    """Return all properties belonging to the current supplier via PropertyContact email match."""
     result = await db.execute(
-        select(Warehouse)
-        .where(func.lower(Warehouse.owner_email) == func.lower(user.email))
+        select(Property)
+        .join(PropertyContact, PropertyContact.property_id == Property.id)
+        .where(func.lower(PropertyContact.email) == func.lower(user.email))
         .options(
-            selectinload(Warehouse.truth_core),
-            selectinload(Warehouse.deals),
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.contacts),
+            selectinload(Property.events),
         )
     )
-    return list(result.scalars().all())
+    return list(result.unique().scalars().all())
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +203,9 @@ async def get_portfolio(
     db: AsyncSession = Depends(get_db),
 ):
     """Return portfolio summary for the authenticated supplier."""
-    warehouses = await _get_supplier_warehouses(db, user)
+    properties = await _get_supplier_properties(db, user)
 
-    total_properties = len(warehouses)
+    total_properties = len(properties)
     active_properties = 0
     total_capacity = 0
     occupied_sqft = 0
@@ -206,17 +213,28 @@ async def get_portfolio(
     rate_count = 0
     total_monthly = 0.0
 
-    for wh in warehouses:
-        tc = wh.truth_core
-        if tc and tc.activation_status == "on":
+    prop_ids = [p.id for p in properties]
+
+    # Fetch active deals for all properties
+    deal_map: dict[str, list] = {}
+    if prop_ids:
+        deal_result = await db.execute(
+            select(Deal).where(Deal.warehouse_id.in_(prop_ids))
+        )
+        for deal in deal_result.scalars().all():
+            deal_map.setdefault(deal.warehouse_id, []).append(deal)
+
+    for prop in properties:
+        pl = prop.listing
+        if pl and pl.activation_status == "on":
             active_properties += 1
-            total_capacity += tc.max_sqft or 0
-            if tc.supplier_rate_per_sqft:
-                total_rate += tc.supplier_rate_per_sqft
+            total_capacity += pl.max_sqft or 0
+            if pl.supplier_rate_per_sqft:
+                total_rate += pl.supplier_rate_per_sqft
                 rate_count += 1
 
         # Sum active deal revenue
-        for deal in (wh.deals or []):
+        for deal in deal_map.get(prop.id, []):
             if deal.status in ("active", "confirmed"):
                 occupied_sqft += deal.sqft_allocated or 0
                 total_monthly += (deal.supplier_rate or 0) * (deal.sqft_allocated or 0)
@@ -244,10 +262,10 @@ async def get_actions(
     db: AsyncSession = Depends(get_db),
 ):
     """Return pending action items sorted by urgency."""
-    warehouses = await _get_supplier_warehouses(db, user)
-    wh_ids = [wh.id for wh in warehouses]
+    properties = await _get_supplier_properties(db, user)
+    prop_ids = [p.id for p in properties]
 
-    if not wh_ids:
+    if not prop_ids:
         return []
 
     actions: list[dict] = []
@@ -256,7 +274,7 @@ async def get_actions(
     sr_result = await db.execute(
         select(SupplierResponse)
         .where(
-            SupplierResponse.property_id.in_(wh_ids),
+            SupplierResponse.property_id.in_(prop_ids),
             SupplierResponse.outcome.is_(None),
         )
         .order_by(SupplierResponse.deadline_at.asc())
@@ -280,7 +298,7 @@ async def get_actions(
     tour_result = await db.execute(
         select(Deal)
         .where(
-            Deal.warehouse_id.in_(wh_ids),
+            Deal.warehouse_id.in_(prop_ids),
             Deal.tour_status == "requested",
         )
         .order_by(Deal.tour_scheduled_at.asc())
@@ -304,7 +322,7 @@ async def get_actions(
     agree_result = await db.execute(
         select(SupplierAgreement)
         .where(
-            SupplierAgreement.warehouse_id.in_(wh_ids),
+            SupplierAgreement.warehouse_id.in_(prop_ids),
             SupplierAgreement.status == "draft",
         )
         .order_by(SupplierAgreement.created_at.asc())
@@ -336,81 +354,82 @@ async def get_actions(
 # ---------------------------------------------------------------------------
 
 
-def _build_property_name(wh: Warehouse) -> str:
+def _build_property_name(prop: Property) -> str:
     """Construct a display name from address components since DB has no name field."""
-    parts = [wh.address]
-    if wh.city:
-        parts.append(wh.city)
+    parts = [prop.address]
+    if prop.city:
+        parts.append(prop.city)
     return ", ".join(parts) if parts else "Unnamed Property"
 
 
-def _derive_frontend_status(wh: Warehouse, tc) -> str:
-    """Map DB activation_status / supplier_status to frontend status values.
+def _derive_frontend_status(prop: Property, pl: PropertyListing | None) -> str:
+    """Map DB activation_status / relationship_status to frontend status values.
 
     Frontend expects: 'in_network', 'in_network_paused', 'onboarding', etc.
-    DB has: truth_core.activation_status ('on'/'off') and warehouse.supplier_status.
+    DB has: PropertyListing.activation_status ('on'/'off') and Property.relationship_status.
 
-    truth_core.activation_status is the primary source of truth for the toggle:
+    PropertyListing.activation_status is the primary source of truth for the toggle:
     - 'on'  -> 'in_network'
     - 'off' -> 'in_network_paused'
-    If there is no truth_core, fall back to warehouse.supplier_status.
+    If there is no PropertyListing, fall back to relationship_status.
     """
-    if tc:
-        if tc.activation_status == "on":
+    if pl:
+        if pl.activation_status == "on":
             return "in_network"
-        if tc.activation_status == "off":
+        if pl.activation_status == "off":
             return "in_network_paused"
-    # No truth core — fall back to supplier_status
-    if wh.supplier_status in ("onboarding", "third_party"):
+    # No listing -- fall back to relationship_status
+    from wex_platform.services.property_serializer import _relationship_to_supplier_status
+    supplier_status = _relationship_to_supplier_status(prop.relationship_status)
+    if supplier_status in ("onboarding", "third_party"):
         return "onboarding"
-    return wh.supplier_status or "onboarding"
+    return supplier_status or "onboarding"
 
 
-def _build_truth_core_dict(wh: Warehouse, tc: TruthCore) -> dict:
-    """Map DB TruthCore + Warehouse columns to the frontend TruthCore interface.
+def _build_truth_core_dict(prop: Property, pk: PropertyKnowledge | None, pl: PropertyListing | None) -> dict:
+    """Map DB PropertyKnowledge + PropertyListing to the frontend TruthCore interface.
 
     The frontend TruthCore interface uses different field names than the DB:
-    - building_sqft (from warehouse.building_size_sqft)
-    - dock_doors (from tc.dock_doors_receiving + tc.dock_doors_shipping)
-    - sprinkler (from tc.has_sprinkler)
-    - available_sqft (from tc.max_sqft)
-    - min_rentable_sqft (from tc.min_sqft)
-    - has_office (from tc.has_office_space)
-    - target_rate_sqft (from tc.supplier_rate_per_sqft)
-    - year_built, construction_type, zoning, lot_size_acres from warehouse
+    - building_sqft (from pk.building_size_sqft)
+    - dock_doors (from pk.dock_doors_receiving + pk.dock_doors_shipping)
+    - sprinkler (from pk.has_sprinkler)
+    - available_sqft (from pl.max_sqft)
+    - min_rentable_sqft (from pl.min_sqft)
+    - has_office (from pk.has_office)
+    - target_rate_sqft (from pl.supplier_rate_per_sqft)
+    - year_built, construction_type, zoning, lot_size_acres from pk
     """
     return {
-        # Building specs (sourced from warehouse table)
-        "building_sqft": wh.building_size_sqft,
-        "year_built": wh.year_built,
-        "construction_type": wh.construction_type,
-        "zoning": wh.zoning,
-        "lot_size_acres": wh.lot_size_acres,
-        # Building specs (sourced from truth_core table)
-        "clear_height_ft": tc.clear_height_ft,
-        "dock_doors": (tc.dock_doors_receiving or 0) + (tc.dock_doors_shipping or 0),
-        "drive_in_bays": tc.drive_in_bays,
-        "parking_spaces": tc.parking_spaces,
-        "sprinkler": tc.has_sprinkler,
-        "power_supply": tc.power_supply,
-        # Configuration
-        "available_sqft": tc.max_sqft,
-        "min_rentable_sqft": tc.min_sqft,
-        "activity_tier": tc.activity_tier,
-        "has_office": tc.has_office_space,
-        "weekend_access": getattr(tc, "weekend_access", None),
-        "access_24_7": getattr(tc, "access_24_7", None),
-        "min_term_months": tc.min_term_months,
-        "available_from": tc.available_from.isoformat() if tc.available_from else None,
+        # Building specs (sourced from PropertyKnowledge)
+        "building_sqft": pk.building_size_sqft if pk else None,
+        "year_built": pk.year_built if pk else None,
+        "construction_type": pk.construction_type if pk else None,
+        "zoning": pk.zoning if pk else None,
+        "lot_size_acres": pk.lot_size_acres if pk else None,
+        "clear_height_ft": pk.clear_height_ft if pk else None,
+        "dock_doors": ((pk.dock_doors_receiving or 0) + (pk.dock_doors_shipping or 0)) if pk else 0,
+        "drive_in_bays": pk.drive_in_bays if pk else None,
+        "parking_spaces": pk.parking_spaces if pk else None,
+        "sprinkler": pk.has_sprinkler if pk else None,
+        "power_supply": pk.power_supply if pk else None,
+        # Configuration (sourced from PropertyListing)
+        "available_sqft": pl.max_sqft if pl else None,
+        "min_rentable_sqft": pl.min_sqft if pl else None,
+        "activity_tier": pk.activity_tier if pk else None,
+        "has_office": pk.has_office if pk else None,
+        "weekend_access": pk.weekend_access if pk else None,
+        "access_24_7": None,  # Not present in new schema
+        "min_term_months": pl.min_term_months if pl else None,
+        "available_from": pl.available_from.isoformat() if pl and pl.available_from else None,
         # Pricing
-        "target_rate_sqft": tc.supplier_rate_per_sqft,
-        # Certifications
-        "food_grade": getattr(tc, "food_grade", None),
-        "fda_registered": getattr(tc, "fda_registered", None),
-        "hazmat_certified": getattr(tc, "hazmat_certified", None),
-        "c_tpat": getattr(tc, "c_tpat", None),
-        "temperature_controlled": getattr(tc, "temperature_controlled", None),
-        "foreign_trade_zone": getattr(tc, "foreign_trade_zone", None),
+        "target_rate_sqft": pl.supplier_rate_per_sqft if pl else None,
+        # Certifications (stored in PropertyListing.constraints or PropertyKnowledge fields)
+        "food_grade": None,
+        "fda_registered": None,
+        "hazmat_certified": None,
+        "c_tpat": None,
+        "temperature_controlled": None,
+        "foreign_trade_zone": None,
     }
 
 
@@ -426,41 +445,54 @@ async def list_properties(
     db: AsyncSession = Depends(get_db),
 ):
     """List all properties belonging to the authenticated supplier."""
-    warehouses = await _get_supplier_warehouses(db, user)
+    properties = await _get_supplier_properties(db, user)
+    prop_ids = [p.id for p in properties]
+
+    # Fetch deals for all properties
+    deal_map: dict[str, list] = {}
+    if prop_ids:
+        deal_result = await db.execute(
+            select(Deal).where(Deal.warehouse_id.in_(prop_ids))
+        )
+        for deal in deal_result.scalars().all():
+            deal_map.setdefault(deal.warehouse_id, []).append(deal)
 
     items = []
-    for wh in warehouses:
-        tc = wh.truth_core
+    for prop in properties:
+        pk = prop.knowledge
+        pl = prop.listing
 
         # Compute rented sqft and occupancy from active deals
         rented_sqft = 0
-        for deal in (wh.deals or []):
+        for deal in deal_map.get(prop.id, []):
             if deal.status in ("active", "confirmed"):
                 rented_sqft += deal.sqft_allocated or 0
-        total_sqft = wh.building_size_sqft or 0
+        rental_sqft = (pl.available_sqft or pl.max_sqft or 0) if pl else 0
+        building_sqft = pk.building_size_sqft if pk else 0
+        total_sqft = rental_sqft or building_sqft or 0
         occupancy_pct = round((rented_sqft / total_sqft * 100), 1) if total_sqft > 0 else 0.0
 
-        # Derive status: map activation_status / supplier_status to frontend values
-        status = _derive_frontend_status(wh, tc)
+        # Derive status: map activation_status / relationship_status to frontend values
+        status = _derive_frontend_status(prop, pl)
 
         items.append({
-            "id": wh.id,
-            "name": _build_property_name(wh),
-            "address": wh.address,
-            "city": wh.city,
-            "state": wh.state,
-            "zip_code": wh.zip,
+            "id": prop.id,
+            "name": _build_property_name(prop),
+            "address": prop.address,
+            "city": prop.city,
+            "state": prop.state,
+            "zip_code": prop.zip,
             "total_sqft": total_sqft,
-            "available_sqft": tc.max_sqft if tc else 0,
-            "min_sqft": tc.min_sqft if tc else 0,
+            "available_sqft": pl.max_sqft if pl else 0,
+            "min_sqft": pl.min_sqft if pl else 0,
             "status": status,
-            "supplier_rate": tc.supplier_rate_per_sqft if tc else 0,
-            "image_url": wh.primary_image_url,
-            "image_urls": wh.image_urls or [],
+            "supplier_rate": pl.supplier_rate_per_sqft if pl else 0,
+            "image_url": prop.primary_image_url,
+            "image_urls": prop.image_urls or [],
             "rented_sqft": rented_sqft,
             "occupancy_pct": occupancy_pct,
-            "truth_core": _build_truth_core_dict(wh, tc) if tc else None,
-            "created_at": wh.created_at.isoformat() if wh.created_at else None,
+            "truth_core": _build_truth_core_dict(prop, pk, pl) if pl else None,
+            "created_at": prop.created_at.isoformat() if prop.created_at else None,
         })
 
     return {"properties": items, "count": len(items)}
@@ -475,44 +507,54 @@ async def get_property(
 ):
     """Return detailed property info for a single property."""
     result = await db.execute(
-        select(Warehouse)
-        .where(Warehouse.id == property_id)
+        select(Property)
+        .where(Property.id == property_id)
         .options(
-            selectinload(Warehouse.truth_core),
-            selectinload(Warehouse.memories),
-            selectinload(Warehouse.supplier_agreements),
-            selectinload(Warehouse.supplier_ledger_entries),
-            selectinload(Warehouse.deals),
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.contacts),
+            selectinload(Property.memories),
+            selectinload(Property.events),
         )
     )
-    warehouse = result.scalar_one_or_none()
+    prop = result.scalar_one_or_none()
 
-    if not warehouse:
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
 
-    # Verify ownership
-    if warehouse.owner_email and warehouse.owner_email.lower() != user.email.lower():
+    # Verify ownership via PropertyContact
+    primary_contact = next((c for c in (prop.contacts or []) if c.is_primary), (prop.contacts or [None])[0] if prop.contacts else None)
+    if primary_contact and primary_contact.email and primary_contact.email.lower() != user.email.lower():
         raise HTTPException(status_code=403, detail="Not your property")
 
-    tc = warehouse.truth_core
+    pk = prop.knowledge
+    pl = prop.listing
+
+    # Fetch deals for this property
+    deal_result = await db.execute(
+        select(Deal).where(Deal.warehouse_id == property_id)
+    )
+    deals = deal_result.scalars().all()
 
     # Compute rented sqft and occupancy from active deals
     rented_sqft = 0
-    for deal in (warehouse.deals or []):
+    for deal in deals:
         if deal.status in ("active", "confirmed"):
             rented_sqft += deal.sqft_allocated or 0
-    total_sqft = warehouse.building_size_sqft or 0
+    rental_sqft = (pl.available_sqft or pl.max_sqft or 0) if pl else 0
+    building_sqft = pk.building_size_sqft if pk else 0
+    total_sqft = rental_sqft or building_sqft or 0
     occupancy_pct = round((rented_sqft / total_sqft * 100), 1) if total_sqft > 0 else 0.0
 
     # Build truth_core dict mapped to frontend TruthCore interface
-    tc_dict = _build_truth_core_dict(warehouse, tc) if tc else None
+    tc_dict = _build_truth_core_dict(prop, pk, pl) if pl else None
 
     # Derive status for frontend
-    status = _derive_frontend_status(warehouse, tc)
+    status = _derive_frontend_status(prop, pl)
 
     # Active deals summary (supplier-safe)
     deals_list = []
-    for d in (warehouse.deals or []):
+    for d in deals:
         deals_list.append({
             "id": d.id,
             "status": d.status,
@@ -524,29 +566,29 @@ async def get_property(
         })
 
     return {
-        "id": warehouse.id,
-        "name": _build_property_name(warehouse),
-        "address": warehouse.address,
-        "city": warehouse.city,
-        "state": warehouse.state,
-        "zip_code": warehouse.zip,
+        "id": prop.id,
+        "name": _build_property_name(prop),
+        "address": prop.address,
+        "city": prop.city,
+        "state": prop.state,
+        "zip_code": prop.zip,
         "total_sqft": total_sqft,
-        "available_sqft": tc.max_sqft if tc else 0,
-        "min_sqft": tc.min_sqft if tc else 0,
+        "available_sqft": pl.max_sqft if pl else 0,
+        "min_sqft": pl.min_sqft if pl else 0,
         "status": status,
-        "supplier_rate": tc.supplier_rate_per_sqft if tc else 0,
-        "image_url": warehouse.primary_image_url,
-        "image_urls": warehouse.image_urls or [],
+        "supplier_rate": pl.supplier_rate_per_sqft if pl else 0,
+        "image_url": prop.primary_image_url,
+        "image_urls": prop.image_urls or [],
         "rented_sqft": rented_sqft,
         "occupancy_pct": occupancy_pct,
-        "lat": warehouse.lat,
-        "lng": warehouse.lng,
-        "property_type": warehouse.property_type,
-        "description": warehouse.description,
+        "lat": prop.lat,
+        "lng": prop.lng,
+        "property_type": prop.property_type,
+        "description": pk.additional_notes if pk else None,
         "truth_core": tc_dict,
         "deals": deals_list,
-        "created_at": warehouse.created_at.isoformat() if warehouse.created_at else None,
-        "updated_at": warehouse.updated_at.isoformat() if warehouse.updated_at else None,
+        "created_at": prop.created_at.isoformat() if prop.created_at else None,
+        "updated_at": prop.updated_at.isoformat() if prop.updated_at else None,
     }
 
 
@@ -560,43 +602,66 @@ async def update_property_specs(
 ):
     """Update physical building specs for a property."""
     result = await db.execute(
-        select(Warehouse)
-        .where(Warehouse.id == property_id)
-        .options(selectinload(Warehouse.truth_core))
+        select(Property)
+        .where(Property.id == property_id)
+        .options(
+            selectinload(Property.knowledge),
+            selectinload(Property.contacts),
+        )
     )
-    warehouse = result.scalar_one_or_none()
-    if not warehouse:
+    prop = result.scalar_one_or_none()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
-    if warehouse.owner_email and warehouse.owner_email.lower() != user.email.lower():
+
+    # Verify ownership via PropertyContact
+    primary_contact = next((c for c in (prop.contacts or []) if c.is_primary), (prop.contacts or [None])[0] if prop.contacts else None)
+    if primary_contact and primary_contact.email and primary_contact.email.lower() != user.email.lower():
         raise HTTPException(status_code=403, detail="Not your property")
 
     updates = body.model_dump(exclude_unset=True)
 
-    # Map frontend field names to DB column names
+    # All specs go to PropertyKnowledge now
     field_map = {
-        "building_sqft": ("warehouse", "building_size_sqft"),
-        "year_built": ("warehouse", "year_built"),
-        "construction_type": ("warehouse", "construction_type"),
-        "zoning": ("warehouse", "zoning"),
-        "lot_size_acres": ("warehouse", "lot_size_acres"),
-        "clear_height_ft": ("tc", "clear_height_ft"),
-        "dock_doors": ("tc", "dock_doors_receiving"),  # single dock_doors maps to receiving
-        "drive_in_bays": ("tc", "drive_in_bays"),
-        "parking_spaces": ("tc", "parking_spaces"),
-        "sprinkler": ("tc", "has_sprinkler"),
-        "power_supply": ("tc", "power_supply"),
+        "building_sqft": "building_size_sqft",
+        "year_built": "year_built",
+        "construction_type": "construction_type",
+        "zoning": "zoning",
+        "lot_size_acres": "lot_size_acres",
+        "clear_height_ft": "clear_height_ft",
+        "dock_doors": "dock_doors_receiving",  # single dock_doors maps to receiving
+        "drive_in_bays": "drive_in_bays",
+        "parking_spaces": "parking_spaces",
+        "sprinkler": "has_sprinkler",
+        "power_supply": "power_supply",
     }
 
-    tc = warehouse.truth_core
+    pk = prop.knowledge
+    if not pk:
+        # Create PropertyKnowledge if it doesn't exist
+        pk = PropertyKnowledge(
+            id=str(uuid.uuid4()),
+            property_id=property_id,
+        )
+        db.add(pk)
+        await db.flush()
+
+    provenance = dict(pk.field_provenance or {})
+    provenance_updated = False
+
     for field, value in updates.items():
-        mapping = field_map.get(field)
-        if not mapping:
+        db_field = field_map.get(field)
+        if not db_field:
             continue
-        target, db_field = mapping
-        if target == "warehouse" and hasattr(warehouse, db_field):
-            setattr(warehouse, db_field, value)
-        elif target == "tc" and tc and hasattr(tc, db_field):
-            setattr(tc, db_field, value)
+        if hasattr(pk, db_field):
+            setattr(pk, db_field, value)
+            # Update provenance for PROVENANCE_FIELDS
+            if db_field in PropertyKnowledge.PROVENANCE_FIELDS:
+                provenance[db_field] = {"source": "supplier_dashboard", "updated_at": datetime.now(timezone.utc).isoformat()}
+                provenance_updated = True
+
+    if provenance_updated:
+        pk.field_provenance = provenance
+        flag_modified(pk, "field_provenance")
 
     await db.commit()
     return {"ok": True, "updated_fields": list(updates.keys())}
@@ -612,45 +677,68 @@ async def update_property_config(
 ):
     """Update availability configuration for a property."""
     result = await db.execute(
-        select(Warehouse)
-        .where(Warehouse.id == property_id)
-        .options(selectinload(Warehouse.truth_core))
+        select(Property)
+        .where(Property.id == property_id)
+        .options(
+            selectinload(Property.listing),
+            selectinload(Property.knowledge),
+            selectinload(Property.contacts),
+        )
     )
-    warehouse = result.scalar_one_or_none()
-    if not warehouse:
+    prop = result.scalar_one_or_none()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
-    if warehouse.owner_email and warehouse.owner_email.lower() != user.email.lower():
+
+    # Verify ownership via PropertyContact
+    primary_contact = next((c for c in (prop.contacts or []) if c.is_primary), (prop.contacts or [None])[0] if prop.contacts else None)
+    if primary_contact and primary_contact.email and primary_contact.email.lower() != user.email.lower():
         raise HTTPException(status_code=403, detail="Not your property")
 
-    tc = warehouse.truth_core
-    if not tc:
-        raise HTTPException(status_code=400, detail="Property has no truth core. Activate first.")
+    pl = prop.listing
+    if not pl:
+        raise HTTPException(status_code=400, detail="Property has no listing. Activate first.")
+
+    pk = prop.knowledge
 
     updates = body.model_dump(exclude_unset=True)
 
-    # Map frontend field names to DB column names on truth_core
-    config_field_map = {
+    # Map frontend field names to DB column names on PropertyListing
+    listing_field_map = {
         "available_sqft": "max_sqft",
         "min_rentable_sqft": "min_sqft",
-        "activity_tier": "activity_tier",
-        "has_office": "has_office_space",
-        "weekend_access": "weekend_access",
-        "access_24_7": "access_24_7",
         "min_term_months": "min_term_months",
         "available_from": "available_from",
-        # Certifications map directly
-        "food_grade": "food_grade",
-        "fda_registered": "fda_registered",
-        "hazmat_certified": "hazmat_certified",
-        "c_tpat": "c_tpat",
-        "temperature_controlled": "temperature_controlled",
-        "foreign_trade_zone": "foreign_trade_zone",
+    }
+
+    # Fields that go to PropertyKnowledge
+    knowledge_field_map = {
+        "activity_tier": "activity_tier",
+        "has_office": "has_office",
+        "weekend_access": "weekend_access",
     }
 
     for field, value in updates.items():
-        db_field = config_field_map.get(field, field)
-        if hasattr(tc, db_field):
-            setattr(tc, db_field, value)
+        # Check listing fields first
+        db_field = listing_field_map.get(field)
+        if db_field and hasattr(pl, db_field):
+            setattr(pl, db_field, value)
+            continue
+
+        # Check knowledge fields
+        db_field = knowledge_field_map.get(field)
+        if db_field and pk and hasattr(pk, db_field):
+            setattr(pk, db_field, value)
+            continue
+
+        # Certifications and other fields stored in listing constraints
+        # access_24_7, food_grade, fda_registered, hazmat_certified, c_tpat,
+        # temperature_controlled, foreign_trade_zone
+        if field in ("access_24_7", "food_grade", "fda_registered", "hazmat_certified",
+                      "c_tpat", "temperature_controlled", "foreign_trade_zone"):
+            constraints = dict(pl.constraints or {})
+            constraints[field] = value
+            pl.constraints = constraints
+            flag_modified(pl, "constraints")
 
     await db.commit()
     return {"ok": True, "updated_fields": list(updates.keys())}
@@ -666,25 +754,28 @@ async def update_property_pricing(
 ):
     """Update pricing for a property."""
     result = await db.execute(
-        select(Warehouse)
-        .where(Warehouse.id == property_id)
-        .options(selectinload(Warehouse.truth_core))
+        select(Property)
+        .where(Property.id == property_id)
+        .options(
+            selectinload(Property.listing),
+            selectinload(Property.contacts),
+        )
     )
-    warehouse = result.scalar_one_or_none()
-    if not warehouse:
+    prop = result.scalar_one_or_none()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
-    if warehouse.owner_email and warehouse.owner_email.lower() != user.email.lower():
+
+    # Verify ownership via PropertyContact
+    primary_contact = next((c for c in (prop.contacts or []) if c.is_primary), (prop.contacts or [None])[0] if prop.contacts else None)
+    if primary_contact and primary_contact.email and primary_contact.email.lower() != user.email.lower():
         raise HTTPException(status_code=403, detail="Not your property")
 
-    tc = warehouse.truth_core
-    if not tc:
-        raise HTTPException(status_code=400, detail="Property has no truth core. Activate first.")
+    pl = prop.listing
+    if not pl:
+        raise HTTPException(status_code=400, detail="Property has no listing. Activate first.")
 
     if body.rate is not None:
-        tc.supplier_rate_per_sqft = body.rate
-        # Auto-recalculate buyer rate
-        from wex_platform.services.pricing_engine import calculate_default_buyer_rate
-        tc.buyer_rate_per_sqft = calculate_default_buyer_rate(body.rate)
+        pl.supplier_rate_per_sqft = body.rate
 
     await db.commit()
     return {"ok": True, "updated_fields": ["rate"]}
@@ -699,20 +790,20 @@ async def get_property_photos(
 ):
     """Return photos for a property."""
     result = await db.execute(
-        select(Warehouse).where(Warehouse.id == property_id)
+        select(Property).where(Property.id == property_id)
     )
-    warehouse = result.scalar_one_or_none()
-    if not warehouse:
+    prop = result.scalar_one_or_none()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
 
     photos = []
-    if warehouse.primary_image_url:
+    if prop.primary_image_url:
         photos.append({
             "id": "primary",
-            "url": warehouse.primary_image_url,
+            "url": prop.primary_image_url,
             "is_primary": True,
         })
-    for i, url in enumerate(warehouse.image_urls or []):
+    for i, url in enumerate(prop.image_urls or []):
         photos.append({
             "id": f"photo_{i}",
             "url": url,
@@ -732,25 +823,30 @@ async def delete_property_photo(
 ):
     """Delete a photo from a property."""
     result = await db.execute(
-        select(Warehouse).where(Warehouse.id == property_id)
+        select(Property)
+        .where(Property.id == property_id)
+        .options(selectinload(Property.contacts))
     )
-    warehouse = result.scalar_one_or_none()
-    if not warehouse:
+    prop = result.scalar_one_or_none()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
-    if warehouse.owner_email and warehouse.owner_email.lower() != user.email.lower():
+
+    # Verify ownership via PropertyContact
+    primary_contact = next((c for c in (prop.contacts or []) if c.is_primary), (prop.contacts or [None])[0] if prop.contacts else None)
+    if primary_contact and primary_contact.email and primary_contact.email.lower() != user.email.lower():
         raise HTTPException(status_code=403, detail="Not your property")
 
     if photo_id == "primary":
-        warehouse.primary_image_url = None
+        prop.primary_image_url = None
     else:
         # Remove by index
         try:
             idx = int(photo_id.replace("photo_", ""))
-            urls = list(warehouse.image_urls or [])
+            urls = list(prop.image_urls or [])
             if 0 <= idx < len(urls):
                 urls.pop(idx)
-                warehouse.image_urls = urls
-                flag_modified(warehouse, "image_urls")
+                prop.image_urls = urls
+                flag_modified(prop, "image_urls")
             else:
                 raise HTTPException(status_code=404, detail="Photo not found")
         except ValueError:
@@ -774,27 +870,32 @@ async def reorder_property_photos(
     The rest become the new image_urls array.
     """
     result = await db.execute(
-        select(Warehouse).where(Warehouse.id == property_id)
+        select(Property)
+        .where(Property.id == property_id)
+        .options(selectinload(Property.contacts))
     )
-    warehouse = result.scalar_one_or_none()
-    if not warehouse:
+    prop = result.scalar_one_or_none()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
-    if warehouse.owner_email and warehouse.owner_email.lower() != user.email.lower():
+
+    # Verify ownership via PropertyContact
+    primary_contact = next((c for c in (prop.contacts or []) if c.is_primary), (prop.contacts or [None])[0] if prop.contacts else None)
+    if primary_contact and primary_contact.email and primary_contact.email.lower() != user.email.lower():
         raise HTTPException(status_code=403, detail="Not your property")
 
     # Build a map of photo_id -> URL from current photos
     url_map: dict[str, str] = {}
-    if warehouse.primary_image_url:
-        url_map["primary"] = warehouse.primary_image_url
-    for i, url in enumerate(warehouse.image_urls or []):
+    if prop.primary_image_url:
+        url_map["primary"] = prop.primary_image_url
+    for i, url in enumerate(prop.image_urls or []):
         url_map[f"photo_{i}"] = url
 
     # Validate that all IDs in the order exist in the current photos
-    for photo_id in body.order:
-        if photo_id not in url_map:
+    for pid in body.order:
+        if pid not in url_map:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown photo ID: {photo_id}",
+                detail=f"Unknown photo ID: {pid}",
             )
 
     # Validate that all current photos are accounted for
@@ -807,21 +908,21 @@ async def reorder_property_photos(
 
     # Reorder: first item becomes primary, rest become image_urls
     ordered_urls = [url_map[pid] for pid in body.order]
-    warehouse.primary_image_url = ordered_urls[0]
-    warehouse.image_urls = ordered_urls[1:] if len(ordered_urls) > 1 else []
-    flag_modified(warehouse, "image_urls")
+    prop.primary_image_url = ordered_urls[0]
+    prop.image_urls = ordered_urls[1:] if len(ordered_urls) > 1 else []
+    flag_modified(prop, "image_urls")
 
     await db.commit()
 
     # Return the new photo list in the same format as the GET endpoint
     photos = []
-    if warehouse.primary_image_url:
+    if prop.primary_image_url:
         photos.append({
             "id": "primary",
-            "url": warehouse.primary_image_url,
+            "url": prop.primary_image_url,
             "is_primary": True,
         })
-    for i, url in enumerate(warehouse.image_urls or []):
+    for i, url in enumerate(prop.image_urls or []):
         photos.append({
             "id": f"photo_{i}",
             "url": url,
@@ -840,12 +941,17 @@ async def create_upload_token(
 ):
     """Generate a tokenized upload URL for property photos."""
     result = await db.execute(
-        select(Warehouse).where(Warehouse.id == property_id)
+        select(Property)
+        .where(Property.id == property_id)
+        .options(selectinload(Property.contacts))
     )
-    warehouse = result.scalar_one_or_none()
-    if not warehouse:
+    prop = result.scalar_one_or_none()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
-    if warehouse.owner_email and warehouse.owner_email.lower() != user.email.lower():
+
+    # Verify ownership via PropertyContact
+    primary_contact = next((c for c in (prop.contacts or []) if c.is_primary), (prop.contacts or [None])[0] if prop.contacts else None)
+    if primary_contact and primary_contact.email and primary_contact.email.lower() != user.email.lower():
         raise HTTPException(status_code=403, detail="Not your property")
 
     token = secrets.token_urlsafe(32)
@@ -966,23 +1072,25 @@ async def get_property_suggestions(
 ):
     """Return AI-generated suggestions for improving a property listing."""
     result = await db.execute(
-        select(Warehouse)
-        .where(Warehouse.id == property_id)
+        select(Property)
+        .where(Property.id == property_id)
         .options(
-            selectinload(Warehouse.truth_core),
-            selectinload(Warehouse.memories),
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.memories),
         )
     )
-    warehouse = result.scalar_one_or_none()
-    if not warehouse:
+    prop = result.scalar_one_or_none()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
 
     # Generate suggestions based on missing data
     suggestions = []
-    tc = warehouse.truth_core
+    pk = prop.knowledge
+    pl = prop.listing
 
     # Count photos
-    photo_count = len(warehouse.image_urls or []) + (1 if warehouse.primary_image_url else 0)
+    photo_count = len(prop.image_urls or []) + (1 if prop.primary_image_url else 0)
 
     if photo_count < 3:
         suggestions.append({
@@ -995,9 +1103,9 @@ async def get_property_suggestions(
             "target_tab": "photos",
         })
 
-    if tc:
+    if pl:
         # Tier 1 fields
-        if tc.max_sqft is None:
+        if pl.max_sqft is None:
             suggestions.append({
                 "id": f"sug_{property_id}_sqft",
                 "type": "add_spec",
@@ -1008,7 +1116,7 @@ async def get_property_suggestions(
                 "target_tab": "config",
                 "target_field": "available_sqft",
             })
-        if not tc.supplier_rate_per_sqft or tc.supplier_rate_per_sqft <= 0:
+        if not pl.supplier_rate_per_sqft or pl.supplier_rate_per_sqft <= 0:
             suggestions.append({
                 "id": f"sug_{property_id}_rate",
                 "type": "add_spec",
@@ -1019,7 +1127,7 @@ async def get_property_suggestions(
                 "target_tab": "pricing",
                 "target_field": "target_rate_sqft",
             })
-        if not tc.clear_height_ft:
+        if pk and not pk.clear_height_ft:
             suggestions.append({
                 "id": f"sug_{property_id}_height",
                 "type": "add_spec",
@@ -1030,7 +1138,7 @@ async def get_property_suggestions(
                 "target_tab": "building",
                 "target_field": "clear_height_ft",
             })
-        if (tc.dock_doors_receiving or 0) == 0 and (tc.dock_doors_shipping or 0) == 0:
+        if pk and (pk.dock_doors_receiving or 0) == 0 and (pk.dock_doors_shipping or 0) == 0:
             suggestions.append({
                 "id": f"sug_{property_id}_docks",
                 "type": "add_spec",
@@ -1041,7 +1149,7 @@ async def get_property_suggestions(
                 "target_tab": "building",
                 "target_field": "dock_doors",
             })
-        if not tc.activity_tier:
+        if pk and not pk.activity_tier:
             suggestions.append({
                 "id": f"sug_{property_id}_tier",
                 "type": "add_spec",
@@ -1052,7 +1160,7 @@ async def get_property_suggestions(
                 "target_tab": "config",
                 "target_field": "activity_tier",
             })
-        if tc.available_from is None:
+        if pl.available_from is None:
             suggestions.append({
                 "id": f"sug_{property_id}_avail",
                 "type": "add_spec",
@@ -1067,15 +1175,15 @@ async def get_property_suggestions(
         # Tier 2 fields (only suggest if all tier 1 are filled)
         tier1_complete = (
             photo_count >= 3
-            and tc.max_sqft is not None
-            and tc.supplier_rate_per_sqft and tc.supplier_rate_per_sqft > 0
-            and tc.clear_height_ft
-            and ((tc.dock_doors_receiving or 0) + (tc.dock_doors_shipping or 0)) > 0
-            and tc.activity_tier
-            and tc.available_from is not None
+            and pl.max_sqft is not None
+            and pl.supplier_rate_per_sqft and pl.supplier_rate_per_sqft > 0
+            and (pk and pk.clear_height_ft)
+            and (pk and ((pk.dock_doors_receiving or 0) + (pk.dock_doors_shipping or 0)) > 0)
+            and (pk and pk.activity_tier)
+            and pl.available_from is not None
         )
         if tier1_complete:
-            if tc.parking_spaces is None or tc.parking_spaces == 0:
+            if pk and (pk.parking_spaces is None or pk.parking_spaces == 0):
                 suggestions.append({
                     "id": f"sug_{property_id}_parking",
                     "type": "add_spec",
@@ -1086,7 +1194,7 @@ async def get_property_suggestions(
                     "target_tab": "building",
                     "target_field": "parking_spaces",
                 })
-            if not tc.power_supply:
+            if pk and not pk.power_supply:
                 suggestions.append({
                     "id": f"sug_{property_id}_power",
                     "type": "add_spec",
@@ -1194,7 +1302,7 @@ async def upload_photos(
     """Upload photos using a tokenized URL (no auth required).
 
     Accepts multipart file uploads, saves them to the local uploads
-    directory, and appends the resulting URLs to the warehouse's
+    directory, and appends the resulting URLs to the property's
     image_urls JSON array.
     """
     # Verify token
@@ -1216,12 +1324,12 @@ async def upload_photos(
     if upload_token.expires_at and upload_token.expires_at < now:
         raise HTTPException(status_code=410, detail="Token expired")
 
-    # Fetch the warehouse to update image_urls
-    wh_result = await db.execute(
-        select(Warehouse).where(Warehouse.id == property_id)
+    # Fetch the property to update image_urls
+    prop_result = await db.execute(
+        select(Property).where(Property.id == property_id)
     )
-    warehouse = wh_result.scalar_one_or_none()
-    if not warehouse:
+    prop = prop_result.scalar_one_or_none()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
 
     # Determine upload directory (relative to backend root)
@@ -1245,15 +1353,15 @@ async def upload_photos(
         url_path = f"/uploads/properties/{property_id}/{unique_name}"
         uploaded_urls.append(url_path)
 
-    # Append new URLs to the warehouse's image_urls
-    current_urls = list(warehouse.image_urls or [])
+    # Append new URLs to the property's image_urls
+    current_urls = list(prop.image_urls or [])
     current_urls.extend(uploaded_urls)
-    warehouse.image_urls = current_urls
-    flag_modified(warehouse, "image_urls")
+    prop.image_urls = current_urls
+    flag_modified(prop, "image_urls")
 
     # If there is no primary image, set the first uploaded photo as primary
-    if not warehouse.primary_image_url and uploaded_urls:
-        warehouse.primary_image_url = uploaded_urls[0]
+    if not prop.primary_image_url and uploaded_urls:
+        prop.primary_image_url = uploaded_urls[0]
 
     # Mark token as used only after successful upload
     upload_token.is_used = True
@@ -1279,16 +1387,16 @@ async def list_engagements(
     db: AsyncSession = Depends(get_db),
 ):
     """List all engagements across the supplier's properties, enriched with deal/warehouse data."""
-    warehouses = await _get_supplier_warehouses(db, user)
-    wh_ids = [wh.id for wh in warehouses]
-    wh_map = {wh.id: wh for wh in warehouses}
+    properties = await _get_supplier_properties(db, user)
+    prop_ids = [p.id for p in properties]
+    prop_map = {p.id: p for p in properties}
 
-    if not wh_ids:
+    if not prop_ids:
         return []
 
     result = await db.execute(
         select(SupplierResponse)
-        .where(SupplierResponse.property_id.in_(wh_ids))
+        .where(SupplierResponse.property_id.in_(prop_ids))
         .order_by(SupplierResponse.created_at.desc())
         .limit(100)
     )
@@ -1305,13 +1413,13 @@ async def list_engagements(
 
     items = []
     for sr in responses:
-        wh = wh_map.get(sr.property_id)
+        prop = prop_map.get(sr.property_id)
         deal = deal_map.get(sr.deal_id) if sr.deal_id else None
 
         # Build address
         property_address = ""
-        if wh:
-            property_address = f"{wh.address}, {wh.city}, {wh.state}"
+        if prop:
+            property_address = f"{prop.address}, {prop.city}, {prop.state}"
 
         # Map outcome to engagement status
         status = sr.outcome or sr.event_type or "deal_ping"
@@ -1345,7 +1453,7 @@ async def list_engagements(
             "id": sr.id,
             "property_id": sr.property_id,
             "property_address": property_address,
-            "property_image_url": wh.primary_image_url if wh else None,
+            "property_image_url": prop.primary_image_url if prop else None,
             "buyer_need_id": deal.buyer_need_id if deal and hasattr(deal, "buyer_need_id") else "",
             "status": status,
             "buyer_company": None,  # Hidden pre-tour (economic isolation)
@@ -1503,16 +1611,16 @@ async def list_payments(
     db: AsyncSession = Depends(get_db),
 ):
     """Return payment history across all supplier properties."""
-    warehouses = await _get_supplier_warehouses(db, user)
-    wh_ids = [wh.id for wh in warehouses]
-    wh_map = {wh.id: wh for wh in warehouses}
+    properties = await _get_supplier_properties(db, user)
+    prop_ids = [p.id for p in properties]
+    prop_map = {p.id: p for p in properties}
 
-    if not wh_ids:
+    if not prop_ids:
         return []
 
     result = await db.execute(
         select(SupplierLedger)
-        .where(SupplierLedger.warehouse_id.in_(wh_ids))
+        .where(SupplierLedger.warehouse_id.in_(prop_ids))
         .order_by(SupplierLedger.created_at.desc())
         .limit(200)
     )
@@ -1520,8 +1628,8 @@ async def list_payments(
 
     items = []
     for e in entries:
-        wh = wh_map.get(e.warehouse_id)
-        property_address = f"{wh.address}, {wh.city}, {wh.state}" if wh else ""
+        prop = prop_map.get(e.warehouse_id)
+        property_address = f"{prop.address}, {prop.city}, {prop.state}" if prop else ""
         items.append({
             "id": e.id,
             "date": e.created_at.isoformat() if e.created_at else None,
@@ -1543,10 +1651,10 @@ async def get_payment_summary(
     db: AsyncSession = Depends(get_db),
 ):
     """Return payment summary matching frontend PaymentSummary type."""
-    warehouses = await _get_supplier_warehouses(db, user)
-    wh_ids = [wh.id for wh in warehouses]
+    properties = await _get_supplier_properties(db, user)
+    prop_ids = [p.id for p in properties]
 
-    if not wh_ids:
+    if not prop_ids:
         return {
             "total_earned": 0.0,
             "this_month": 0.0,
@@ -1560,7 +1668,7 @@ async def get_payment_summary(
     paid_result = await db.execute(
         select(func.coalesce(func.sum(SupplierLedger.amount), 0.0))
         .where(
-            SupplierLedger.warehouse_id.in_(wh_ids),
+            SupplierLedger.warehouse_id.in_(prop_ids),
             SupplierLedger.status == "paid",
         )
     )
@@ -1572,7 +1680,7 @@ async def get_payment_summary(
     this_month_result = await db.execute(
         select(func.coalesce(func.sum(SupplierLedger.amount), 0.0))
         .where(
-            SupplierLedger.warehouse_id.in_(wh_ids),
+            SupplierLedger.warehouse_id.in_(prop_ids),
             SupplierLedger.status == "paid",
             SupplierLedger.created_at >= month_start,
         )
@@ -1583,7 +1691,7 @@ async def get_payment_summary(
     pending_result = await db.execute(
         select(func.coalesce(func.sum(SupplierLedger.amount), 0.0))
         .where(
-            SupplierLedger.warehouse_id.in_(wh_ids),
+            SupplierLedger.warehouse_id.in_(prop_ids),
             SupplierLedger.status == "pending",
         )
     )
@@ -1593,7 +1701,7 @@ async def get_payment_summary(
     next_deposit_result = await db.execute(
         select(SupplierLedger)
         .where(
-            SupplierLedger.warehouse_id.in_(wh_ids),
+            SupplierLedger.warehouse_id.in_(prop_ids),
             SupplierLedger.status.in_(["pending", "scheduled"]),
         )
         .order_by(SupplierLedger.created_at.asc())
@@ -1605,7 +1713,7 @@ async def get_payment_summary(
     active_deals_result = await db.execute(
         select(func.count(Deal.id))
         .where(
-            Deal.warehouse_id.in_(wh_ids),
+            Deal.warehouse_id.in_(prop_ids),
             Deal.status.in_(["active", "confirmed"]),
         )
     )
@@ -1629,15 +1737,15 @@ async def export_payments(
     db: AsyncSession = Depends(get_db),
 ):
     """Export payment data for accounting purposes."""
-    warehouses = await _get_supplier_warehouses(db, user)
-    wh_ids = [wh.id for wh in warehouses]
+    properties = await _get_supplier_properties(db, user)
+    prop_ids = [p.id for p in properties]
 
-    if not wh_ids:
+    if not prop_ids:
         return {"payments": [], "count": 0, "format": format}
 
     result = await db.execute(
         select(SupplierLedger)
-        .where(SupplierLedger.warehouse_id.in_(wh_ids))
+        .where(SupplierLedger.warehouse_id.in_(prop_ids))
         .order_by(SupplierLedger.created_at.desc())
     )
     entries = result.scalars().all()
@@ -1809,7 +1917,7 @@ async def list_team(
         return "active"
 
     if not user.company_id:
-        # Solo supplier — just return themselves
+        # Solo supplier -- just return themselves
         return [
             {
                 "id": user.id,
@@ -1964,12 +2072,12 @@ async def get_portfolio_suggestions(
     db: AsyncSession = Depends(get_db),
 ):
     """Return portfolio-level suggestions for the supplier."""
-    warehouses = await _get_supplier_warehouses(db, user)
+    properties = await _get_supplier_properties(db, user)
 
     suggestions = []
 
     # Check for properties without photos
-    no_photos = [wh for wh in warehouses if not wh.primary_image_url]
+    no_photos = [p for p in properties if not p.primary_image_url]
     if no_photos:
         suggestions.append({
             "id": "sug_portfolio_photos",
@@ -1977,11 +2085,11 @@ async def get_portfolio_suggestions(
             "priority": "high",
             "title": f"{len(no_photos)} properties need photos",
             "description": "Properties with photos get significantly more buyer interest. Add photos to improve visibility.",
-            "affected_properties": [wh.id for wh in no_photos],
+            "affected_properties": [p.id for p in no_photos],
         })
 
     # Check for inactive properties
-    inactive = [wh for wh in warehouses if not wh.truth_core or wh.truth_core.activation_status != "on"]
+    inactive = [p for p in properties if not p.listing or p.listing.activation_status != "on"]
     if inactive:
         suggestions.append({
             "id": "sug_portfolio_activate",
@@ -1989,18 +2097,18 @@ async def get_portfolio_suggestions(
             "priority": "medium",
             "title": f"{len(inactive)} properties are not active",
             "description": "Activate these properties to start receiving buyer matches.",
-            "affected_properties": [wh.id for wh in inactive],
+            "affected_properties": [p.id for p in inactive],
         })
 
     # Check for properties with low rates
     active_with_rates = [
-        wh for wh in warehouses
-        if wh.truth_core and wh.truth_core.supplier_rate_per_sqft
+        p for p in properties
+        if p.listing and p.listing.supplier_rate_per_sqft
     ]
     if active_with_rates:
-        rates = [wh.truth_core.supplier_rate_per_sqft for wh in active_with_rates]
+        rates = [p.listing.supplier_rate_per_sqft for p in active_with_rates]
         avg = sum(rates) / len(rates)
-        low_rate = [wh for wh in active_with_rates if wh.truth_core.supplier_rate_per_sqft < avg * 0.7]
+        low_rate = [p for p in active_with_rates if p.listing.supplier_rate_per_sqft < avg * 0.7]
         if low_rate:
             suggestions.append({
                 "id": "sug_portfolio_pricing",
@@ -2008,7 +2116,7 @@ async def get_portfolio_suggestions(
                 "priority": "low",
                 "title": f"{len(low_rate)} properties may be underpriced",
                 "description": "These properties have rates significantly below your portfolio average. Consider a pricing review.",
-                "affected_properties": [wh.id for wh in low_rate],
+                "affected_properties": [p.id for p in low_rate],
             })
 
     return suggestions

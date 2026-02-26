@@ -1,20 +1,21 @@
 """Clearing Engine - Orchestrates the matching pipeline.
 
 The clearing engine is the heart of the WEx clearinghouse.  It takes a
-buyer need, loads all active warehouse supply, runs a deterministic
+buyer need, loads all active property supply, runs a deterministic
 pre-filter, hands survivors to the AI-powered Clearing Agent for
 multi-dimensional scoring, enriches the top matches with buyer-facing
 pricing from the Pricing Agent, persists Match and InstantBookScore
 records, and returns ranked results ready for presentation.
 
 Two-tier matching:
-    Tier 1 - In-network warehouses (supplier_status='in_network') with
-             active truth cores.  These are scored, priced, and returned
+    Tier 1 - In-network properties (relationship_status='active') with
+             active listings.  These are scored, priced, and returned
              as ready-to-book matches.
-    Tier 2 - Off-network warehouses (supplier_status in 'third_party',
-             'earncheck_only', 'interested') that pass the same pre-filter.
-             When fewer than 3 Tier 1 matches exist, DLA (Demand-Led
-             Activation) outreach is triggered for top Tier 2 candidates.
+    Tier 2 - Off-network properties (relationship_status in 'prospect',
+             'contacted', 'interested', 'earncheck_only') that pass the
+             same pre-filter.  When fewer than 3 Tier 1 matches exist,
+             DLA (Demand-Led Activation) outreach is triggered for top
+             Tier 2 candidates.
 """
 
 import logging
@@ -29,19 +30,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from wex_platform.domain.models import (
-    Warehouse,
-    TruthCore,
+    Property,
+    PropertyKnowledge,
+    PropertyListing,
+    PropertyEvent,
     ContextualMemory,
     BuyerNeed,
     Match,
     InstantBookScore,
     DLAToken,
+    PropertyProfile,  # Keep for now — may be referenced in edge cases
 )
 
 logger = logging.getLogger(__name__)
 
-# Tier 2 supplier statuses eligible for DLA outreach
-TIER2_STATUSES = ("third_party", "earncheck_only", "interested")
+# Tier 2 relationship statuses eligible for DLA outreach
+TIER2_STATUSES = ("prospect", "contacted", "interested", "earncheck_only")
 
 # Minimum Tier 1 matches before DLA is triggered for Tier 2
 DLA_TRIGGER_THRESHOLD = 3
@@ -81,9 +85,9 @@ class ClearingEngine:
 
         Steps:
             1. Load the buyer need
-            2. Tier 1: Load in-network warehouses, pre-filter, AI-score,
+            2. Tier 1: Load in-network properties, pre-filter, AI-score,
                price, and persist Match records
-            3. Tier 2: Load off-network warehouses, pre-filter, AI-score
+            3. Tier 2: Load off-network properties, pre-filter, AI-score
                (limited fields only)
             4. If Tier 1 < 3 matches, trigger DLA for top Tier 2 candidates
             5. Return structured result with both tiers
@@ -116,14 +120,14 @@ class ClearingEngine:
         need_dict = self._build_need_dict(buyer_need)
 
         # ------------------------------------------------------------------
-        # Tier 1: In-network warehouses
+        # Tier 1: In-network properties
         # ------------------------------------------------------------------
         tier1_matches = await self._run_tier1(
             buyer_need_id, buyer_need, need_dict, session
         )
 
         # ------------------------------------------------------------------
-        # Tier 2: Off-network warehouses
+        # Tier 2: Off-network properties
         # ------------------------------------------------------------------
         tier2_matches = await self._run_tier2(buyer_need, need_dict, session)
 
@@ -165,47 +169,49 @@ class ClearingEngine:
         need_dict: dict,
         session: AsyncSession,
     ) -> list[dict]:
-        """Tier 1: score and price in-network warehouses."""
+        """Tier 1: score and price in-network properties."""
 
         result = await session.execute(
-            select(Warehouse)
-            .join(TruthCore)
+            select(Property)
+            .join(PropertyListing)
+            .join(PropertyKnowledge)
             .where(
-                TruthCore.activation_status == "on",
-                Warehouse.supplier_status == "in_network",
+                Property.relationship_status == "active",
+                PropertyListing.activation_status == "on",
             )
             .options(
-                selectinload(Warehouse.truth_core),
-                selectinload(Warehouse.memories),
+                selectinload(Property.listing),
+                selectinload(Property.knowledge),
+                selectinload(Property.memories),
             )
         )
-        warehouses = result.scalars().all()
+        properties = result.unique().scalars().all()
 
-        if not warehouses:
+        if not properties:
             logger.info(
-                "No in-network warehouses found for buyer need %s",
+                "No in-network properties found for buyer need %s",
                 buyer_need_id,
             )
             return []
 
-        candidates = self._pre_filter(buyer_need, warehouses)
+        candidates = self._pre_filter(buyer_need, properties)
         if not candidates:
             logger.info(
-                "No in-network warehouses passed pre-filter for buyer need %s "
+                "No in-network properties passed pre-filter for buyer need %s "
                 "(checked %d)",
                 buyer_need_id,
-                len(warehouses),
+                len(properties),
             )
             return []
 
         logger.info(
-            "Tier 1 pre-filter passed %d of %d in-network warehouses for %s",
+            "Tier 1 pre-filter passed %d of %d in-network properties for %s",
             len(candidates),
-            len(warehouses),
+            len(properties),
             buyer_need_id,
         )
 
-        warehouse_dicts = self._format_warehouses(candidates)
+        property_dicts = self._format_properties(candidates)
 
         # Layer 1: Deterministic MCDA scoring
         from wex_platform.services.match_scorer import (
@@ -215,16 +221,16 @@ class ClearingEngine:
         )
 
         deterministic_scores = {}
-        for wh_dict in warehouse_dicts:
+        for prop_dict in property_dicts:
             scores = compute_composite_score(
-                need_dict, wh_dict, wh_dict.get("truth_core", {})
+                need_dict, prop_dict, prop_dict.get("truth_core", {})
             )
-            deterministic_scores[wh_dict["id"]] = scores
+            deterministic_scores[prop_dict["id"]] = scores
 
         # Sort by base composite, take top candidates for LLM evaluation
         sorted_candidates = sorted(
-            warehouse_dicts,
-            key=lambda w: deterministic_scores[w["id"]]["composite_score"],
+            property_dicts,
+            key=lambda p: deterministic_scores[p["id"]]["composite_score"],
             reverse=True,
         )[:6]  # Send top 6 to LLM, return top 3
 
@@ -239,36 +245,57 @@ class ClearingEngine:
             )
             if agent_result.ok:
                 for match_data in agent_result.data:
-                    wh_id = match_data.get("warehouse_id")
-                    if wh_id in deterministic_scores:
-                        deterministic_scores[wh_id] = recompute_with_feature_score(
-                            deterministic_scores[wh_id],
+                    prop_id = match_data.get("warehouse_id")
+                    if prop_id in deterministic_scores:
+                        deterministic_scores[prop_id] = recompute_with_feature_score(
+                            deterministic_scores[prop_id],
                             match_data["feature_score"],
                         )
-                        deterministic_scores[wh_id]["reasoning"] = match_data.get("reasoning", "")
-                        deterministic_scores[wh_id]["instant_book_eligible"] = match_data.get("instant_book_eligible", False)
+                        deterministic_scores[prop_id]["reasoning"] = match_data.get("reasoning", "")
+                        deterministic_scores[prop_id]["instant_book_eligible"] = match_data.get("instant_book_eligible", False)
             else:
                 logger.warning("LLM feature eval failed, using base scores: %s", agent_result.error)
         except Exception as exc:
             logger.warning("LLM feature eval exception, using base scores: %s", exc)
 
+        # Deterministic instant_book_eligible based on PropertyListing.
+        # Properties with pricing_mode="auto" and tour_required=False are eligible.
+        candidate_ids = [p["id"] for p in sorted_candidates]
+        pl_result = await session.execute(
+            select(PropertyListing.property_id, PropertyListing.pricing_mode, PropertyListing.tour_required)
+            .where(PropertyListing.property_id.in_(candidate_ids))
+        )
+        pl_data = {row.property_id: row for row in pl_result}
+
+        for prop_cand in sorted_candidates:
+            prop_id = prop_cand["id"]
+            scores = deterministic_scores.get(prop_id)
+            if scores:
+                listing_row = pl_data.get(prop_id)
+                # auto pricing + no tour required = instant book OK
+                scores["instant_book_eligible"] = (
+                    listing_row is not None
+                    and listing_row.pricing_mode == "auto"
+                    and not listing_row.tour_required
+                )
+
         # Re-sort by final composite and take top 3
         final_sorted = sorted(
             sorted_candidates,
-            key=lambda w: deterministic_scores[w["id"]]["composite_score"],
+            key=lambda p: deterministic_scores[p["id"]]["composite_score"],
             reverse=True,
         )[:3]
 
-        # Pricing (pure formula — no AI needed) + persistence
+        # Pricing (pure formula -- no AI needed) + persistence
         results: list[dict] = []
-        for wh_dict_match in final_sorted:
-            wh_id = wh_dict_match["id"]
-            scores = deterministic_scores[wh_id]
+        for prop_dict_match in final_sorted:
+            prop_id = prop_dict_match["id"]
+            scores = deterministic_scores[prop_id]
 
-            tc_data = wh_dict_match["truth_core"]
+            tc_data = prop_dict_match["truth_core"]
             supplier_rate = tc_data.get("supplier_rate_per_sqft", 0)
 
-            # WEx formula: supplier × 1.20 (margin) × 1.06 (guarantee), round UP
+            # WEx formula: supplier x 1.20 (margin) x 1.06 (guarantee), round UP
             buyer_rate = math.ceil((supplier_rate * 1.20 * 1.06) * 100) / 100
 
             spread = buyer_rate - supplier_rate
@@ -278,7 +305,7 @@ class ClearingEngine:
             match = Match(
                 id=match_id,
                 buyer_need_id=buyer_need_id,
-                warehouse_id=wh_id,
+                warehouse_id=prop_id,
                 match_score=scores["composite_score"],
                 confidence=scores["composite_score"],
                 instant_book_eligible=scores.get("instant_book_eligible", False),
@@ -305,14 +332,14 @@ class ClearingEngine:
                     "instant_book_eligible": scores.get("instant_book_eligible", False),
                 },
                 tc_data=tc_data,
-                memory_count=len(wh_dict_match.get("memories", [])),
+                memory_count=len(prop_dict_match.get("memories", [])),
             )
             session.add(ib_score)
 
             results.append({
                 "match_id": match_id,
-                "warehouse_id": wh_id,
-                "warehouse": wh_dict_match,
+                "warehouse_id": prop_id,
+                "warehouse": prop_dict_match,
                 "match_score": scores["composite_score"],
                 "scoring_breakdown": {
                     "location_score": scores["location_score"],
@@ -355,43 +382,44 @@ class ClearingEngine:
         property_type.  No exact address, rate, or owner info.
         """
         result = await session.execute(
-            select(Warehouse)
-            .join(TruthCore)
+            select(Property)
+            .outerjoin(PropertyListing)
+            .outerjoin(PropertyKnowledge)
             .where(
-                TruthCore.activation_status == "on",
-                Warehouse.supplier_status.in_(TIER2_STATUSES),
+                Property.relationship_status.in_(TIER2_STATUSES),
             )
             .options(
-                selectinload(Warehouse.truth_core),
-                selectinload(Warehouse.memories),
+                selectinload(Property.knowledge),
+                selectinload(Property.listing),
+                selectinload(Property.memories),
             )
         )
-        warehouses = result.scalars().all()
+        properties = result.unique().scalars().all()
 
-        if not warehouses:
+        if not properties:
             logger.info(
-                "No off-network warehouses found for tier2 (buyer need %s)",
+                "No off-network properties found for tier2 (buyer need %s)",
                 buyer_need.id if hasattr(buyer_need, "id") else "?",
             )
             return []
 
-        candidates = self._pre_filter(buyer_need, warehouses)
+        candidates = self._pre_filter(buyer_need, properties)
         if not candidates:
             return []
 
         logger.info(
-            "Tier 2 pre-filter passed %d of %d off-network warehouses",
+            "Tier 2 pre-filter passed %d of %d off-network properties",
             len(candidates),
-            len(warehouses),
+            len(properties),
         )
 
         # Use the same AI scoring pipeline for tier 2 candidates
-        warehouse_dicts = self._format_warehouses(candidates)
+        property_dicts = self._format_properties(candidates)
 
         from wex_platform.agents.clearing_agent import ClearingAgent
 
         clearing_agent = ClearingAgent()
-        agent_result = await clearing_agent.find_matches(need_dict, warehouse_dicts)
+        agent_result = await clearing_agent.find_matches(need_dict, property_dicts)
 
         if not agent_result.ok:
             logger.warning(
@@ -406,19 +434,19 @@ class ClearingEngine:
         # Build limited-disclosure dicts for tier 2
         tier2_results: list[dict] = []
         for match_data in matches_data[:DLA_MAX_CANDIDATES]:
-            wh_id = match_data.get("warehouse_id")
-            wh_dict = next(
-                (w for w in warehouse_dicts if w["id"] == wh_id), None
+            prop_id = match_data.get("warehouse_id")
+            prop_dict = next(
+                (p for p in property_dicts if p["id"] == prop_id), None
             )
-            if not wh_dict:
+            if not prop_dict:
                 continue
 
             tier2_results.append({
-                "warehouse_id": wh_id,
-                "neighborhood": wh_dict.get("neighborhood") or wh_dict.get("city", "Unknown"),
+                "warehouse_id": prop_id,
+                "neighborhood": prop_dict.get("neighborhood") or prop_dict.get("city", "Unknown"),
                 "match_score": match_data.get("composite_score", 0),
-                "sqft": wh_dict.get("building_size_sqft"),
-                "building_type": wh_dict.get("property_type", "warehouse"),
+                "sqft": prop_dict.get("building_size_sqft"),
+                "building_type": prop_dict.get("property_type", "warehouse"),
             })
 
         return tier2_results
@@ -448,20 +476,20 @@ class ClearingEngine:
         expires = now + timedelta(days=DLA_TOKEN_EXPIRY_DAYS)
 
         for candidate in tier2_matches[:DLA_MAX_CANDIDATES]:
-            wh_id = candidate["warehouse_id"]
+            property_id = candidate["warehouse_id"]
 
-            # Avoid duplicate tokens for the same warehouse + buyer need
+            # Avoid duplicate tokens for the same property + buyer need
             existing = await session.execute(
                 select(DLAToken).where(
-                    DLAToken.warehouse_id == wh_id,
+                    DLAToken.warehouse_id == property_id,
                     DLAToken.buyer_need_id == buyer_need_id,
                     DLAToken.status.in_(("pending", "interested")),
                 )
             )
             if existing.scalar_one_or_none():
                 logger.debug(
-                    "DLA token already exists for warehouse %s / need %s",
-                    wh_id,
+                    "DLA token already exists for property %s / need %s",
+                    property_id,
                     buyer_need_id,
                 )
                 continue
@@ -469,7 +497,7 @@ class ClearingEngine:
             token = DLAToken(
                 id=str(uuid.uuid4()),
                 token=secrets.token_urlsafe(32),
-                warehouse_id=wh_id,
+                warehouse_id=property_id,
                 buyer_need_id=buyer_need_id,
                 status="pending",
                 expires_at=expires,
@@ -477,20 +505,24 @@ class ClearingEngine:
             )
             session.add(token)
 
-            # Upgrade third_party -> interested
-            wh_result = await session.execute(
-                select(Warehouse).where(Warehouse.id == wh_id)
+            # Upgrade prospect -> interested
+            prop_result = await session.execute(
+                select(Property).where(Property.id == property_id)
             )
-            warehouse = wh_result.scalar_one_or_none()
-            if warehouse and warehouse.supplier_status == "third_party":
-                warehouse.supplier_status = "interested"
-                warehouse.last_outreach_at = now
-                warehouse.outreach_count = (warehouse.outreach_count or 0) + 1
+            prop = prop_result.scalar_one_or_none()
+            if prop and prop.relationship_status == "prospect":
+                prop.relationship_status = "interested"
+                session.add(PropertyEvent(
+                    property_id=property_id,
+                    event_type="outreach_sent",
+                    actor="system",
+                    metadata_={"buyer_need_id": str(buyer_need_id), "source": "dla"},
+                ))
 
             created += 1
             logger.info(
-                "DLA token created for warehouse %s (buyer need %s)",
-                wh_id,
+                "DLA token created for property %s (buyer need %s)",
+                property_id,
                 buyer_need_id,
             )
 
@@ -515,7 +547,7 @@ class ClearingEngine:
         use_type: str | None,
         session: AsyncSession,
     ) -> dict:
-        """Fast count of in-network warehouses matching basic criteria.
+        """Fast count of in-network properties matching basic criteria.
 
         Used by the buyer wizard size-slider to show a live count badge.
 
@@ -523,18 +555,18 @@ class ClearingEngine:
             location: City or state string to match against.
             min_sqft: Minimum required sqft.
             max_sqft: Maximum required sqft.
-            use_type: Optional warehouse use type filter.
+            use_type: Optional property use type filter.
             session: Active DB session.
 
         Returns:
             Dict with ``count`` (int) and ``approximate`` (bool).
         """
         query = (
-            select(sa_func.count(Warehouse.id))
-            .join(TruthCore)
+            select(sa_func.count(Property.id))
+            .join(PropertyListing)
             .where(
-                Warehouse.supplier_status == "in_network",
-                TruthCore.activation_status == "on",
+                Property.relationship_status == "active",
+                PropertyListing.activation_status == "on",
             )
         )
 
@@ -542,23 +574,25 @@ class ClearingEngine:
         if location:
             loc_upper = location.strip().upper()
             query = query.where(
-                sa_func.upper(Warehouse.city).contains(loc_upper)
-                | sa_func.upper(Warehouse.state).contains(loc_upper)
+                sa_func.upper(Property.city).contains(loc_upper)
+                | sa_func.upper(Property.state).contains(loc_upper)
             )
 
-        # Size filters against truth core
+        # Size filters against listing
         if min_sqft > 0:
             query = query.where(
-                (TruthCore.max_sqft >= min_sqft) | (TruthCore.max_sqft.is_(None))
+                (PropertyListing.max_sqft >= min_sqft) | (PropertyListing.max_sqft.is_(None))
             )
         if max_sqft < 100_000:
             query = query.where(
-                (TruthCore.min_sqft <= max_sqft) | (TruthCore.min_sqft.is_(None))
+                (PropertyListing.min_sqft <= max_sqft) | (PropertyListing.min_sqft.is_(None))
             )
 
         # Use type / activity tier filter
         if use_type:
-            query = query.where(TruthCore.activity_tier == use_type)
+            query = query.join(PropertyKnowledge).where(
+                PropertyKnowledge.activity_tier == use_type
+            )
 
         result = await session.execute(query)
         count = result.scalar() or 0
@@ -598,8 +632,8 @@ class ClearingEngine:
     def _pre_filter(
         self,
         buyer_need: BuyerNeed,
-        warehouses: list[Warehouse],
-    ) -> list[Warehouse]:
+        properties: list[Property],
+    ) -> list[Property]:
         """Co-primary gate: BOTH geo AND requirements must pass."""
         candidates = []
         buyer_radius = buyer_need.radius_miles or 25
@@ -607,152 +641,152 @@ class ClearingEngine:
 
         buyer_has_coords = buyer_need.lat is not None and buyer_need.lng is not None
 
-        for wh in warehouses:
-            tc = wh.truth_core
-            if not tc:
-                continue
+        for prop in properties:
+            pl = prop.listing
+            pk = prop.knowledge
 
             # ---- REQUIREMENTS GATE ----
-            if not self._passes_requirements_gate(wh, buyer_need):
+            if not self._passes_requirements_gate(prop, buyer_need):
                 continue
 
             # ---- GEO GATE ----
-            wh_has_coords = wh.lat is not None and wh.lng is not None
+            prop_has_coords = prop.lat is not None and prop.lng is not None
 
-            if buyer_has_coords and wh_has_coords:
+            if buyer_has_coords and prop_has_coords:
                 # Best path: coordinate-based distance check
-                dist = _haversine_miles(buyer_need.lat, buyer_need.lng, wh.lat, wh.lng)
+                dist = _haversine_miles(buyer_need.lat, buyer_need.lng, prop.lat, prop.lng)
                 if dist > max_radius:
                     continue
-            elif buyer_has_coords and not wh_has_coords:
-                # Buyer has coords but warehouse doesn't — fall back to state match
-                if buyer_need.state and wh.state:
-                    if buyer_need.state.upper() != wh.state.upper():
+            elif buyer_has_coords and not prop_has_coords:
+                # Buyer has coords but property doesn't -- fall back to state match
+                if buyer_need.state and prop.state:
+                    if buyer_need.state.upper() != prop.state.upper():
                         continue
                 else:
-                    # Can't verify geo at all — skip this warehouse
+                    # Can't verify geo at all -- skip this property
                     continue
-            elif buyer_need.state and wh.state:
-                # No buyer coords — state-level fallback
-                if buyer_need.state.upper() != wh.state.upper():
+            elif buyer_need.state and prop.state:
+                # No buyer coords -- state-level fallback
+                if buyer_need.state.upper() != prop.state.upper():
                     continue
             else:
-                # No geo info on either side — skip
+                # No geo info on either side -- skip
                 continue
 
-            candidates.append(wh)
+            candidates.append(prop)
 
         # If strict filter yields nothing, try KNN fallback
         if not candidates and buyer_need.lat and buyer_need.lng:
-            candidates = self._knn_fallback(buyer_need, warehouses, k=5, max_distance=100)
+            candidates = self._knn_fallback(buyer_need, properties, k=5, max_distance=100)
 
         return candidates
 
-    def _passes_requirements_gate(self, wh, buyer_need):
+    def _passes_requirements_gate(self, prop: Property, buyer_need: BuyerNeed) -> bool:
         """Check size overlap and use type compatibility."""
-        tc = wh.truth_core
-        if not tc:
-            return False
+        pl = prop.listing
+        pk = prop.knowledge
+
+        # For Tier 2, listing may not exist -- use knowledge if available
+        if pl:
+            min_sqft = pl.min_sqft
+            max_sqft = pl.max_sqft
+        else:
+            # No listing -- cannot verify size constraints, allow through
+            min_sqft = None
+            max_sqft = None
 
         # Size overlap
-        if buyer_need.min_sqft and tc.max_sqft and tc.max_sqft < buyer_need.min_sqft:
+        if buyer_need.min_sqft and max_sqft and max_sqft < buyer_need.min_sqft:
             return False
-        if buyer_need.max_sqft and tc.min_sqft and tc.min_sqft > buyer_need.max_sqft:
+        if buyer_need.max_sqft and min_sqft and min_sqft > buyer_need.max_sqft:
             return False
 
         # Use type compatibility (replaces flat activity_tier match)
         if buyer_need.use_type:
+            activity_tier = pk.activity_tier if pk else None
+            has_office = pk.has_office if pk else False
             from wex_platform.services.use_type_compat import compute_use_type_score
             score, _ = compute_use_type_score(
-                tc.activity_tier or "storage_only",
+                activity_tier or "storage_only",
                 buyer_need.use_type,
-                has_office_space=tc.has_office_space or False,
+                has_office_space=has_office or False,
             )
             if score == 0:
                 return False
 
         return True
 
-    def _knn_fallback(self, buyer_need, all_warehouses, k=5, max_distance=100):
-        """Find k nearest warehouses that pass requirements gate, regardless of radius."""
+    def _knn_fallback(self, buyer_need, all_properties, k=5, max_distance=100):
+        """Find k nearest properties that pass requirements gate, regardless of radius."""
         scored = []
-        for wh in all_warehouses:
-            if not self._passes_requirements_gate(wh, buyer_need):
+        for prop in all_properties:
+            if not self._passes_requirements_gate(prop, buyer_need):
                 continue
-            if not (wh.lat and wh.lng):
+            if not (prop.lat and prop.lng):
                 continue
-            dist = _haversine_miles(buyer_need.lat, buyer_need.lng, wh.lat, wh.lng)
+            dist = _haversine_miles(buyer_need.lat, buyer_need.lng, prop.lat, prop.lng)
             if dist <= max_distance:
-                scored.append((dist, wh))
+                scored.append((dist, prop))
         scored.sort(key=lambda x: x[0])
-        return [wh for _, wh in scored[:k]]
+        return [prop for _, prop in scored[:k]]
 
     # ------------------------------------------------------------------
-    # Warehouse formatting
+    # Property formatting
     # ------------------------------------------------------------------
 
-    def _format_warehouses(
+    def _format_properties(
         self,
-        warehouses: list[Warehouse],
+        properties: list,
     ) -> list[dict]:
-        """Convert ORM warehouse objects into plain dicts for agent consumption.
-
-        Args:
-            warehouses: List of Warehouse ORM instances with
-                truth_core and memories eager-loaded.
-
-        Returns:
-            List of plain dicts suitable for JSON serialization and
-            prompt injection.
+        """Convert Property ORM objects to dicts for the scoring pipeline.
+        No merge logic needed -- each field has exactly one authoritative home.
         """
-        warehouse_dicts = []
-        for wh in warehouses:
-            tc = wh.truth_core
-            wh_dict = {
-                "id": wh.id,
-                "address": wh.address,
-                "city": wh.city,
-                "state": wh.state,
-                "zip": wh.zip,
-                "building_size_sqft": wh.building_size_sqft,
-                "property_type": wh.property_type,
-                "primary_image_url": wh.primary_image_url,
-                "lat": wh.lat,
-                "lng": wh.lng,
-                "neighborhood": wh.neighborhood,
-                "image_urls": wh.image_urls or [],
+        result = []
+        for prop in properties:
+            pk = prop.knowledge  # PropertyKnowledge (1:1, may be None)
+            pl = prop.listing    # PropertyListing (1:1, may be None)
+
+            entry = {
+                "id": prop.id,
+                "address": prop.address,
+                "city": prop.city,
+                "state": prop.state,
+                "zip": prop.zip,
+                "building_size_sqft": pk.building_size_sqft if pk else None,
+                "property_type": prop.property_type,
+                "primary_image_url": prop.primary_image_url,
+                "lat": prop.lat,
+                "lng": prop.lng,
+                "image_urls": prop.image_urls or [],
+                "description": pk.additional_notes if pk else None,
+                "neighborhood": prop.neighborhood,
+                # Preserve "truth_core" sub-key for downstream compat (match_scorer, clearing_agent)
                 "truth_core": {
-                    "min_sqft": tc.min_sqft,
-                    "max_sqft": tc.max_sqft,
-                    "activity_tier": tc.activity_tier,
-                    "constraints": tc.constraints or {},
-                    "clear_height_ft": tc.clear_height_ft,
-                    "dock_doors_receiving": tc.dock_doors_receiving,
-                    "dock_doors_shipping": tc.dock_doors_shipping,
-                    "drive_in_bays": tc.drive_in_bays,
-                    "has_office_space": tc.has_office_space,
-                    "has_sprinkler": tc.has_sprinkler,
-                    "parking_spaces": tc.parking_spaces,
-                    "power_supply": tc.power_supply,
-                    "trust_level": tc.trust_level,
-                    "available_from": (
-                        str(tc.available_from) if tc.available_from else "Now"
-                    ),
-                    "available_to": (
-                        str(tc.available_to) if tc.available_to else None
-                    ),
-                    "min_term_months": tc.min_term_months,
-                    "max_term_months": tc.max_term_months,
-                    "tour_readiness": tc.tour_readiness,
-                    "supplier_rate_per_sqft": tc.supplier_rate_per_sqft,
+                    "min_sqft": pl.min_sqft if pl else None,
+                    "max_sqft": pl.max_sqft if pl else None,
+                    "activity_tier": pk.activity_tier if pk else None,
+                    "constraints": pl.constraints if pl else {},
+                    "clear_height_ft": pk.clear_height_ft if pk else None,
+                    "dock_doors_receiving": pk.dock_doors_receiving if pk else 0,
+                    "dock_doors_shipping": pk.dock_doors_shipping if pk else 0,
+                    "drive_in_bays": pk.drive_in_bays if pk else 0,
+                    "has_office_space": pk.has_office if pk else False,
+                    "has_sprinkler": pk.has_sprinkler if pk else False,
+                    "parking_spaces": pk.parking_spaces if pk else 0,
+                    "power_supply": pk.power_supply if pk else None,
+                    "trust_level": pl.trust_level if pl else 0,
+                    "min_term_months": pl.min_term_months if pl else 1,
+                    "max_term_months": pl.max_term_months if pl else 12,
+                    "tour_readiness": pl.tour_readiness if pl else "48_hours",
+                    "supplier_rate_per_sqft": pl.supplier_rate_per_sqft if pl else None,
                 },
                 "memories": [
                     {"content": m.content, "memory_type": m.memory_type}
-                    for m in (wh.memories or [])
+                    for m in (prop.memories or [])
                 ],
             }
-            warehouse_dicts.append(wh_dict)
-        return warehouse_dicts
+            result.append(entry)
+        return result
 
     # ------------------------------------------------------------------
     # InstantBookScore construction
@@ -768,13 +802,13 @@ class ClearingEngine:
         """Build an InstantBookScore record from match data.
 
         The composite sub-scores are derived from the clearing
-        agent's scoring breakdown plus warehouse metadata quality
-        signals (truth core completeness, memory depth, trust).
+        agent's scoring breakdown plus property metadata quality
+        signals (listing completeness, memory depth, trust).
 
         Args:
             match_id: The Match record UUID this score belongs to.
             match_data: The match dict from the clearing agent.
-            tc_data: The truth_core sub-dict for the warehouse.
+            tc_data: The truth_core sub-dict for the property.
             memory_count: Number of contextual memory entries.
 
         Returns:
@@ -783,7 +817,7 @@ class ClearingEngine:
         scoring = match_data.get("scoring_breakdown", {})
         composite = match_data.get("composite_score", 0)
 
-        # Truth core completeness: how many key fields are populated
+        # Listing completeness: how many key fields are populated
         key_fields = [
             "min_sqft", "max_sqft", "activity_tier", "clear_height_ft",
             "dock_doors_receiving", "supplier_rate_per_sqft", "tour_readiness",

@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
@@ -20,8 +21,15 @@ import {
   ArrowUpRight,
   Calendar,
   Infinity,
+  Shield,
+  MapPin,
+  AlertTriangle,
+  Search,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import type { Engagement, EngagementStatus } from "@/types/supplier";
+import { demoEngagements } from "@/lib/supplier-demo-data";
+import HoldCountdown from "@/components/ui/HoldCountdown";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -92,12 +100,266 @@ const DEALBREAKER_OPTIONS = [
 ];
 
 /* ================================================================== */
+/*  Phase 6A: STATUS CONFIG for buyer dashboard                        */
+/* ================================================================== */
+const STATUS_CONFIG: Record<string, { badge: string; icon: string; supporting: string; cta?: string }> = {
+  tour_requested: { badge: "Awaiting tour confirmation", icon: "\u23F3", supporting: "We'll notify you within 12 hours.", cta: "View Details" },
+  tour_confirmed: { badge: "Tour confirmed", icon: "\u2705", supporting: "", cta: "Get Directions" },
+  tour_rescheduled: { badge: "New tour time proposed", icon: "\uD83D\uDD04", supporting: "Review the new time \u2014 respond within 24 hours", cta: "Review" },
+  tour_completed: { badge: "How was your tour?", icon: "\uD83D\uDCAC", supporting: "Let us know to keep your hold active", cta: "Respond" },
+  buyer_confirmed: { badge: "Agreement being prepared", icon: "\uD83D\uDCC4", supporting: "You'll receive it by email shortly", cta: "View Details" },
+  agreement_sent: { badge: "Agreement ready to sign", icon: "\u270D\uFE0F", supporting: "Sign within 72 hours to secure your space", cta: "Sign Now" },
+  agreement_signed: { badge: "Preparing for move-in", icon: "\uD83D\uDCE6", supporting: "Complete your onboarding checklist", cta: "Continue Setup" },
+  onboarding: { badge: "Complete your setup", icon: "\uD83D\uDCCB", supporting: "", cta: "Continue Setup" },
+  active: { badge: "Active lease", icon: "\u2705", supporting: "", cta: "View Details" },
+  expired: { badge: "Hold expired", icon: "\u26A0\uFE0F", supporting: "This space is no longer held.", cta: "Search Again" },
+  // Additional statuses
+  buyer_accepted: { badge: "Reservation in progress", icon: "\uD83D\uDD12", supporting: "Setting up your hold...", cta: "View Details" },
+  account_created: { badge: "Account created", icon: "\u2705", supporting: "Sign the guarantee to continue", cta: "Continue" },
+  guarantee_signed: { badge: "Guarantee signed", icon: "\u2705", supporting: "Schedule your tour or book instantly", cta: "Continue" },
+  address_revealed: { badge: "Address revealed", icon: "\uD83D\uDCCD", supporting: "Schedule your tour", cta: "Schedule Tour" },
+  instant_book_requested: { badge: "Instant book in progress", icon: "\u26A1", supporting: "We're confirming your booking", cta: "View Details" },
+};
+
+const ACTION_STATUSES: EngagementStatus[] = ["agreement_sent", "tour_rescheduled", "tour_completed", "onboarding"];
+
+const HOLD_STATUSES: EngagementStatus[] = [
+  "buyer_accepted", "account_created", "guarantee_signed", "address_revealed",
+  "tour_requested", "tour_confirmed", "tour_rescheduled", "tour_completed",
+];
+
+function formatStatus(status: string): string {
+  return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/* ================================================================== */
+/*  Phase 6A: BUYER DASHBOARD COMPONENT                                */
+/* ================================================================== */
+function BuyerDashboard({ engagements }: { engagements: Engagement[] }) {
+  const router = useRouter();
+
+  // Sort by urgency
+  const sorted = useMemo(() => {
+    const urgencyRank = (e: Engagement): number => {
+      if (ACTION_STATUSES.includes(e.status)) return 0;
+      // Hold expiring within 12 hours
+      if (e.hold_expires_at) {
+        const expiresMs = new Date(e.hold_expires_at).getTime();
+        const hoursLeft = (expiresMs - Date.now()) / (1000 * 60 * 60);
+        if (hoursLeft > 0 && hoursLeft < 12) return 1;
+      }
+      if (e.status === "active") return 2;
+      return 3;
+    };
+    return [...engagements].sort((a, b) => urgencyRank(a) - urgencyRank(b));
+  }, [engagements]);
+
+  const actionNeeded = sorted.filter(e => ACTION_STATUSES.includes(e.status));
+
+  function getStatusConfig(status: string) {
+    return STATUS_CONFIG[status] || { badge: formatStatus(status), icon: "\uD83D\uDCCB", supporting: "", cta: "View Details" };
+  }
+
+  function handleCardClick(eng: Engagement) {
+    if (eng.status === "expired") {
+      router.push("/search");
+    } else {
+      router.push(`/buyer/engagements/${eng.id}`);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-bold text-slate-900">
+                W<span className="text-emerald-600">Ex</span>
+              </h1>
+              <span className="text-slate-300">|</span>
+              <span className="text-sm font-medium text-slate-600">My Dashboard</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <Link
+                href="/search"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-semibold transition-colors"
+              >
+                <Search className="w-4 h-4" />
+                Find More Space
+              </Link>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* ACTION NEEDED section */}
+        {actionNeeded.length > 0 && (
+          <div className="mb-8">
+            <div className="flex items-center gap-2 mb-4">
+              <AlertTriangle className="w-4 h-4 text-amber-500" />
+              <h2 className="text-sm font-bold text-amber-700 uppercase tracking-wider">Action Needed</h2>
+            </div>
+            <div className="space-y-3">
+              {actionNeeded.map((eng) => {
+                const config = getStatusConfig(eng.status);
+                return (
+                  <motion.div
+                    key={`action-${eng.id}`}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    onClick={() => handleCardClick(eng)}
+                    className="bg-amber-50 border-2 border-amber-200 rounded-xl p-5 cursor-pointer hover:border-amber-400 transition-all"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-lg">{config.icon}</span>
+                          <span className="font-semibold text-slate-900">{config.badge}</span>
+                        </div>
+                        <p className="text-sm text-slate-600 mb-1">
+                          {eng.warehouse?.name || eng.warehouse?.address || `Property ${eng.warehouseId?.slice(0, 8) || ""}`}
+                        </p>
+                        {eng.sqft && (
+                          <p className="text-xs text-slate-500">
+                            {eng.sqft.toLocaleString()} sqft
+                            {eng.monthlyBuyerTotal ? ` \u00B7 $${eng.monthlyBuyerTotal.toLocaleString()}/mo` : ""}
+                          </p>
+                        )}
+                        {config.supporting && (
+                          <p className="text-xs text-amber-700 mt-2">{config.supporting}</p>
+                        )}
+                      </div>
+                      {config.cta && (
+                        <button className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-sm font-semibold shrink-0 transition-colors">
+                          {config.cta}
+                        </button>
+                      )}
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ALL ENGAGEMENTS */}
+        <div>
+          <h2 className="text-lg font-bold text-slate-900 mb-4">Your Spaces</h2>
+          <div className="space-y-3">
+            {sorted.map((eng, i) => {
+              const config = getStatusConfig(eng.status);
+              const showHold = HOLD_STATUSES.includes(eng.status) && eng.hold_expires_at;
+              return (
+                <motion.div
+                  key={eng.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.05 }}
+                  onClick={() => handleCardClick(eng)}
+                  className="bg-white border border-slate-200 rounded-xl p-5 cursor-pointer hover:border-emerald-300 hover:shadow-sm transition-all"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      {/* Status badge */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-base">{config.icon}</span>
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+                          {config.badge}
+                        </span>
+                      </div>
+
+                      {/* Property info */}
+                      <h3 className="font-semibold text-slate-900 truncate">
+                        {eng.warehouse?.name || eng.warehouse?.address || `Property ${eng.warehouseId?.slice(0, 8) || ""}`}
+                      </h3>
+                      {eng.warehouse?.city && (
+                        <p className="text-sm text-slate-500 flex items-center gap-1 mt-0.5">
+                          <MapPin className="w-3 h-3" />
+                          {eng.warehouse.city}{eng.warehouse.state ? `, ${eng.warehouse.state}` : ""}
+                        </p>
+                      )}
+
+                      {/* Details row */}
+                      <div className="flex items-center gap-3 mt-2 text-xs text-slate-500">
+                        {eng.sqft && <span>{eng.sqft.toLocaleString()} sqft</span>}
+                        {eng.use_type && <span>{eng.use_type}</span>}
+                        {eng.monthlyBuyerTotal && <span className="font-semibold text-slate-700">${eng.monthlyBuyerTotal.toLocaleString()}/mo</span>}
+                      </div>
+
+                      {/* Supporting text */}
+                      {config.supporting && (
+                        <p className="text-xs text-slate-400 mt-2">{config.supporting}</p>
+                      )}
+
+                      {/* Hold countdown */}
+                      {showHold && (
+                        <div className="mt-2">
+                          <HoldCountdown holdExpiresAt={eng.hold_expires_at} format="expires_in" />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* CTA */}
+                    <div className="shrink-0 flex flex-col items-end gap-2">
+                      {config.cta && (
+                        <span className="text-sm font-semibold text-emerald-600 hover:text-emerald-700 flex items-center gap-1">
+                          {config.cta} <ArrowRight className="w-3.5 h-3.5" />
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Guarantee footer */}
+        <div className="mt-8 text-sm text-slate-500 flex items-center justify-center gap-1.5">
+          <Shield className="w-4 h-4 text-emerald-600" />
+          All WEx deals include Occupancy Guarantee. Rates are all-in, no hidden fees.
+        </div>
+      </main>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  EMPTY STATE — no engagements                                       */
+/* ================================================================== */
+function BuyerEmptyState() {
+  return (
+    <div className="max-w-2xl mx-auto text-center py-16">
+      <h2 className="text-2xl font-bold text-slate-900 mb-3">Find your next warehouse space.</h2>
+      <p className="text-slate-500 mb-6">
+        Tell us what you need and we&apos;ll match you to available spaces in your market &mdash;
+        with rates locked the moment you reserve.
+      </p>
+      <Link href="/search" className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold transition-colors">
+        Find Space <ArrowRight className="w-4 h-4" />
+      </Link>
+      <div className="mt-8 text-sm text-slate-500 flex items-center justify-center gap-1.5">
+        <Shield className="w-4 h-4 text-emerald-600" />
+        All WEx deals include Occupancy Guarantee. Rates are all-in, no hidden fees.
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================== */
 /*  TOP-LEVEL: THE EDITORIAL HYBRID FLOW                               */
 /*  "Concierge" (Daylight Agent) vs "Collection" (Editorial Grid)      */
+/*  Phase 6A: Checks for engagements first, shows dashboard if any     */
 /* ================================================================== */
 export default function BuyerEditorialFlow() {
-  const [viewMode, setViewMode] = useState<"agent" | "grid">("agent");
+  const [viewMode, setViewMode] = useState<"agent" | "grid" | "dashboard">("agent");
   const [step, setStep] = useState(1);
+  const [engagements, setEngagements] = useState<Engagement[]>([]);
+  const [engagementsLoading, setEngagementsLoading] = useState(true);
+  const [engagementsChecked, setEngagementsChecked] = useState(false);
 
   // SHARED STATE — persists between Agent and Grid modes
   const [intent, setIntent] = useState<BuyerIntent>({
@@ -109,6 +371,40 @@ export default function BuyerEditorialFlow() {
     duration: "",
     amenities: [],
   });
+
+  // Check for existing engagements on mount
+  useEffect(() => {
+    async function checkEngagements() {
+      try {
+        const data = await api.getEngagements();
+        const engList = Array.isArray(data) ? data : [];
+        if (engList.length > 0) {
+          setEngagements(engList);
+          setViewMode("dashboard");
+        }
+      } catch {
+        // No engagements or not logged in — show search flow
+      } finally {
+        setEngagementsLoading(false);
+        setEngagementsChecked(true);
+      }
+    }
+    checkEngagements();
+  }, []);
+
+  // Show loading while checking engagements
+  if (engagementsLoading && !engagementsChecked) {
+    return (
+      <div className="h-screen w-full bg-slate-50 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+      </div>
+    );
+  }
+
+  // Dashboard mode — show deal tracker
+  if (viewMode === "dashboard" && engagements.length > 0) {
+    return <BuyerDashboard engagements={engagements} />;
+  }
 
   return (
     <div className="h-screen w-full bg-slate-50 text-slate-900 overflow-hidden relative font-sans selection:bg-black selection:text-white">
@@ -293,9 +589,9 @@ function AgentFlow({
         const parts = [];
         if (intent.timing) parts.push(intent.timing);
         if (intent.duration) parts.push(intent.duration);
-        return parts.length > 0 ? parts.join(" · ") : "Timeline";
+        return parts.length > 0 ? parts.join(" \u00B7 ") : "Timeline";
       }
-      case 5: return intent.amenities.length > 0 ? intent.amenities.slice(0, 2).join(", ") + (intent.amenities.length > 2 ? "…" : "") : "Must-Haves";
+      case 5: return intent.amenities.length > 0 ? intent.amenities.slice(0, 2).join(", ") + (intent.amenities.length > 2 ? "\u2026" : "") : "Must-Haves";
       default: return STEP_LABELS[stepIdx] || "";
     }
   }

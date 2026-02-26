@@ -10,6 +10,7 @@ interface MetricCardProps {
   suffix?: string;
   sublabel?: string;
   format?: "currency" | "number" | "percent";
+  decimals?: number;
   className?: string;
   hero?: boolean;
 }
@@ -21,6 +22,7 @@ export default function MetricCard({
   suffix,
   sublabel,
   format = "number",
+  decimals: decimalsProp,
   className = "",
   hero = false,
 }: MetricCardProps) {
@@ -28,21 +30,21 @@ export default function MetricCard({
     switch (format) {
       case "currency":
         return {
-          decimals: 0,
+          decimals: decimalsProp ?? 2,
           prefix: prefix ?? "$",
           suffix: suffix ?? "",
           separator: ",",
         };
       case "percent":
         return {
-          decimals: 0,
+          decimals: decimalsProp ?? 0,
           prefix: prefix ?? "",
           suffix: suffix ?? "%",
           separator: ",",
         };
       default:
         return {
-          decimals: 0,
+          decimals: decimalsProp ?? 0,
           prefix: prefix ?? "",
           suffix: suffix ?? "",
           separator: ",",

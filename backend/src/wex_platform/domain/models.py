@@ -101,6 +101,7 @@ class Warehouse(Base):
     lng = Column(Float)
     neighborhood = Column(String(150))
     building_size_sqft = Column(Integer)
+    available_sqft = Column(Integer, nullable=True)  # Mutable — decremented by holds, released on expiry
     lot_size_acres = Column(Float)
     year_built = Column(Integer)
     construction_type = Column(String(100))
@@ -184,6 +185,7 @@ class ContextualMemory(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     warehouse_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
+    property_id = Column(String(36), ForeignKey("properties.id"), nullable=True)
     memory_type = Column(String(50))
     content = Column(Text, nullable=False)
     source = Column(String(50))
@@ -193,6 +195,7 @@ class ContextualMemory(Base):
 
     # Relationships
     warehouse = relationship("Warehouse", back_populates="memories")
+    property_ref = relationship("Property", foreign_keys=[property_id], back_populates="memories")
 
 
 class SupplierAgreement(Base):
@@ -924,6 +927,13 @@ class Engagement(Base):
     instant_book_requested_at = Column(DateTime, nullable=True)
     instant_book_confirmed_at = Column(DateTime, nullable=True)
 
+    # Hold
+    hold_expires_at = Column(DateTime, nullable=True)
+    hold_extended = Column(Boolean, default=False)
+    hold_extended_at = Column(DateTime, nullable=True)
+    hold_extended_until = Column(DateTime, nullable=True)
+    tour_notes = Column(Text, nullable=True)
+
     # Agreement
     agreement_sent_at = Column(DateTime, nullable=True)
     agreement_signed_at = Column(DateTime, nullable=True)
@@ -1023,9 +1033,9 @@ class PropertyQuestion(Base):
     __tablename__ = "property_questions"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    engagement_id = Column(String(36), ForeignKey("engagements.id"), nullable=False)
+    engagement_id = Column(String(36), ForeignKey("engagements.id"), nullable=True)
     warehouse_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
-    buyer_id = Column(String(36), ForeignKey("buyers.id"), nullable=False)
+    buyer_id = Column(String(36), ForeignKey("buyers.id"), nullable=True)
     question_text = Column(Text, nullable=False)
 
     # Status
@@ -1111,3 +1121,195 @@ class PaymentRecord(Base):
 
     # Relationships
     engagement = relationship("Engagement", backref="payment_records")
+
+
+# ---------------------------------------------------------------------------
+# Property Pipeline Domain (v2 schema)
+# ---------------------------------------------------------------------------
+
+
+class Property(Base):
+    """Canonical property record — replaces Warehouse as the identity table."""
+
+    __tablename__ = "properties"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source = Column(String(50), default="manual")
+    address = Column(String(500), nullable=True)
+    city = Column(String(100), nullable=True)
+    state = Column(String(50), nullable=True)
+    zip = Column(String(20), nullable=True)
+    lat = Column(Float, nullable=True)
+    lng = Column(Float, nullable=True)
+    neighborhood = Column(String(150), nullable=True)
+    market = Column(String(100), nullable=True)
+    relationship_status = Column(String(50), default="prospect", index=True)
+    company_id = Column(String(36), ForeignKey("companies.id"), nullable=True, index=True)
+    property_type = Column(String(50), nullable=True)
+    primary_image_url = Column(String(500), nullable=True)
+    image_urls = Column(JSON, default=[])
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationships
+    knowledge = relationship("PropertyKnowledge", back_populates="property_ref", uselist=False)
+    listing = relationship("PropertyListing", back_populates="property_ref", uselist=False)
+    events = relationship("PropertyEvent", back_populates="property_ref")
+    contacts = relationship("PropertyContact", back_populates="property_ref")
+    memories = relationship("ContextualMemory", foreign_keys="ContextualMemory.property_id", back_populates="property_ref")
+
+
+class PropertyKnowledge(Base):
+    """Merged building knowledge — replaces scattered specs across Warehouse/TruthCore/PropertyProfile."""
+
+    __tablename__ = "property_knowledge"
+
+    PROVENANCE_FIELDS = {
+        'building_size_sqft', 'clear_height_ft', 'dock_doors', 'dock_doors_receiving',
+        'dock_doors_shipping', 'drive_in_bays', 'parking_spaces', 'trailer_parking',
+        'has_sprinkler', 'power_supply', 'has_office', 'column_spacing_ft',
+        'number_of_stories', 'year_built', 'year_renovated', 'construction_type',
+        'building_class', 'zoning', 'lot_size_acres', 'rail_served', 'fenced_yard',
+        'warehouse_heated', 'weekend_access', 'use_types', 'activity_tier',
+        'market_rate_low', 'market_rate_high', 'ai_profile_summary', 'additional_notes',
+    }
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    property_id = Column(String(36), ForeignKey("properties.id"), unique=True, nullable=False)
+    building_size_sqft = Column(Integer, nullable=True)
+    estimated_sqft = Column(Boolean, default=False)
+    clear_height_ft = Column(Float, nullable=True)
+    dock_doors = Column(Integer, nullable=True)
+    dock_doors_receiving = Column(Integer, nullable=True)
+    dock_doors_shipping = Column(Integer, nullable=True)
+    drive_in_bays = Column(Integer, nullable=True)
+    parking_spaces = Column(Integer, nullable=True)
+    trailer_parking = Column(Integer, nullable=True)
+    has_sprinkler = Column(Boolean, nullable=True)
+    power_supply = Column(String(100), nullable=True)
+    has_office = Column(Boolean, nullable=True)
+    column_spacing_ft = Column(String(50), nullable=True)
+    number_of_stories = Column(Integer, nullable=True)
+    year_built = Column(Integer, nullable=True)
+    year_renovated = Column(Integer, nullable=True)
+    construction_type = Column(String(100), nullable=True)
+    building_class = Column(String(10), nullable=True)
+    zoning = Column(String(100), nullable=True)
+    lot_size_acres = Column(Float, nullable=True)
+    rail_served = Column(Boolean, nullable=True)
+    fenced_yard = Column(Boolean, nullable=True)
+    warehouse_heated = Column(Boolean, nullable=True)
+    weekend_access = Column(Boolean, nullable=True)
+    use_types = Column(JSON, nullable=True)
+    activity_tier = Column(String(50), nullable=True)
+    market_rate_low = Column(Float, nullable=True)
+    market_rate_high = Column(Float, nullable=True)
+    ai_profile_summary = Column(Text, nullable=True)
+    additional_notes = Column(Text, nullable=True)
+    field_provenance = Column(JSON, default={})
+    last_enriched_at = Column(DateTime, nullable=True)
+    enrichment_source = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationship
+    property_ref = relationship("Property", back_populates="knowledge")
+
+
+class PropertyListing(Base):
+    """Operational listing state — replaces TruthCore for activation/pricing."""
+
+    __tablename__ = "property_listings"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    property_id = Column(String(36), ForeignKey("properties.id"), unique=True, nullable=False)
+    activation_status = Column(String(10), default="off")
+    activated_at = Column(DateTime, nullable=True)
+    tour_readiness = Column(String(50), default="48_hours")
+    tour_required = Column(Boolean, default=False)
+    trust_level = Column(Integer, default=0)
+    available_sqft = Column(Integer, nullable=True)
+    min_sqft = Column(Integer, nullable=True)
+    max_sqft = Column(Integer, nullable=True)
+    available_from = Column(Date, nullable=True)
+    available_to = Column(Date, nullable=True)
+    pricing_mode = Column(String(10), default="manual")
+    supplier_rate_per_sqft = Column(Float, nullable=True)
+    recommended_rate = Column(Float, nullable=True)
+    min_rentable = Column(Float, nullable=True)
+    min_term_months = Column(Integer, default=1)
+    max_term_months = Column(Integer, default=12)
+    constraints = Column(JSON, default={})
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationship
+    property_ref = relationship("Property", back_populates="listing")
+
+    @property
+    def instant_book_eligible(self):
+        return self.pricing_mode == "auto" and not self.tour_required
+
+
+class PropertyEvent(Base):
+    """Immutable event log entry for property lifecycle."""
+
+    __tablename__ = "property_events"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    property_id = Column(String(36), ForeignKey("properties.id"), nullable=False, index=True)
+    event_type = Column(String(50), nullable=False)
+    actor = Column(String(100), nullable=True)
+    metadata_ = Column("metadata", JSON, default={})
+    created_at = Column(DateTime, default=func.now())
+
+    # Relationship
+    property_ref = relationship("Property", back_populates="events")
+
+
+class PropertyContact(Base):
+    """Contact associated with a property (owner, manager, broker, etc.)."""
+
+    __tablename__ = "property_contacts"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    property_id = Column(String(36), ForeignKey("properties.id"), nullable=False, index=True)
+    contact_type = Column(String(50), default="owner")
+    name = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=True, index=True)
+    phone = Column(String(50), nullable=True)
+    is_primary = Column(Boolean, default=True)
+    company_id = Column(String(36), ForeignKey("companies.id"), nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    # Relationship
+    property_ref = relationship("Property", back_populates="contacts")
+
+
+# ---------------------------------------------------------------------------
+# Provenance audit hook
+# ---------------------------------------------------------------------------
+
+import logging
+from sqlalchemy import event, inspect
+from sqlalchemy.orm import Session as OrmSession
+
+_provenance_logger = logging.getLogger("wex.provenance")
+
+
+@event.listens_for(OrmSession, "before_flush")
+def _check_provenance(session, flush_context, instances):
+    """Warn if PropertyKnowledge fields are modified without updating field_provenance."""
+    for obj in session.dirty:
+        if not isinstance(obj, PropertyKnowledge):
+            continue
+        state = inspect(obj)
+        provenance = obj.field_provenance or {}
+        for field in PropertyKnowledge.PROVENANCE_FIELDS:
+            hist = state.attrs[field].history
+            if hist.has_changes() and field not in provenance:
+                _provenance_logger.warning(
+                    "PropertyKnowledge %s: field '%s' changed without provenance entry",
+                    obj.property_id, field
+                )

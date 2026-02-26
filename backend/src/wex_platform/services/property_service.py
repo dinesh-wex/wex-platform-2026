@@ -9,7 +9,10 @@ logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wex_platform.domain.models import Warehouse, TruthCore, ContextualMemory
+from wex_platform.domain.models import (
+    Warehouse, TruthCore, ContextualMemory,
+    Property, PropertyKnowledge, PropertyListing, PropertyContact,
+)
 from wex_platform.services.geocoding_service import NormalizeResult as GeocodingResult
 
 
@@ -197,9 +200,82 @@ async def create_warehouse_from_search(
             created_at=now,
         ))
 
-    # Persist all
+    # --- Create parallel Property-domain records (new schema) ---
+
+    property_record = Property(
+        id=warehouse_id,  # Property.id = Warehouse.id (same UUIDs)
+        source="gemini_search",
+        address=resolved_address,
+        city=geocoding.city or property_data.get("city") or "",
+        state=geocoding.state or property_data.get("state") or "",
+        zip=geocoding.zip_code or property_data.get("zip_code") or "",
+        lat=geocoding.lat,
+        lng=geocoding.lng,
+        property_type=property_data.get("property_type"),
+        primary_image_url=image_urls[0] if image_urls else None,
+        image_urls=image_urls,
+        relationship_status="prospect",
+        created_at=now,
+        updated_at=now,
+    )
+
+    property_knowledge = PropertyKnowledge(
+        id=str(uuid.uuid4()),
+        property_id=warehouse_id,
+        building_size_sqft=property_data.get("building_size_sqft"),
+        clear_height_ft=property_data.get("clear_height_ft"),
+        dock_doors=property_data.get("dock_doors") or 0,
+        dock_doors_receiving=property_data.get("dock_doors") or 0,
+        dock_doors_shipping=0,
+        drive_in_bays=property_data.get("drive_in_bays") or 0,
+        parking_spaces=property_data.get("parking_spaces") or 0,
+        has_sprinkler=property_data.get("sprinkler_system") or False,
+        has_office=property_data.get("has_office_space") or False,
+        power_supply=property_data.get("power_supply"),
+        year_built=property_data.get("year_built"),
+        construction_type=property_data.get("construction_type"),
+        zoning=property_data.get("zoning"),
+        lot_size_acres=property_data.get("lot_size_acres"),
+        activity_tier="storage_only",
+        created_at=now,
+        updated_at=now,
+    )
+
+    property_listing = PropertyListing(
+        id=str(uuid.uuid4()),
+        property_id=warehouse_id,
+        activation_status="off",
+        min_sqft=min_sqft,
+        max_sqft=building_size or min_sqft,
+        supplier_rate_per_sqft=0.0,
+        trust_level=0,
+        created_at=now,
+        updated_at=now,
+    )
+
+    # Create PropertyContact if owner_email provided
+    property_contact = None
+    if owner_email:
+        property_contact = PropertyContact(
+            id=str(uuid.uuid4()),
+            property_id=warehouse_id,
+            contact_type="owner",
+            name=property_data.get("owner_name") or "Owner",
+            email=owner_email,
+            phone=property_data.get("owner_phone"),
+            is_primary=True,
+            created_at=now,
+            updated_at=now,
+        )
+
+    # Persist all (both old and new schema for backward compatibility)
     db.add(warehouse)
     db.add(truth_core)
+    db.add(property_record)
+    db.add(property_knowledge)
+    db.add(property_listing)
+    if property_contact:
+        db.add(property_contact)
     for mem in memories:
         db.add(mem)
     await db.flush()

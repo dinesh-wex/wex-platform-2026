@@ -23,6 +23,11 @@ from wex_platform.domain.models import (
     User,
     Company,
     Warehouse,
+    Property,
+    PropertyKnowledge,
+    PropertyListing,
+    PropertyContact,
+    PropertyEvent,
     TruthCore,
     ContextualMemory,
     SupplierAgreement,
@@ -35,6 +40,7 @@ from wex_platform.domain.models import (
 )
 from wex_platform.domain.schemas import TruthCoreCreate, TruthCoreResponse
 from wex_platform.services.pricing_engine import calculate_default_buyer_rate
+from wex_platform.services.property_serializer import serialize_property_as_warehouse, serialize_truth_core_compat
 from wex_platform.services.auth_service import create_access_token, decode_token
 import hashlib
 
@@ -211,11 +217,15 @@ class WarehouseListItem(BaseModel):
     state: Optional[str] = None
     zip: Optional[str] = None
     building_size_sqft: Optional[int] = None
+    total_sqft: Optional[int] = None  # rental capacity (available_sqft or max_sqft)
+    available_sqft: Optional[int] = None
+    min_sqft: Optional[int] = None
     year_built: Optional[int] = None
     construction_type: Optional[str] = None
     primary_image_url: Optional[str] = None
     activation_status: Optional[str] = None
     supplier_rate_per_sqft: Optional[float] = None
+    supplier_rate: Optional[float] = None  # alias for frontend compat
     supplier_status: Optional[str] = None
     status: Optional[str] = None  # frontend-friendly alias
     memory_count: int = 0
@@ -262,7 +272,7 @@ class WarehouseDetailResponse(BaseModel):
 
 @router.post("/estimate")
 async def space_estimate(body: EstimateRequest):
-    """WEx Space Estimator — returns instant revenue range.
+    """WEx Space Estimator -- returns instant revenue range.
 
     No auth required. Powers the Phase 1 activation hook
     and the standalone marketing/lead gen tool.
@@ -294,7 +304,7 @@ async def space_estimate(body: EstimateRequest):
                 high_rate = result.data["nnn_high"]
                 rate_location = f"{body.city}, {body.state}" if body.city else f"zip {body.zip}"
                 logger.info(
-                    "NNN rates for zip %s: $%.2f–$%.2f/sqft/mo",
+                    "NNN rates for zip %s: $%.2f-$%.2f/sqft/mo",
                     body.zip, low_rate, high_rate,
                 )
         except Exception as exc:
@@ -311,7 +321,7 @@ async def space_estimate(body: EstimateRequest):
                 high_rate = nearby["nnn_high"]
                 rate_location = f"near {body.city}, {body.state}" if body.city else f"near zip {body.zip}"
                 logger.info(
-                    "Nearby cached rate for zip %s (from %s): $%.2f–$%.2f/sqft/mo",
+                    "Nearby cached rate for zip %s (from %s): $%.2f-$%.2f/sqft/mo",
                     body.zip, nearby.get("source_zip"), low_rate, high_rate,
                 )
         except Exception as exc:
@@ -344,7 +354,7 @@ async def supplier_login(
     body: SupplierLoginRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Demo supplier login by email — creates user if needed, assigns unowned warehouses.
+    """Demo supplier login by email -- creates user if needed, assigns unowned properties.
 
     Returns JWT token + supplier profile for the dashboard auth flow.
     """
@@ -381,14 +391,17 @@ async def supplier_login(
 
     user.last_login_at = datetime.now(timezone.utc)
 
-    # 2. Find warehouses owned by this user's company
-    # Correct access control query: WHERE company_id = user.company_id
-    wh_result = await db.execute(
-        select(Warehouse)
-        .where(Warehouse.company_id == user.company_id)
-        .options(selectinload(Warehouse.truth_core), selectinload(Warehouse.memories))
+    # 2. Find properties owned by this user's company
+    prop_result = await db.execute(
+        select(Property)
+        .where(Property.company_id == user.company_id)
+        .options(
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.memories),
+        )
     )
-    warehouses = list(wh_result.scalars().all())
+    properties = list(prop_result.unique().scalars().all())
 
     await db.commit()
 
@@ -420,131 +433,133 @@ async def list_warehouses(
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_user),
 ):
-    """Return all warehouses with truth-core summaries.
+    """Return all properties with listing summaries.
 
     ISOLATION: Only supplier_rate is visible. No buyer pricing data is exposed.
-    When company_id is provided, only warehouses belonging to that company are returned.
+    When company_id is provided, only properties belonging to that company are returned.
     Falls back to owner_email filter for backward compatibility.
     """
     query = (
-        select(Warehouse)
+        select(Property)
         .options(
-            selectinload(Warehouse.truth_core),
-            selectinload(Warehouse.memories),
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.contacts),
+            selectinload(Property.memories),
         )
     )
 
     if company_id is not None:
         # Preferred: explicit company_id filter
-        query = query.where(Warehouse.company_id == company_id)
+        query = query.where(Property.company_id == company_id)
     elif owner_email is not None:
-        # Deprecated fallback: filter by owner_email for backward compat
+        # Deprecated fallback: filter by owner_email via PropertyContact join
         logging.getLogger(__name__).warning(
-            "[deprecation] owner_email param used in warehouse query — migrate to company_id (email=%s)",
+            "[deprecation] owner_email param used in warehouse query -- migrate to company_id (email=%s)",
             owner_email,
         )
-        query = query.where(func.lower(Warehouse.owner_email) == func.lower(owner_email))
+        query = query.join(PropertyContact, PropertyContact.property_id == Property.id).where(
+            func.lower(PropertyContact.email) == func.lower(owner_email)
+        )
     elif current_user and current_user.company_id:
-        # Auth-based default: show only the authenticated user's company warehouses
-        query = query.where(Warehouse.company_id == current_user.company_id)
+        # Auth-based default: show only the authenticated user's company properties
+        query = query.where(Property.company_id == current_user.company_id)
     else:
-        # No filter and no auth — return empty for safety
+        # No filter and no auth -- return empty for safety
         logging.getLogger(__name__).warning(
-            "[access] list_warehouses called with no filter and no auth — returning empty"
+            "[access] list_warehouses called with no filter and no auth -- returning empty"
         )
         return []
 
     result = await db.execute(query)
-    warehouses = result.scalars().all()
+    properties = result.unique().scalars().all()
 
     items = []
-    for wh in warehouses:
+    for prop in properties:
+        pk = prop.knowledge
+        pl = prop.listing
+        primary_contact = next((c for c in (prop.contacts or []) if c.is_primary), (prop.contacts or [None])[0] if prop.contacts else None)
+
         activation = None
         rate = None
-        if wh.truth_core:
-            activation = wh.truth_core.activation_status
-            rate = wh.truth_core.supplier_rate_per_sqft
+        if pl:
+            activation = pl.activation_status
+            rate = pl.supplier_rate_per_sqft
 
         # Apply status filter if provided
         if status is not None:
             if activation != status:
                 continue
 
-        # Map activation_status / supplier_status to frontend-friendly status
-        # Must mirror _derive_frontend_status from supplier_dashboard.py
+        # Map activation_status / relationship_status to frontend-friendly status
+        from wex_platform.services.property_serializer import _relationship_to_supplier_status
+        supplier_status = _relationship_to_supplier_status(prop.relationship_status)
         if activation == "on":
             frontend_status = "in_network"
         elif activation == "off":
             frontend_status = "in_network_paused"
-        elif wh.supplier_status in ("onboarding", "third_party"):
+        elif supplier_status in ("onboarding", "third_party"):
             frontend_status = "onboarding"
         else:
-            frontend_status = wh.supplier_status or "onboarding"
+            frontend_status = supplier_status or "onboarding"
+
+        rental_sqft = (pl.available_sqft or pl.max_sqft or 0) if pl else 0
+        total_sqft = rental_sqft or (pk.building_size_sqft if pk else 0) or 0
 
         items.append(
             WarehouseListItem(
-                id=wh.id,
-                owner_name=wh.owner_name,
-                address=wh.address,
-                city=wh.city,
-                state=wh.state,
-                zip=wh.zip,
-                building_size_sqft=wh.building_size_sqft,
-                year_built=wh.year_built,
-                construction_type=wh.construction_type,
-                primary_image_url=wh.primary_image_url,
+                id=prop.id,
+                owner_name=primary_contact.name if primary_contact else None,
+                address=prop.address,
+                city=prop.city,
+                state=prop.state,
+                zip=prop.zip,
+                building_size_sqft=pk.building_size_sqft if pk else None,
+                total_sqft=total_sqft,
+                available_sqft=pl.available_sqft or pl.max_sqft if pl else None,
+                min_sqft=pl.min_sqft if pl else None,
+                year_built=pk.year_built if pk else None,
+                construction_type=pk.construction_type if pk else None,
+                primary_image_url=prop.primary_image_url,
                 activation_status=activation,
                 supplier_rate_per_sqft=rate,
-                supplier_status=wh.supplier_status,
+                supplier_rate=rate,
+                supplier_status=supplier_status,
                 status=frontend_status,
-                memory_count=len(wh.memories) if wh.memories else 0,
-                created_at=wh.created_at,
+                memory_count=len(prop.memories) if prop.memories else 0,
+                created_at=prop.created_at,
             )
         )
 
     return items
 
 
-def _serialize_warehouse_lookup(wh: Warehouse) -> dict:
-    """Serialize a Warehouse + TruthCore into the lookup response format."""
+def _serialize_property_lookup(prop: Property) -> dict:
+    """Serialize a Property + Knowledge + Listing into the lookup response format."""
+    pk = prop.knowledge
+    pl = prop.listing
+    primary_contact = next((c for c in (prop.contacts or []) if c.is_primary), (prop.contacts or [None])[0] if prop.contacts else None)
+
     tc_dict = None
-    if wh.truth_core:
-        tc = wh.truth_core
-        tc_dict = {
-            "id": tc.id,
-            "activation_status": tc.activation_status,
-            "supplier_rate_per_sqft": tc.supplier_rate_per_sqft,
-            "min_sqft": tc.min_sqft,
-            "max_sqft": tc.max_sqft,
-            "activity_tier": tc.activity_tier,
-            "available_from": tc.available_from.isoformat() if tc.available_from else None,
-            "available_to": tc.available_to.isoformat() if tc.available_to else None,
-            "dock_doors_receiving": tc.dock_doors_receiving,
-            "dock_doors_shipping": tc.dock_doors_shipping,
-            "drive_in_bays": tc.drive_in_bays,
-            "parking_spaces": tc.parking_spaces,
-            "clear_height_ft": tc.clear_height_ft,
-            "has_office_space": tc.has_office_space,
-            "has_sprinkler": tc.has_sprinkler,
-            "power_supply": tc.power_supply,
-        }
+    if pl:
+        tc_dict = serialize_truth_core_compat(prop, pk, pl)
 
     return {
-        "id": wh.id,
-        "owner_name": wh.owner_name,
-        "owner_email": wh.owner_email,
-        "address": wh.address,
-        "city": wh.city,
-        "state": wh.state,
-        "zip": wh.zip,
-        "building_size_sqft": wh.building_size_sqft,
-        "lot_size_acres": wh.lot_size_acres,
-        "year_built": wh.year_built,
-        "construction_type": wh.construction_type,
-        "zoning": wh.zoning,
-        "primary_image_url": wh.primary_image_url,
-        "image_urls": wh.image_urls or [],
-        "property_type": wh.property_type,
+        "id": prop.id,
+        "owner_name": primary_contact.name if primary_contact else None,
+        "owner_email": primary_contact.email if primary_contact else None,
+        "address": prop.address,
+        "city": prop.city,
+        "state": prop.state,
+        "zip": prop.zip,
+        "building_size_sqft": pk.building_size_sqft if pk else None,
+        "lot_size_acres": pk.lot_size_acres if pk else None,
+        "year_built": pk.year_built if pk else None,
+        "construction_type": pk.construction_type if pk else None,
+        "zoning": pk.zoning if pk else None,
+        "primary_image_url": prop.primary_image_url,
+        "image_urls": prop.image_urls or [],
+        "property_type": prop.property_type,
         "truth_core": tc_dict,
     }
 
@@ -556,28 +571,30 @@ async def lookup_warehouse_by_address(
     is_test: bool = Query(False, description="Mark as test data"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Search warehouses by address substring (case-insensitive).
+    """Search properties by address substring (case-insensitive).
 
     Used by the activation flow when a supplier types their building address.
-    Returns matching warehouses with their building data (truth core, features).
+    Returns matching properties with their building data (knowledge, listing, features).
 
     Falls back to geocoding + Gemini search if no DB match is found.
     """
-    # --- Step 1: Existing DB search (unchanged) ---
+    # --- Step 1: Existing DB search (Property table) ---
     result = await db.execute(
-        select(Warehouse)
-        .where(func.lower(Warehouse.address).contains(func.lower(address)))
+        select(Property)
+        .where(func.lower(Property.address).contains(func.lower(address)))
         .options(
-            selectinload(Warehouse.truth_core),
-            selectinload(Warehouse.memories),
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.contacts),
+            selectinload(Property.memories),
         )
     )
-    warehouses = result.scalars().all()
+    properties = result.unique().scalars().all()
 
-    if warehouses:
-        return [_serialize_warehouse_lookup(wh) for wh in warehouses]
+    if properties:
+        return [_serialize_property_lookup(p) for p in properties]
 
-    # --- Step 2: No DB match — try geocoding + Gemini search ---
+    # --- Step 2: No DB match -- try geocoding + Gemini search ---
     logger.info("[Lookup] No DB match for '%s', starting geocode + Gemini pipeline...", address)
     from wex_platform.services.geocoding_service import normalize_address
 
@@ -590,17 +607,19 @@ async def lookup_warehouse_by_address(
     if geocoding.is_valid:
         # Re-check DB with normalized address (catches typos)
         result = await db.execute(
-            select(Warehouse)
-            .where(func.lower(Warehouse.address).contains(func.lower(geocoding.formatted_address)))
+            select(Property)
+            .where(func.lower(Property.address).contains(func.lower(geocoding.formatted_address)))
             .options(
-                selectinload(Warehouse.truth_core),
-                selectinload(Warehouse.memories),
+                selectinload(Property.knowledge),
+                selectinload(Property.listing),
+                selectinload(Property.contacts),
+                selectinload(Property.memories),
             )
         )
-        warehouses = result.scalars().all()
+        properties = result.unique().scalars().all()
 
-        if warehouses:
-            return [_serialize_warehouse_lookup(wh) for wh in warehouses]
+        if properties:
+            return [_serialize_property_lookup(p) for p in properties]
 
     # --- Guardrail: negative cache check ---
     normalized = search_address.lower()
@@ -630,7 +649,7 @@ async def lookup_warehouse_by_address(
     property_agent = PropertySearchAgent()
     rate_agent = MarketRateAgent()
 
-    # Fire both in parallel — property search is ~20s, NNN lookup ~10s
+    # Fire both in parallel -- property search is ~20s, NNN lookup ~10s
     # This saves ~10s vs running them sequentially
     async def _property_search():
         return await property_agent.search_property(
@@ -641,7 +660,7 @@ async def lookup_warehouse_by_address(
         )
 
     async def _nnn_rate_lookup():
-        """Best-effort NNN rate lookup — failures are fine (frontend has fallback)."""
+        """Best-effort NNN rate lookup -- failures are fine (frontend has fallback)."""
         try:
             zip_code = geocoding.zip_code
             if not zip_code:
@@ -672,7 +691,7 @@ async def lookup_warehouse_by_address(
     logger.info("[Lookup] Parallel complete: search_ok=%s, rates=%s", search_result.ok, "found" if nnn_rates else "none")
 
     if not search_result.ok:
-        # Don't cache timeouts/errors — only cache genuine "not found" results.
+        # Don't cache timeouts/errors -- only cache genuine "not found" results.
         # This allows retries after transient Gemini failures.
         logger.warning("[Lookup] Search failed for '%s': %s", search_address, search_result.error)
         return []
@@ -710,7 +729,9 @@ async def lookup_warehouse_by_address(
             "mismatch_details": meta.get("address_match", {}).get("mismatch_details"),
         }]
 
-    # Only verified_persisted reaches here — safe to write to DB
+    # Only verified_persisted reaches here -- safe to write to DB
+    # create_warehouse_from_search still creates Warehouse + TruthCore (legacy)
+    # We also create Property + PropertyKnowledge + PropertyListing + PropertyContact
     from wex_platform.services.property_service import create_warehouse_from_search
 
     warehouse, truth_core, memories = await create_warehouse_from_search(
@@ -734,7 +755,26 @@ async def lookup_warehouse_by_address(
             is_test=is_test,
         ))
 
-    # Serialize in the same format as existing results
+    # Serialize using the new Property tables if available, fall back to Warehouse
+    # Check if a Property record was created by the service
+    prop_result = await db.execute(
+        select(Property)
+        .where(Property.id == warehouse.id)
+        .options(
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.contacts),
+        )
+    )
+    prop = prop_result.scalar_one_or_none()
+
+    if prop:
+        response_dict = _serialize_property_lookup(prop)
+        response_dict["nnn_rates"] = nnn_rates
+        response_dict["source_urls"] = property_data.get("source_urls", [])
+        return [response_dict]
+
+    # Fallback: serialize from Warehouse (legacy path)
     tc_dict = None
     if truth_core:
         tc_dict = {
@@ -783,10 +823,104 @@ async def get_warehouse(
     warehouse_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Return full warehouse detail with truth core, memories, and supplier agreements.
+    """Return full property detail with knowledge, listing, memories, and supplier agreements.
 
     ISOLATION: No buyer rates, buyer info, or WEx spread are returned.
     """
+    # Try Property table first
+    prop_result = await db.execute(
+        select(Property)
+        .where(Property.id == warehouse_id)
+        .options(
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.contacts),
+            selectinload(Property.memories),
+        )
+    )
+    prop = prop_result.scalar_one_or_none()
+
+    if prop:
+        pk = prop.knowledge
+        pl = prop.listing
+        primary_contact = next((c for c in (prop.contacts or []) if c.is_primary), (prop.contacts or [None])[0] if prop.contacts else None)
+
+        # Build truth core dict (supplier-safe fields only)
+        tc_dict = serialize_truth_core_compat(prop, pk, pl) if pl else None
+
+        # Build memories list
+        memories_list = []
+        for m in (prop.memories or []):
+            memories_list.append({
+                "id": m.id,
+                "memory_type": m.memory_type,
+                "content": m.content,
+                "source": m.source,
+                "confidence": m.confidence,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            })
+
+        # Fetch supplier agreements for this property
+        agree_result = await db.execute(
+            select(SupplierAgreement).where(SupplierAgreement.warehouse_id == warehouse_id).order_by(SupplierAgreement.created_at.desc())
+        )
+        agreements_list = []
+        for a in agree_result.scalars().all():
+            agreements_list.append({
+                "id": a.id,
+                "status": a.status,
+                "terms_json": a.terms_json,
+                "signed_at": a.signed_at.isoformat() if a.signed_at else None,
+                "expires_at": a.expires_at.isoformat() if a.expires_at else None,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            })
+
+        # Fetch supplier ledger entries
+        ledger_result = await db.execute(
+            select(SupplierLedger).where(SupplierLedger.warehouse_id == warehouse_id).order_by(SupplierLedger.created_at.desc())
+        )
+        ledger_list = []
+        for le in ledger_result.scalars().all():
+            ledger_list.append({
+                "id": le.id,
+                "deal_id": le.deal_id,
+                "entry_type": le.entry_type,
+                "amount": le.amount,
+                "description": le.description,
+                "period_start": le.period_start.isoformat() if le.period_start else None,
+                "period_end": le.period_end.isoformat() if le.period_end else None,
+                "status": le.status,
+                "created_at": le.created_at.isoformat() if le.created_at else None,
+            })
+
+        return WarehouseDetailResponse(
+            id=prop.id,
+            owner_name=primary_contact.name if primary_contact else None,
+            owner_email=primary_contact.email if primary_contact else None,
+            owner_phone=primary_contact.phone if primary_contact else None,
+            address=prop.address,
+            city=prop.city,
+            state=prop.state,
+            zip=prop.zip,
+            lat=prop.lat,
+            lng=prop.lng,
+            building_size_sqft=pk.building_size_sqft if pk else None,
+            lot_size_acres=pk.lot_size_acres if pk else None,
+            year_built=pk.year_built if pk else None,
+            construction_type=pk.construction_type if pk else None,
+            zoning=pk.zoning if pk else None,
+            primary_image_url=prop.primary_image_url,
+            image_urls=prop.image_urls or [],
+            source_url=None,
+            created_at=prop.created_at,
+            updated_at=prop.updated_at,
+            truth_core=tc_dict,
+            memories=memories_list,
+            supplier_agreements=agreements_list,
+            supplier_ledger=ledger_list,
+        )
+
+    # Fallback to Warehouse table
     result = await db.execute(
         select(Warehouse)
         .where(Warehouse.id == warehouse_id)
@@ -912,6 +1046,7 @@ async def activate_warehouse(
 ):
     """Create or update a TruthCore to activate a warehouse listing.
 
+    Also updates PropertyListing if a Property record exists.
     Creates a ToggleHistory record and a SupplierAgreement.
     If authenticated, assigns the warehouse to the current user.
     """
@@ -935,7 +1070,7 @@ async def activate_warehouse(
         warehouse.owner_phone = current_user.phone
     elif not current_user and not warehouse.company_id:
         logging.getLogger(__name__).warning(
-            "[ownership] activate_warehouse called without auth — warehouse %s will be orphaned (no company_id)",
+            "[ownership] activate_warehouse called without auth -- warehouse %s will be orphaned (no company_id)",
             warehouse_id,
         )
 
@@ -1011,6 +1146,114 @@ async def activate_warehouse(
     # Flush to get the truth_core.id if newly created
     await db.flush()
 
+    # --- Also update Property tables if they exist ---
+    prop_result = await db.execute(
+        select(Property)
+        .where(Property.id == warehouse_id)
+        .options(
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.contacts),
+        )
+    )
+    prop = prop_result.scalar_one_or_none()
+
+    if prop:
+        # Update Property relationship_status
+        prop.relationship_status = "active"
+        if current_user and not prop.company_id:
+            prop.company_id = current_user.company_id
+
+        # Derive pricing_mode from constraints.pricing_path
+        # "set_rate" = supplier set a fixed rate → auto (instant book eligible)
+        # anything else = manual/negotiate
+        _pricing_path = (body.constraints or {}).get("pricing_path", "")
+        _pricing_mode = "auto" if _pricing_path == "set_rate" else "manual"
+
+        # Update or create PropertyListing
+        pl = prop.listing
+        if pl:
+            pl.activation_status = "on"
+            pl.activated_at = now
+            pl.min_sqft = body.min_sqft
+            pl.max_sqft = body.max_sqft
+            pl.supplier_rate_per_sqft = body.supplier_rate_per_sqft
+            pl.min_term_months = body.min_term_months
+            pl.max_term_months = body.max_term_months
+            pl.tour_readiness = body.tour_readiness
+            pl.trust_level = body.trust_level
+            pl.constraints = body.constraints
+            pl.pricing_mode = _pricing_mode
+            if body.available_from:
+                pl.available_from = body.available_from
+            if body.available_to:
+                pl.available_to = body.available_to
+        else:
+            pl = PropertyListing(
+                id=str(uuid.uuid4()),
+                property_id=warehouse_id,
+                activation_status="on",
+                activated_at=now,
+                min_sqft=body.min_sqft,
+                max_sqft=body.max_sqft,
+                supplier_rate_per_sqft=body.supplier_rate_per_sqft,
+                min_term_months=body.min_term_months,
+                max_term_months=body.max_term_months,
+                tour_readiness=body.tour_readiness,
+                trust_level=body.trust_level,
+                constraints=body.constraints,
+                pricing_mode=_pricing_mode,
+            )
+            db.add(pl)
+
+        # Update or create PropertyKnowledge with physical specs
+        pk = prop.knowledge
+        if pk:
+            if body.dock_doors_receiving is not None:
+                pk.dock_doors_receiving = body.dock_doors_receiving
+            if body.dock_doors_shipping is not None:
+                pk.dock_doors_shipping = body.dock_doors_shipping
+            if body.drive_in_bays is not None:
+                pk.drive_in_bays = body.drive_in_bays
+            if body.parking_spaces is not None:
+                pk.parking_spaces = body.parking_spaces
+            if body.clear_height_ft is not None:
+                pk.clear_height_ft = body.clear_height_ft
+            if body.has_office_space is not None:
+                pk.has_office = body.has_office_space
+            if body.has_sprinkler is not None:
+                pk.has_sprinkler = body.has_sprinkler
+            if body.power_supply is not None:
+                pk.power_supply = body.power_supply
+            if body.activity_tier is not None:
+                pk.activity_tier = body.activity_tier
+
+        # Create or update PropertyContact if user is authenticated
+        if current_user:
+            existing_contact = next((c for c in (prop.contacts or []) if c.email and c.email.lower() == current_user.email.lower()), None)
+            if not existing_contact:
+                contact = PropertyContact(
+                    id=str(uuid.uuid4()),
+                    property_id=warehouse_id,
+                    contact_type="owner",
+                    name=current_user.name,
+                    email=current_user.email,
+                    phone=current_user.phone,
+                    is_primary=True,
+                    company_id=current_user.company_id,
+                )
+                db.add(contact)
+
+        # Create PropertyEvent for activation
+        event = PropertyEvent(
+            id=str(uuid.uuid4()),
+            property_id=warehouse_id,
+            event_type="activated",
+            actor=current_user.id if current_user else "api",
+            metadata_={"activation_status": "on"},
+        )
+        db.add(event)
+
     # Create toggle history record
     toggle = ToggleHistory(
         id=str(uuid.uuid4()),
@@ -1040,7 +1283,7 @@ async def activate_warehouse(
 
     await db.commit()
 
-    # --- Sync Warehouse images → PropertyProfile (background) ---
+    # --- Sync images -> PropertyProfile (background) ---
     import asyncio
     from wex_platform.infra.database import async_session as _async_session
 
@@ -1080,7 +1323,7 @@ async def activate_warehouse(
 
     asyncio.ensure_future(_sync_profile())
 
-    # Generate AI description (background — never blocks activation)
+    # Generate AI description (background -- never blocks activation)
     async def _generate_description():
         try:
             from wex_platform.services.description_service import generate_warehouse_description
@@ -1155,6 +1398,38 @@ async def toggle_activation(
     truth_core.activation_status = body.status
     truth_core.toggled_at = now
 
+    # Also update PropertyListing if it exists
+    pl_result = await db.execute(
+        select(PropertyListing).where(PropertyListing.property_id == warehouse_id)
+    )
+    pl = pl_result.scalar_one_or_none()
+    if pl:
+        pl.activation_status = body.status
+        if body.status == "on":
+            pl.activated_at = now
+
+    # Also update Property relationship_status if it exists
+    prop_result = await db.execute(
+        select(Property).where(Property.id == warehouse_id)
+    )
+    prop = prop_result.scalar_one_or_none()
+    if prop:
+        if body.status == "off":
+            prop.relationship_status = "active"  # Still active, just paused
+        else:
+            prop.relationship_status = "active"
+
+    # Create PropertyEvent for status change
+    if prop:
+        event = PropertyEvent(
+            id=str(uuid.uuid4()),
+            property_id=warehouse_id,
+            event_type="activation_toggled",
+            actor="supplier_api",
+            metadata_={"previous_status": previous_status, "new_status": body.status, "reason": body.reason},
+        )
+        db.add(event)
+
     # Create toggle history
     toggle = ToggleHistory(
         id=str(uuid.uuid4()),
@@ -1193,6 +1468,7 @@ async def update_truth_core(
     """Update specific truth core fields with audit trail.
 
     Creates TruthCoreChange records for each changed field.
+    Also syncs changes to PropertyKnowledge/PropertyListing if they exist.
     """
     tc_result = await db.execute(
         select(TruthCore).where(TruthCore.warehouse_id == warehouse_id)
@@ -1259,6 +1535,43 @@ async def update_truth_core(
             "new_value": new_value,
         })
 
+    # --- Sync changes to Property tables ---
+    # Listing fields
+    listing_fields = {"min_sqft", "max_sqft", "supplier_rate_per_sqft", "supplier_rate_max",
+                      "available_from", "available_to", "min_term_months", "max_term_months",
+                      "tour_readiness", "constraints"}
+    # Knowledge fields
+    knowledge_fields = {"dock_doors_receiving", "dock_doors_shipping", "drive_in_bays",
+                        "parking_spaces", "clear_height_ft", "has_office_space",
+                        "has_sprinkler", "power_supply", "activity_tier"}
+
+    changed_field_names = {c["field"] for c in changes_made}
+
+    if changed_field_names & listing_fields:
+        pl_result = await db.execute(
+            select(PropertyListing).where(PropertyListing.property_id == warehouse_id)
+        )
+        pl = pl_result.scalar_one_or_none()
+        if pl:
+            for c in changes_made:
+                fn = c["field"]
+                if fn in listing_fields and hasattr(pl, fn):
+                    setattr(pl, fn, c["new_value"])
+
+    if changed_field_names & knowledge_fields:
+        pk_result = await db.execute(
+            select(PropertyKnowledge).where(PropertyKnowledge.property_id == warehouse_id)
+        )
+        pk = pk_result.scalar_one_or_none()
+        if pk:
+            field_remap = {"has_office_space": "has_office"}
+            for c in changes_made:
+                fn = c["field"]
+                if fn in knowledge_fields:
+                    pk_field = field_remap.get(fn, fn)
+                    if hasattr(pk, pk_field):
+                        setattr(pk, pk_field, c["new_value"])
+
     return {
         "warehouse_id": warehouse_id,
         "changes": changes_made,
@@ -1284,11 +1597,14 @@ async def get_revenue(
     Calculates from supplier_ledger entries and active deals.
     ISOLATION: Only supplier-side amounts are returned.
     """
-    # Verify warehouse exists
+    # Verify warehouse/property exists
+    prop_result = await db.execute(
+        select(Property).where(Property.id == warehouse_id)
+    )
     wh_result = await db.execute(
         select(Warehouse).where(Warehouse.id == warehouse_id)
     )
-    if not wh_result.scalar_one_or_none():
+    if not prop_result.scalar_one_or_none() and not wh_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Warehouse not found")
 
     # Total earned from ledger
@@ -1336,25 +1652,50 @@ async def activation_chat(
     """
     from wex_platform.agents.activation_agent import ActivationAgent
 
-    # Load warehouse building data
-    wh_result = await db.execute(
-        select(Warehouse)
-        .where(Warehouse.id == body.warehouse_id)
-        .options(selectinload(Warehouse.memories))
-    )
-    warehouse = wh_result.scalar_one_or_none()
-
+    # Load property/warehouse building data
     building_data = None
-    if warehouse:
+
+    # Try Property table first
+    prop_result = await db.execute(
+        select(Property)
+        .where(Property.id == body.warehouse_id)
+        .options(
+            selectinload(Property.knowledge),
+            selectinload(Property.memories),
+        )
+    )
+    prop = prop_result.scalar_one_or_none()
+
+    if prop:
+        pk = prop.knowledge
         building_data = {
-            "address": warehouse.address,
-            "city": warehouse.city,
-            "state": warehouse.state,
-            "building_size_sqft": warehouse.building_size_sqft,
-            "year_built": warehouse.year_built,
-            "construction_type": warehouse.construction_type,
-            "memories": [m.content for m in (warehouse.memories or [])],
+            "address": prop.address,
+            "city": prop.city,
+            "state": prop.state,
+            "building_size_sqft": pk.building_size_sqft if pk else None,
+            "year_built": pk.year_built if pk else None,
+            "construction_type": pk.construction_type if pk else None,
+            "memories": [m.content for m in (prop.memories or [])],
         }
+    else:
+        # Fallback to Warehouse
+        wh_result = await db.execute(
+            select(Warehouse)
+            .where(Warehouse.id == body.warehouse_id)
+            .options(selectinload(Warehouse.memories))
+        )
+        warehouse = wh_result.scalar_one_or_none()
+
+        if warehouse:
+            building_data = {
+                "address": warehouse.address,
+                "city": warehouse.city,
+                "state": warehouse.state,
+                "building_size_sqft": warehouse.building_size_sqft,
+                "year_built": warehouse.year_built,
+                "construction_type": warehouse.construction_type,
+                "memories": [m.content for m in (warehouse.memories or [])],
+            }
 
     agent = ActivationAgent()
 
@@ -1404,53 +1745,96 @@ async def activation_start(
 ):
     """Start a new activation conversation.
 
-    Loads warehouse + building data from DB and returns the initial
+    Loads property + building data from DB and returns the initial
     AI agent message.
     """
     from wex_platform.agents.activation_agent import ActivationAgent
 
-    # Load warehouse data
-    result = await db.execute(
-        select(Warehouse)
-        .where(Warehouse.id == body.warehouse_id)
+    building_data = None
+
+    # Try Property table first
+    prop_result = await db.execute(
+        select(Property)
+        .where(Property.id == body.warehouse_id)
         .options(
-            selectinload(Warehouse.truth_core),
-            selectinload(Warehouse.memories),
+            selectinload(Property.knowledge),
+            selectinload(Property.listing),
+            selectinload(Property.memories),
         )
     )
-    warehouse = result.scalar_one_or_none()
+    prop = prop_result.scalar_one_or_none()
 
-    if not warehouse:
-        raise HTTPException(status_code=404, detail="Warehouse not found")
+    if prop:
+        pk = prop.knowledge
+        pl = prop.listing
+        building_data = {
+            "address": prop.address,
+            "city": prop.city,
+            "state": prop.state,
+            "zip": prop.zip,
+            "building_size_sqft": pk.building_size_sqft if pk else None,
+            "lot_size_acres": pk.lot_size_acres if pk else None,
+            "year_built": pk.year_built if pk else None,
+            "construction_type": pk.construction_type if pk else None,
+            "zoning": pk.zoning if pk else None,
+        }
 
-    building_data = {
-        "address": warehouse.address,
-        "city": warehouse.city,
-        "state": warehouse.state,
-        "zip": warehouse.zip,
-        "building_size_sqft": warehouse.building_size_sqft,
-        "lot_size_acres": warehouse.lot_size_acres,
-        "year_built": warehouse.year_built,
-        "construction_type": warehouse.construction_type,
-        "zoning": warehouse.zoning,
-    }
+        # Enrich with knowledge data
+        if pk:
+            building_data.update({
+                "dock_doors_receiving": pk.dock_doors_receiving,
+                "dock_doors_shipping": pk.dock_doors_shipping,
+                "drive_in_bays": pk.drive_in_bays,
+                "parking_spaces": pk.parking_spaces,
+                "clear_height_ft": pk.clear_height_ft,
+                "has_office_space": pk.has_office,
+                "has_sprinkler": pk.has_sprinkler,
+                "power_supply": pk.power_supply,
+            })
 
-    # Enrich with truth core data if it already exists
-    if warehouse.truth_core:
-        tc = warehouse.truth_core
-        building_data.update({
-            "dock_doors_receiving": tc.dock_doors_receiving,
-            "dock_doors_shipping": tc.dock_doors_shipping,
-            "drive_in_bays": tc.drive_in_bays,
-            "parking_spaces": tc.parking_spaces,
-            "clear_height_ft": tc.clear_height_ft,
-            "has_office_space": tc.has_office_space,
-            "has_sprinkler": tc.has_sprinkler,
-            "power_supply": tc.power_supply,
-        })
+        building_data["memories"] = [m.content for m in (prop.memories or [])]
+    else:
+        # Fallback to Warehouse
+        result = await db.execute(
+            select(Warehouse)
+            .where(Warehouse.id == body.warehouse_id)
+            .options(
+                selectinload(Warehouse.truth_core),
+                selectinload(Warehouse.memories),
+            )
+        )
+        warehouse = result.scalar_one_or_none()
 
-    # Include contextual memories
-    building_data["memories"] = [m.content for m in (warehouse.memories or [])]
+        if not warehouse:
+            raise HTTPException(status_code=404, detail="Warehouse not found")
+
+        building_data = {
+            "address": warehouse.address,
+            "city": warehouse.city,
+            "state": warehouse.state,
+            "zip": warehouse.zip,
+            "building_size_sqft": warehouse.building_size_sqft,
+            "lot_size_acres": warehouse.lot_size_acres,
+            "year_built": warehouse.year_built,
+            "construction_type": warehouse.construction_type,
+            "zoning": warehouse.zoning,
+        }
+
+        # Enrich with truth core data if it already exists
+        if warehouse.truth_core:
+            tc = warehouse.truth_core
+            building_data.update({
+                "dock_doors_receiving": tc.dock_doors_receiving,
+                "dock_doors_shipping": tc.dock_doors_shipping,
+                "drive_in_bays": tc.drive_in_bays,
+                "parking_spaces": tc.parking_spaces,
+                "clear_height_ft": tc.clear_height_ft,
+                "has_office_space": tc.has_office_space,
+                "has_sprinkler": tc.has_sprinkler,
+                "power_supply": tc.power_supply,
+            })
+
+        building_data["memories"] = [m.content for m in (warehouse.memories or [])]
 
     agent = ActivationAgent()
     agent_result = await agent.generate_initial_message(building_data=building_data)
@@ -1474,7 +1858,7 @@ async def activation_start(
     return {
         "initial_message": initial_data,
         "building_data": building_data,
-        "warehouse_id": warehouse.id,
+        "warehouse_id": body.warehouse_id if not prop else prop.id,
     }
 
 
@@ -1484,11 +1868,10 @@ async def get_agreements(
     db: AsyncSession = Depends(get_db),
 ):
     """Return supplier agreements for a warehouse."""
-    # Verify warehouse exists
-    wh_result = await db.execute(
-        select(Warehouse).where(Warehouse.id == warehouse_id)
-    )
-    if not wh_result.scalar_one_or_none():
+    # Verify warehouse/property exists
+    prop_result = await db.execute(select(Property).where(Property.id == warehouse_id))
+    wh_result = await db.execute(select(Warehouse).where(Warehouse.id == warehouse_id))
+    if not prop_result.scalar_one_or_none() and not wh_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Warehouse not found")
 
     result = await db.execute(
@@ -1519,11 +1902,10 @@ async def get_ledger(
     db: AsyncSession = Depends(get_db),
 ):
     """Return supplier ledger entries for a warehouse."""
-    # Verify warehouse exists
-    wh_result = await db.execute(
-        select(Warehouse).where(Warehouse.id == warehouse_id)
-    )
-    if not wh_result.scalar_one_or_none():
+    # Verify warehouse/property exists
+    prop_result = await db.execute(select(Property).where(Property.id == warehouse_id))
+    wh_result = await db.execute(select(Warehouse).where(Warehouse.id == warehouse_id))
+    if not prop_result.scalar_one_or_none() and not wh_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Warehouse not found")
 
     result = await db.execute(
@@ -1556,7 +1938,7 @@ async def track_pageview(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Record a page view. Lightweight — no auth required."""
+    """Record a page view. Lightweight -- no auth required."""
     from wex_platform.domain.models import PageView
 
     # Prefer X-Forwarded-For (set by Cloud Run / load balancers) over request.client
@@ -1603,8 +1985,6 @@ async def track_event(
     await db.commit()
 
     # Send emails in a background task so the response returns immediately.
-    # The frontend fires this as fire-and-forget, so if we await the SendGrid
-    # calls inline, the client disconnects and the ASGI server cancels them.
     if body.event == "email_submitted":
         email_addr = props.get("email", "")
         email_data = {
@@ -1752,6 +2132,23 @@ async def onboard_supplier(
         truth_core.activation_status = "on"
         truth_core.toggled_at = now
 
+    # Also update PropertyListing if it exists
+    pl_result = await db.execute(
+        select(PropertyListing).where(PropertyListing.property_id == body.warehouse_id)
+    )
+    pl = pl_result.scalar_one_or_none()
+    if pl:
+        pl.activation_status = "on"
+        pl.activated_at = now
+
+    # Also update Property relationship_status
+    prop_result = await db.execute(
+        select(Property).where(Property.id == body.warehouse_id)
+    )
+    prop = prop_result.scalar_one_or_none()
+    if prop:
+        prop.relationship_status = "active"
+
     # Create supplier agreement
     agreement = SupplierAgreement(
         id=str(uuid.uuid4()),
@@ -1779,6 +2176,17 @@ async def onboard_supplier(
         reason="Supplier onboarded to WEx network",
     )
     db.add(toggle)
+
+    # Create PropertyEvent if Property exists
+    if prop:
+        event = PropertyEvent(
+            id=str(uuid.uuid4()),
+            property_id=body.warehouse_id,
+            event_type="onboarded",
+            actor="supplier_api",
+            metadata_={"agreement_id": agreement.id},
+        )
+        db.add(event)
 
     await db.commit()
 
@@ -1903,10 +2311,10 @@ async def get_upcoming_tours(
     owner_email: Optional[str] = Query(None, description="Filter by supplier email (deprecated, use company_id)"),
     db: AsyncSession = Depends(get_db),
 ):
-    """List upcoming tours for a supplier's warehouses.
+    """List upcoming tours for a supplier's properties.
 
     Returns deals with tour_status in ('requested', 'confirmed', 'rescheduled')
-    for warehouses owned by the given company.
+    for properties owned by the given company.
     """
     query = (
         select(Deal)
@@ -1916,11 +2324,12 @@ async def get_upcoming_tours(
     )
 
     if company_id:
+        # Try Property table first, fall back to Warehouse
         query = query.join(Warehouse).where(
             Warehouse.company_id == company_id
         )
     elif owner_email:
-        # Deprecated fallback for backward compatibility
+        # Deprecated fallback for backward compatibility via PropertyContact
         query = query.join(Warehouse).where(
             func.lower(Warehouse.owner_email) == func.lower(owner_email)
         )

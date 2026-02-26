@@ -14,6 +14,8 @@ from wex_platform.domain.models import (
     SupplierAgreement,
     User,
     Warehouse,
+    Property,
+    PropertyListing,
 )
 from wex_platform.domain.schemas import AgreementSign, AgreementStatus
 from wex_platform.infra.database import get_db
@@ -83,28 +85,36 @@ async def sign_agreement(
                 detail="warehouse_id is required for network_agreement",
             )
 
-        # Verify warehouse exists
-        result = await db.execute(
+        # Verify property/warehouse exists (try new schema first)
+        prop_result = await db.execute(
+            select(Property).where(Property.id == data.warehouse_id)
+        )
+        prop = prop_result.scalar_one_or_none()
+
+        wh_result = await db.execute(
             select(Warehouse).where(Warehouse.id == data.warehouse_id)
         )
-        warehouse = result.scalar_one_or_none()
-        if not warehouse:
+        warehouse = wh_result.scalar_one_or_none()
+
+        if not prop and not warehouse:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Warehouse not found",
+                detail="Property not found",
             )
 
         # Get truth_core_id (nullable FK on SupplierAgreement requires it)
+        # Try from PropertyListing first, then legacy TruthCore
         truth_core_id = None
-        if warehouse.truth_core:
+        if prop and prop.listing:
+            truth_core_id = prop.listing.id
+        elif warehouse and warehouse.truth_core:
             truth_core_id = warehouse.truth_core.id
 
-        # If no truth_core exists, we still need a value for the non-nullable FK.
-        # Create a minimal placeholder or raise an error.
+        # If no listing/truth_core exists, we still need a value for the non-nullable FK.
         if not truth_core_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Warehouse has no TruthCore record. Complete property setup first.",
+                detail="Property has no listing or TruthCore record. Complete property setup first.",
             )
 
         agreement = SupplierAgreement(

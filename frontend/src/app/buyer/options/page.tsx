@@ -34,6 +34,7 @@ import {
   Settings2,
   Edit2,
   Smartphone,
+  Lock,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import ContactCaptureModal from "@/components/ui/ContactCaptureModal";
@@ -368,6 +369,8 @@ function Tier1Card({
   index,
   onAccept,
   onAsk,
+  onBookInstantly,
+  onAskQuestion,
   accepting,
   allocatedSqft,
 }: {
@@ -375,6 +378,8 @@ function Tier1Card({
   index: number;
   onAccept: (matchId: string) => void;
   onAsk: (matchId: string) => void;
+  onBookInstantly: (matchId: string) => void;
+  onAskQuestion: (warehouseId: string) => void;
   accepting: string | null;
   allocatedSqft: number;
 }) {
@@ -586,37 +591,73 @@ function Tier1Card({
           </div>
         )}
 
-        {/* 6. ACTIONS */}
-        <div className="flex flex-col md:flex-row gap-4 pt-6 border-t border-slate-100">
+        {/* 6. URGENCY SIGNALS */}
+        <div className="pt-4">
+          {option.property.available_sqft && option.property.available_sqft <= allocatedSqft * 1.15 && (
+            <div className="flex items-center gap-2 text-amber-400 text-xs py-2">
+              <AlertCircle className="w-3.5 h-3.5" />
+              <span>Only {option.property.available_sqft.toLocaleString()} sqft available in this building</span>
+            </div>
+          )}
+          {(option as any).recently_leased_days_ago && (
+            <div className="flex items-center gap-2 text-blue-400 text-xs py-2">
+              <Zap className="w-3.5 h-3.5" />
+              <span>Similar space nearby leased {(option as any).recently_leased_days_ago} days ago</span>
+            </div>
+          )}
+        </div>
+
+        {/* 7. ACTIONS */}
+        <div className="flex flex-col gap-3 pt-6 border-t border-slate-100">
+          {/* Book Instantly — PRIMARY. Tier 1 only */}
+          {option.instant_book_eligible && (
+            <button
+              onClick={() => onBookInstantly(option.match_id)}
+              disabled={accepting === option.match_id}
+              className="w-full py-3 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
+            >
+              <Zap className="w-4 h-4" />
+              Book Instantly — lock in your space now
+            </button>
+          )}
+
+          {/* Reserve & Tour — SECONDARY (outlined when Book Instantly present, solid when alone) */}
           <button
             onClick={() => onAccept(option.match_id)}
             disabled={accepting === option.match_id}
-            className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-lg font-bold py-4 px-6 rounded-xl transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 disabled:opacity-70"
+            className={`w-full py-3 px-4 rounded-lg font-semibold text-sm flex items-center justify-center gap-2 transition-colors ${
+              option.instant_book_eligible
+                ? "border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600/10"
+                : "bg-emerald-600 hover:bg-emerald-500 text-white"
+            }`}
           >
             {accepting === option.match_id ? (
               <>
-                <Loader2 className="w-5 h-5 animate-spin" />
+                <Loader2 className="w-4 h-4 animate-spin" />
                 Processing...
               </>
             ) : (
               <>
-                <CalendarCheck className="w-5 h-5" />
-                Accept &amp; Schedule Tour
+                <Lock className="w-4 h-4" />
+                Reserve &amp; Tour — hold for 72 hours
               </>
             )}
           </button>
 
+          {/* Ask a Question — text link only */}
           <button
-            onClick={() => onAsk(option.match_id)}
-            className="flex-1 bg-white border-2 border-slate-200 hover:border-slate-900 text-slate-900 text-lg font-bold py-4 px-6 rounded-xl transition-all flex items-center justify-center gap-2"
+            onClick={() => onAskQuestion(option.warehouse_id)}
+            className="text-sm text-slate-400 hover:text-slate-300 underline-offset-2 hover:underline mt-1"
           >
-            Ask About This Space
+            Ask a Question
           </button>
         </div>
+      </div>
 
-        <div className="text-center mt-4 text-xs text-slate-400 font-medium flex items-center justify-center gap-1.5">
-          <ShieldCheck size={14} /> All rates are all-in. Every deal includes WEx Occupancy Guarantee.
-        </div>
+      {/* Guarantee footer */}
+      <div className="px-4 py-3 border-t border-slate-200 text-xs text-slate-500 flex items-center gap-1.5">
+        <Shield className="w-3.5 h-3.5 text-emerald-600" />
+        All rates are all-in. Every deal includes WEx Occupancy Guarantee.
       </div>
     </motion.div>
   );
@@ -863,9 +904,16 @@ function OptionsContent() {
   const [tourFlowOpen, setTourFlowOpen] = useState(false);
   const [tourFlowDeal, setTourFlowDeal] = useState<any>(null);
   const [tourFlowWarehouse, setTourFlowWarehouse] = useState<any>(null);
+  const [selectedFlowType, setSelectedFlowType] = useState<"reserve_tour" | "book_instantly">("reserve_tour");
 
   // Modify Search drawer state
   const [modifyDrawerOpen, setModifyDrawerOpen] = useState(false);
+
+  // Ask a Question modal state
+  const [askQuestionWarehouseId, setAskQuestionWarehouseId] = useState<string | null>(null);
+  const [questionText, setQuestionText] = useState("");
+  const [questionSubmitted, setQuestionSubmitted] = useState(false);
+  const [questionLoading, setQuestionLoading] = useState(false);
 
   // Check if contact is already saved
   useEffect(() => {
@@ -972,20 +1020,20 @@ function OptionsContent() {
 
       localStorage.setItem("wex_search_session", JSON.stringify(result));
 
-      // Update results in-place
-      if (result.session_token) {
-        await loadFromSession(result.session_token);
-      } else if (result.matches) {
-        // Direct match results
-        const mapped = (result.matches || []).map(mapApiToMatchOption);
-        const t1 = mapped.filter((m: MatchOption) => m.tier === 1);
-        const t2 = mapped.filter((m: MatchOption) => m.tier === 2);
-        setTier1(t1);
-        setTier2(t2);
-        setLoading(false);
+      // Update results in-place — use the response directly (no demo fallback)
+      if (result.need_id) setNeedId(result.need_id);
+      const t1Raw = result.tier1 || result.matches || [];
+      const t2Raw = result.tier2 || [];
+      const t1: MatchOption[] = t1Raw.map(mapApiToMatchOption).filter((m: MatchOption) => m.tier === 1 || !m.tier);
+      const t2: MatchOption[] = t2Raw.map(mapApiToMatchOption);
+      // If tier wasn't set, treat all as tier1
+      if (t1.length === 0 && t2.length === 0 && t1Raw.length > 0) {
+        setTier1(t1Raw.map(mapApiToMatchOption).sort((a: MatchOption, b: MatchOption) => b.match_score - a.match_score));
       } else {
-        setLoading(false);
+        setTier1(t1.sort((a: MatchOption, b: MatchOption) => b.match_score - a.match_score));
       }
+      setTier2(t2);
+      setLoading(false);
     } catch (err) {
       console.error("Modify search failed:", err);
       setError("Search update failed. Please try again.");
@@ -1454,6 +1502,7 @@ function OptionsContent() {
   function handleAcceptClick(matchId: string) {
     // Account creation is now handled inside TourBookingFlow (Step 1),
     // so skip the old ContactCaptureModal and go straight to accept.
+    setSelectedFlowType("reserve_tour");
     executeAccept(matchId);
   }
 
@@ -1477,6 +1526,33 @@ function OptionsContent() {
       alert(
         "A WEx specialist will reach out to you shortly about this space."
       );
+    }
+  }
+
+  function handleBookInstantly(matchId: string) {
+    // Accept with instant_book path, then open TourBookingFlow in book_instantly mode
+    setSelectedFlowType("book_instantly");
+    executeAccept(matchId);
+  }
+
+  function handleAskQuestion(warehouseId: string) {
+    setAskQuestionWarehouseId(warehouseId);
+    setQuestionText("");
+    setQuestionSubmitted(false);
+  }
+
+  async function submitQuestion() {
+    if (!askQuestionWarehouseId || !questionText.trim()) return;
+    setQuestionLoading(true);
+    try {
+      await api.submitAnonymousQuestion(askQuestionWarehouseId, {
+        question_text: questionText,
+      });
+      setQuestionSubmitted(true);
+    } catch (e) {
+      console.error("Failed to submit question", e);
+    } finally {
+      setQuestionLoading(false);
     }
   }
 
@@ -1766,6 +1842,8 @@ function OptionsContent() {
                     index={i}
                     onAccept={handleAcceptClick}
                     onAsk={handleAskClick}
+                    onBookInstantly={handleBookInstantly}
+                    onAskQuestion={handleAskQuestion}
                     accepting={accepting}
                     allocatedSqft={allocSqft}
                   />
@@ -1930,7 +2008,7 @@ function OptionsContent() {
         </div>
       </main>
 
-      {/* Contact Capture Modal -- "Accept & Schedule Tour" trigger */}
+      {/* Contact Capture Modal -- "Reserve & Tour" / "Book Instantly" trigger */}
       <ContactCaptureModal
         open={contactModalOpen}
         onClose={() => {
@@ -1970,11 +2048,49 @@ function OptionsContent() {
           }}
           deal={tourFlowDeal}
           warehouse={tourFlowWarehouse}
+          flowType={selectedFlowType}
           onComplete={() => {
             setTourFlowOpen(false);
             router.push("/buyer/deals");
           }}
         />
+      )}
+
+      {/* Ask a Question Modal */}
+      {askQuestionWarehouseId && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-xl max-w-md w-full p-6 shadow-2xl">
+            {questionSubmitted ? (
+              <div className="text-center">
+                <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-3" />
+                <h3 className="text-lg font-semibold text-slate-900 mb-1">Question Sent</h3>
+                <p className="text-slate-500 text-sm">WEx will follow up via email.</p>
+                <button onClick={() => setAskQuestionWarehouseId(null)} className="mt-4 text-sm text-emerald-600 hover:underline">Close</button>
+              </div>
+            ) : (
+              <>
+                <h3 className="text-lg font-semibold text-slate-900 mb-1">Ask a Question</h3>
+                <p className="text-slate-500 text-sm mb-4">What would you like to know about this space?</p>
+                <textarea
+                  value={questionText}
+                  onChange={(e) => setQuestionText(e.target.value)}
+                  className="w-full h-28 bg-slate-50 border border-slate-200 rounded-lg p-3 text-slate-900 text-sm resize-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                  placeholder="Type your question..."
+                />
+                <div className="flex gap-3 mt-4">
+                  <button onClick={() => setAskQuestionWarehouseId(null)} className="flex-1 py-2 text-sm text-slate-500 hover:text-slate-900">Cancel</button>
+                  <button
+                    onClick={submitQuestion}
+                    disabled={!questionText.trim() || questionLoading}
+                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+                  >
+                    {questionLoading ? "Sending..." : "Send Question"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Modify Search — slide-out drawer */}

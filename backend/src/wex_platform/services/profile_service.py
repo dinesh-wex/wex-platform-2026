@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wex_platform.domain.models import PropertyProfile, Warehouse
+from wex_platform.domain.models import PropertyProfile, Warehouse, Property, PropertyKnowledge
 from wex_platform.infra.database import async_session
 
 logger = logging.getLogger(__name__)
@@ -109,15 +109,23 @@ async def create_profile_from_search(
                 # sqft is set later by Trigger 2 (configurator) — not from building_size_sqft
             )
 
-            # Copy images from linked Warehouse record
+            # Copy images from linked Property record (new schema), fall back to Warehouse
             if warehouse_id:
-                wh_result = await db.execute(
-                    select(Warehouse).where(Warehouse.id == warehouse_id)
+                prop_result = await db.execute(
+                    select(Property).where(Property.id == warehouse_id)
                 )
-                wh = wh_result.scalar_one_or_none()
-                if wh:
-                    profile.primary_image_url = wh.primary_image_url
-                    profile.image_urls = wh.image_urls or []
+                prop = prop_result.scalar_one_or_none()
+                if prop:
+                    profile.primary_image_url = prop.primary_image_url
+                    profile.image_urls = prop.image_urls or []
+                else:
+                    wh_result = await db.execute(
+                        select(Warehouse).where(Warehouse.id == warehouse_id)
+                    )
+                    wh = wh_result.scalar_one_or_none()
+                    if wh:
+                        profile.primary_image_url = wh.primary_image_url
+                        profile.image_urls = wh.image_urls or []
 
             db.add(profile)
             await db.commit()

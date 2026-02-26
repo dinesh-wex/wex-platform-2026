@@ -1370,11 +1370,11 @@ Everything from both buyer and supplier views, plus:
 | POST | /api/auth/register | Create buyer account. Body: {email, password, phone?, engagement_id?}. If engagement_id provided, sets buyer_id on engagement within same transaction → account_created |
 | POST | /api/auth/login | Buyer login (returning buyer path). Returns auth token. |
 | POST | /api/engagements/{id}/link-buyer | Links authenticated buyer to engagement after login. Called when returning buyer logs in during accept flow → account_created |
-| POST | /api/engagements/{id}/guarantee | Buyer signs guarantee → guarantee_signed |
+| POST | /api/engagements/{id}/guarantee/sign | Buyer signs guarantee → guarantee_signed → address_revealed (auto-advances in single call, see Appendix A) |
 | GET | /api/engagements/{id}/property | Full property details (only after guarantee_signed) |
 | POST | /api/engagements/{id}/instant-book/confirm | System checks availability → instant_book_requested → buyer_confirmed |
 | POST | /api/engagements/{id}/tour/request | Buyer requests tour date/time → tour_requested |
-| POST | /api/engagements/{id}/tour/confirm | Supplier confirms → tour_confirmed |
+| POST | /api/engagements/{id}/tour/confirm | Supplier confirms with scheduled date → tour_confirmed. Body: {scheduled_date: ISO datetime string} |
 | POST | /api/engagements/{id}/tour/reschedule | Either party proposes new time → tour_rescheduled |
 | POST | /api/engagements/{id}/tour/outcome | Buyer confirms or passes after tour |
 | POST | /api/engagements/{id}/decline | Either party declines (with reason) |
@@ -1470,3 +1470,49 @@ Everything from both buyer and supplier views, plus:
 | **completed** | "Lease completed" + renewal option | "Lease completed" + availability reopened |
 | **cancelled** | Reason + option to search again | Reason + property returns to pool |
 | **expired** | "Engagement expired" + option to search again | Property returns to available pool |
+
+---
+
+## Appendix A — Implementation Notes (v3.1, February 2026)
+
+This appendix documents intentional deviations between the spec and the current implementation. These are design decisions made during implementation, not bugs.
+
+### A.1 Guarantee + Address Reveal Auto-Advance
+
+The spec defines `guarantee_signed` and `address_revealed` as two sequential states. The implementation collapses them into a single API call: `POST /api/engagements/{id}/guarantee/sign` transitions through both states atomically. The engagement is never persistently observed in `guarantee_signed` — it passes through in-memory and commits as `address_revealed`. Both transitions are logged as separate `EngagementEvent` records for the audit trail.
+
+**Rationale:** The spec says address reveal is "automatic" and "immediate" after guarantee signing. Making it atomic prevents a race condition where a buyer signs the guarantee but doesn't see the address due to a network error between two calls.
+
+### A.2 Auth Endpoint Naming
+
+The spec defines `POST /api/auth/register` as the primary registration endpoint. The implementation uses `POST /api/auth/signup` as the primary handler with `/api/auth/register` as an alias that calls the same function. Both paths work identically.
+
+### A.3 `deal_ping_expired` as Full Status
+
+The spec describes `deal_ping_expired` as a sub-status. The implementation promotes it to a first-class `EngagementStatus` enum value for simpler querying and filtering.
+
+### A.4 `buyer_id` Foreign Key Target
+
+The spec defines `buyer_id` as `FK → User`. The current SQLite implementation has the FK referencing the legacy `buyers` table. Since SQLite does not enforce foreign key constraints by default, this works at runtime — `auth.py` sets `engagement.buyer_id = user.id` (from the `users` table) and access checks compare against `user.id` directly. This should be corrected in a future migration to PostgreSQL where FK constraints are enforced.
+
+### A.5 Additional State Transitions (Not in Spec)
+
+The state machine includes two transitions not in the spec:
+- `address_revealed → instant_book_requested` (buyer): Allows buyers who initially chose the tour path to switch to instant book after seeing the address.
+- `tour_confirmed → tour_rescheduled` (buyer or supplier): Allows rescheduling even after confirmation, capped at 2 reschedules total.
+
+### A.6 Cancellation Restricted to Admin/System
+
+The spec says "either party" can cancel. The implementation restricts cancellation to admin and system roles only. Buyer/supplier-initiated cancellation should be routed through admin review. This is an intentional business rule tightening.
+
+### A.7 Account Creation Form Fields
+
+The spec defines: email, password, confirm password, phone (optional). The implementation adds: first name, last name (required), company (optional). These additional fields populate the `User.name` and `User.company` columns.
+
+### A.8 `tour/confirm` Requires `scheduled_date`
+
+The spec does not define a request body for tour confirmation. The implementation requires `{scheduled_date: string}` (ISO datetime) so the confirmed tour date is recorded on the engagement as `tour_scheduled_date`.
+
+### A.9 Deferred Schema Fields
+
+The following fields from Section 2.1 are deferred to future implementation: `previous_status`, `status_changed_at`, `broker_id`, `wex_revenue_sqft`, `monthly_wex_revenue`, `deal_ping_response`, `tour_followup_sent_at`, `supplier_terms_accepted_at`, `move_in_confirmed_at`, `expired_at`, `expired_stage`, `cancel_stage`, `buyer_agreement_signed_at` (on Engagement), `supplier_agreement_signed_at` (on Engagement), `agreement_text_version`. These will be added as their corresponding features are built.

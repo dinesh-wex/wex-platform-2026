@@ -188,6 +188,11 @@ export interface Engagement {
   tour_date?: string;
   tour_time?: string;
   tour_confirmed?: boolean;
+  hold_expires_at?: string;
+  hold_extended?: boolean;
+  hold_extended_at?: string;
+  hold_extended_until?: string;
+  tour_notes?: string;
   timeline: EngagementTimelineEvent[];
   // Nested warehouse object for display
   warehouse?: {

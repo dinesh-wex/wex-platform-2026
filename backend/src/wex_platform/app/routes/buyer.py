@@ -25,6 +25,10 @@ from wex_platform.domain.models import (
     DealEvent,
     Warehouse,
     TruthCore,
+    Property,
+    PropertyKnowledge,
+    PropertyListing,
+    PropertyContact,
     Engagement,
     EngagementEvent,
 )
@@ -1010,12 +1014,28 @@ async def schedule_tour(
     # Trigger supplier notification (best-effort)
     try:
         from wex_platform.services.email_service import send_tour_notification
-        if deal.warehouse and deal.warehouse.owner_email:
+        # Look up primary contact from PropertyContact (new schema)
+        supplier_email = None
+        warehouse_address = deal.warehouse.address if deal.warehouse else ""
+        if deal.warehouse_id:
+            contact_result = await db.execute(
+                select(PropertyContact).where(
+                    PropertyContact.property_id == deal.warehouse_id,
+                    PropertyContact.is_primary == True,
+                )
+            )
+            primary_contact = contact_result.scalar_one_or_none()
+            if primary_contact and primary_contact.email:
+                supplier_email = primary_contact.email
+            elif deal.warehouse and hasattr(deal.warehouse, 'owner_email'):
+                # Fall back to legacy Warehouse.owner_email
+                supplier_email = deal.warehouse.owner_email
+        if supplier_email:
             import asyncio
             asyncio.ensure_future(send_tour_notification(
-                supplier_email=deal.warehouse.owner_email,
+                supplier_email=supplier_email,
                 deal_id=deal.id,
-                warehouse_address=deal.warehouse.address,
+                warehouse_address=warehouse_address,
                 tour_date=body.preferred_date,
                 tour_time=body.preferred_time,
                 notes=body.notes,

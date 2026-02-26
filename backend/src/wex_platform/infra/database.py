@@ -58,6 +58,16 @@ async def init_db():
         # --- Engagement Lifecycle v3: account_created replaces contact_captured ---
         "ALTER TABLE engagements ADD COLUMN account_created_at DATETIME",
         "UPDATE engagements SET status = 'account_created', account_created_at = updated_at WHERE status = 'contact_captured'",
+        # --- Hold mechanic columns ---
+        "ALTER TABLE engagements ADD COLUMN hold_expires_at DATETIME",
+        "ALTER TABLE engagements ADD COLUMN hold_extended BOOLEAN DEFAULT 0",
+        "ALTER TABLE engagements ADD COLUMN hold_extended_at DATETIME",
+        "ALTER TABLE engagements ADD COLUMN hold_extended_until DATETIME",
+        "ALTER TABLE engagements ADD COLUMN tour_notes TEXT",
+        "ALTER TABLE warehouses ADD COLUMN available_sqft INTEGER",
+        "UPDATE warehouses SET available_sqft = (SELECT tc.max_sqft FROM truth_cores tc WHERE tc.warehouse_id = warehouses.id) WHERE available_sqft IS NULL",
+        # --- Property pipeline v2: add property_id FK to contextual_memories ---
+        "ALTER TABLE contextual_memories ADD COLUMN property_id VARCHAR(36)",
     ]
 
     if "sqlite" in settings.database_url:
@@ -67,3 +77,10 @@ async def init_db():
                     await conn.execute(text(stmt))
                 except Exception:
                     pass  # Column already exists — safe to ignore
+
+        # Backfill new property tables from legacy data
+        from wex_platform.services.backfill_properties import backfill_properties
+        async with async_session() as session:
+            stats = await backfill_properties(session)
+            if any(v > 0 for v in stats.values()):
+                print(f"[init_db] Property backfill: {stats}")
