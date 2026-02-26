@@ -391,7 +391,7 @@ class Deal(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     match_id = Column(String(36), ForeignKey("matches.id"))
     warehouse_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
-    buyer_id = Column(String(36), ForeignKey("buyers.id"), nullable=False)
+    buyer_id = Column(String(36), ForeignKey("buyers.id"), nullable=True)  # NULL for anonymous buyers
     sqft_allocated = Column(Integer, nullable=False)
     start_date = Column(DateTime, nullable=False)
     end_date = Column(DateTime)
@@ -897,9 +897,10 @@ class Engagement(Base):
     supplier_terms_version = Column(String(100), nullable=True)
 
     # Buyer contact
-    buyer_email = Column(String(255), nullable=True)
-    buyer_phone = Column(String(50), nullable=True)
     buyer_company_name = Column(String(255), nullable=True)
+    # buyer_id is null from deal_ping_sent through buyer_accepted.
+    # Populated at account_created when buyer creates verified account.
+    account_created_at = Column(DateTime, nullable=True)
 
     # Guarantee
     guarantee_signed_at = Column(DateTime, nullable=True)

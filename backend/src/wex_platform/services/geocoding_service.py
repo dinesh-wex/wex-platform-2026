@@ -203,3 +203,35 @@ async def geocode_location(query: str) -> GeoResult | None:
         return None
     service = GeocodingService(settings.google_maps_api_key)
     return await service.geocode(query)
+
+
+@dataclass
+class NormalizeResult:
+    """Result of address normalization via geocoding."""
+    is_valid: bool
+    formatted_address: str
+    lat: float | None = None
+    lng: float | None = None
+    city: str | None = None
+    state: str | None = None
+    zip_code: str | None = None
+
+
+async def normalize_address(address: str) -> NormalizeResult:
+    """Normalize an address string via geocoding.
+
+    Returns a NormalizeResult with is_valid=True and the formatted address
+    if geocoding succeeds, or is_valid=False with the original address.
+    """
+    geo = await geocode_location(address)
+    if geo:
+        return NormalizeResult(
+            is_valid=True,
+            formatted_address=geo.formatted_address,
+            lat=geo.lat,
+            lng=geo.lng,
+            city=geo.city,
+            state=geo.state,
+            zip_code=geo.zip_code,
+        )
+    return NormalizeResult(is_valid=False, formatted_address=address)

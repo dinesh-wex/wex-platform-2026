@@ -22,7 +22,7 @@ const ACTIVE_SEARCH_STATUSES: EngagementStatus[] = [
 
 const IN_PROGRESS_STATUSES: EngagementStatus[] = [
   "buyer_accepted",
-  "contact_captured",
+  "account_created",
   "guarantee_signed",
   "address_revealed",
   "tour_requested",

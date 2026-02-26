@@ -55,6 +55,9 @@ async def init_db():
         "ALTER TABLE property_profiles ADD COLUMN recommended_rate FLOAT",
         "ALTER TABLE property_profiles ADD COLUMN primary_image_url VARCHAR(500)",
         "ALTER TABLE property_profiles ADD COLUMN image_urls JSON",
+        # --- Engagement Lifecycle v3: account_created replaces contact_captured ---
+        "ALTER TABLE engagements ADD COLUMN account_created_at DATETIME",
+        "UPDATE engagements SET status = 'account_created', account_created_at = updated_at WHERE status = 'contact_captured'",
     ]
 
     if "sqlite" in settings.database_url:

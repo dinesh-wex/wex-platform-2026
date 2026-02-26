@@ -282,6 +282,7 @@ function AgentFlow({
 
   // Step labels and summaries for progress stepper
   const STEP_LABELS = ["Location", "Use Type", "Goods", "Size", "Timeline", "Must-Haves", "Review"];
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   function stepSummary(stepIdx: number): string {
     switch (stepIdx) {
       case 0: return intent.location || "Location";

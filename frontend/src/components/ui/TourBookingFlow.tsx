@@ -15,9 +15,11 @@ import {
   Unlock,
   ChevronRight,
   AlertCircle,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import AgreementCheckbox from "@/components/ui/AgreementCheckbox";
-import { api } from "@/lib/api";
+import { api, storeAuthToken } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -109,28 +111,248 @@ function StepIndicator({
 }
 
 /* ------------------------------------------------------------------ */
-/*  Step 1: Contact Confirmed                                          */
+/*  Step 1: Account Auth (Register / Login)                            */
 /* ------------------------------------------------------------------ */
-function StepContactConfirmed({ onNext }: { onNext: () => void }) {
-  useEffect(() => {
-    // Auto-advance after a brief confirmation display
-    const timer = setTimeout(onNext, 1200);
-    return () => clearTimeout(timer);
-  }, [onNext]);
+function StepAccountAuth({
+  engagementId,
+  onSuccess,
+  onError,
+}: {
+  engagementId: string;
+  onSuccess: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [mode, setMode] = useState<"register" | "login">("register");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [company, setCompany] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [phone, setPhone] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [fieldError, setFieldError] = useState<string | null>(null);
+
+  function validate(): boolean {
+    setFieldError(null);
+    if (mode === "register") {
+      if (!firstName.trim()) { setFieldError("First name is required."); return false; }
+      if (!lastName.trim()) { setFieldError("Last name is required."); return false; }
+    }
+    if (!email) { setFieldError("Email is required."); return false; }
+    if (!password) { setFieldError("Password is required."); return false; }
+    if (mode === "register") {
+      if (password.length < 8) { setFieldError("Password must be at least 8 characters."); return false; }
+      if (password !== confirmPassword) { setFieldError("Passwords do not match."); return false; }
+    }
+    return true;
+  }
+
+  async function handleSubmit() {
+    if (!validate()) return;
+    setSubmitting(true);
+    setFieldError(null);
+    try {
+      if (mode === "register") {
+        const res = await api.register({
+          email,
+          password,
+          name: `${firstName.trim()} ${lastName.trim()}`,
+          role: "buyer",
+          company: company.trim() || undefined,
+          phone: phone || undefined,
+          engagement_id: engagementId,
+        });
+        storeAuthToken(res.access_token || res.token);
+      } else {
+        const res = await api.login({ email, password });
+        storeAuthToken(res.access_token || res.token);
+        await api.linkBuyer(engagementId);
+      }
+      onSuccess();
+    } catch (err: any) {
+      const msg = err.message || "Something went wrong";
+      if (msg.includes("409") || msg.toLowerCase().includes("already exists")) {
+        setFieldError("An account with this email already exists. Sign in instead.");
+      } else {
+        onError(msg);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
-      className="px-6 py-10 text-center"
+      className="px-6 py-6 space-y-4"
     >
-      <div className="w-16 h-16 rounded-full bg-emerald-500/15 flex items-center justify-center mx-auto mb-4">
-        <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+      <div className="text-center mb-2">
+        <h3 className="text-lg font-bold text-white">
+          {mode === "register" ? "Create Your Account" : "Sign In"}
+        </h3>
+        <p className="text-sm text-slate-400 mt-1">
+          {mode === "register"
+            ? "Create an account to continue with your tour booking."
+            : "Sign in to continue with your tour booking."}
+        </p>
       </div>
-      <h3 className="text-lg font-bold text-white mb-1">Contact Confirmed</h3>
-      <p className="text-sm text-slate-400">
-        Your contact information is on file. Proceeding to guarantee...
+
+      {fieldError && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5 flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+          <p className="text-sm text-red-300">{fieldError}</p>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {mode === "register" && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1.5">First Name</label>
+                <input
+                  type="text"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  placeholder="Jane"
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1.5">Last Name</label>
+                <input
+                  type="text"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  placeholder="Smith"
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs text-slate-400 mb-1.5">
+                Company <span className="text-slate-500">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={company}
+                onChange={(e) => setCompany(e.target.value)}
+                placeholder="Acme Logistics"
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+          </>
+        )}
+
+        <div>
+          <label className="block text-xs text-slate-400 mb-1.5">Email</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@company.com"
+            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs text-slate-400 mb-1.5">Password</label>
+          <div className="relative">
+            <input
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={mode === "register" ? "Min 8 characters" : "Your password"}
+              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-300"
+            >
+              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+
+        {mode === "register" && (
+          <>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1.5">
+                Confirm Password
+              </label>
+              <input
+                type={showPassword ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Re-enter password"
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-slate-400 mb-1.5">
+                Phone <span className="text-slate-500">(optional)</span>
+              </label>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="(555) 555-0100"
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                For tour reminders and updates
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+
+      <button
+        onClick={handleSubmit}
+        disabled={submitting}
+        className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-semibold hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+      >
+        {submitting ? (
+          <>
+            <Loader2 className="w-5 h-5 animate-spin" />
+            {mode === "register" ? "Creating Account..." : "Signing In..."}
+          </>
+        ) : mode === "register" ? (
+          "Create Account & Continue"
+        ) : (
+          "Sign In & Continue"
+        )}
+      </button>
+
+      <p className="text-center text-sm text-slate-400">
+        {mode === "register" ? (
+          <>
+            Already have an account?{" "}
+            <button
+              onClick={() => { setMode("login"); setFieldError(null); }}
+              className="text-blue-400 hover:text-blue-300 font-medium"
+            >
+              Sign in
+            </button>
+          </>
+        ) : (
+          <>
+            New to WEx?{" "}
+            <button
+              onClick={() => { setMode("register"); setFieldError(null); }}
+              className="text-blue-400 hover:text-blue-300 font-medium"
+            >
+              Create an account
+            </button>
+          </>
+        )}
       </p>
     </motion.div>
   );
@@ -155,9 +377,16 @@ function StepSignGuarantee({
     if (!accepted) return;
     setSigning(true);
     try {
-      const result = await api.signGuarantee(dealId);
-      // The API returns the deal + warehouse with full address
-      onSigned(result.warehouse || {});
+      await api.signGuarantee(dealId);
+      // New engagement endpoint returns flat engagement data
+      // Fetch property details separately after guarantee is signed
+      let warehouseData: any = {};
+      try {
+        warehouseData = await api.getEngagementProperty(dealId);
+      } catch {
+        // Property fetch failed — continue with what we have
+      }
+      onSigned(warehouseData);
     } catch (err: any) {
       onError(err.message || "Failed to sign guarantee");
     } finally {
@@ -635,9 +864,11 @@ export default function TourBookingFlow({
               <div className="flex-1 overflow-y-auto">
                 <AnimatePresence mode="wait">
                   {step === 1 && (
-                    <StepContactConfirmed
+                    <StepAccountAuth
                       key="step1"
-                      onNext={() => setStep(2)}
+                      engagementId={deal.id}
+                      onSuccess={() => setStep(2)}
+                      onError={setError}
                     />
                   )}
                   {step === 2 && (

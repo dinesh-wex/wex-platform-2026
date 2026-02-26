@@ -1,4 +1,4 @@
-import { getToken, removeToken } from "./auth";
+import { getToken, removeToken, setToken } from "./auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -91,11 +91,27 @@ export function logout() {
   removeToken();
 }
 
+export function storeAuthToken(token: string) {
+  setToken(token);
+}
+
 // ---------------------------------------------------------------------------
 // Existing API object
 // ---------------------------------------------------------------------------
 
 export const api = {
+  // Auth (engagement flow)
+  register: (body: { email: string; password: string; name: string; role: string; company?: string; phone?: string; engagement_id?: string }) =>
+    fetchAPI('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  login: (body: { email: string; password: string }) =>
+    fetchAPI('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   // Supplier endpoints
   supplierLogin: (email: string) =>
     fetchAPI(`/api/supplier/login`, { method: 'POST', body: JSON.stringify({ email }) }),
@@ -176,18 +192,18 @@ export const api = {
   getBuyerDeals: (buyerId: string) => fetchAPI(`/api/buyer/${buyerId}/deals`),
 
   // Tour flow (anti-circumvention)
-  signGuarantee: (dealId: string) =>
-    fetchAPI(`/api/buyer/deal/${dealId}/guarantee`, {
+  signGuarantee: (engagementId: string) =>
+    fetchAPI(`/api/engagements/${engagementId}/guarantee/sign`, {
       method: 'POST',
       body: JSON.stringify({ accepted: true }),
     }),
-  scheduleTour: (dealId: string, data: { preferred_date: string; preferred_time: string; notes?: string }) =>
-    fetchAPI(`/api/buyer/deal/${dealId}/tour`, {
+  scheduleTour: (engagementId: string, data: { preferred_date: string; preferred_time: string; notes?: string }) =>
+    fetchAPI(`/api/engagements/${engagementId}/tour/request`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  recordTourOutcome: (dealId: string, data: { outcome: string; reason?: string }) =>
-    fetchAPI(`/api/buyer/deal/${dealId}/tour-outcome`, {
+  recordTourOutcome: (engagementId: string, data: { outcome: string; reason?: string }) =>
+    fetchAPI(`/api/engagements/${engagementId}/tour/outcome`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -437,16 +453,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ reason }),
     }),
-  submitContact: (id: string, email: string, phone: string) =>
-    fetchAPI(`/api/engagements/${id}/contact`, {
+  linkBuyer: (engagementId: string) =>
+    fetchAPI(`/api/engagements/${engagementId}/link-buyer`, {
       method: 'POST',
-      body: JSON.stringify({ email, phone }),
     }),
   signEngagementGuarantee: (id: string) =>
-    fetchAPI(`/api/engagements/${id}/guarantee`, {
+    fetchAPI(`/api/engagements/${id}/guarantee/sign`, {
       method: 'POST',
       body: JSON.stringify({ accepted: true }),
     }),
+  getEngagementProperty: (id: string) =>
+    fetchAPI(`/api/engagements/${id}/property`),
   requestTour: (id: string, preferredDate?: string) =>
     fetchAPI(`/api/engagements/${id}/tour/request`, {
       method: 'POST',

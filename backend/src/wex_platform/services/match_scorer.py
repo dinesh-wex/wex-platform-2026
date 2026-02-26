@@ -175,6 +175,12 @@ def compute_composite_score(
         radius = buyer_need_dict.get("radius_miles") or 25
         effective_denominator = radius if dist <= radius else KNN_MAX_CAP
         location_score = max(0.0, 100.0 * (1.0 - dist / effective_denominator))
+
+        # Tie-breaker: +10 if warehouse is in the exact city the buyer searched
+        buyer_city = (buyer_need_dict.get("city") or "").strip().lower()
+        wh_city = (warehouse_dict.get("city") or "").strip().lower()
+        if buyer_city and wh_city and buyer_city == wh_city:
+            location_score = min(100.0, location_score + 10.0)
     else:
         location_score = float(NEUTRAL)
 

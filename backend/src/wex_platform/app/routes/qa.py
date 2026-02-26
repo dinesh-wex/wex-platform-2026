@@ -135,6 +135,19 @@ def _serialize_knowledge(entry: PropertyKnowledgeEntry) -> dict:
     ).model_dump()
 
 
+def _check_access(engagement: Engagement, user: User) -> None:
+    """Raise 403 if user has no access to this engagement."""
+    if user.role == "admin":
+        return
+    if user.role == "supplier" and engagement.supplier_id == user.id:
+        return
+    if user.role == "buyer" and engagement.buyer_id == user.id:
+        return
+    if user.role == "buyer" and engagement.buyer_id is None:
+        return
+    raise HTTPException(status_code=403, detail="Access denied")
+
+
 async def _get_engagement_or_404(db: AsyncSession, engagement_id: str) -> Engagement:
     result = await db.execute(
         select(Engagement).where(Engagement.id == engagement_id)
@@ -223,6 +236,7 @@ async def list_questions(
 ):
     """List all Q&A questions for an engagement."""
     engagement = await _get_engagement_or_404(db, engagement_id)
+    _check_access(engagement, user)
 
     result = await db.execute(
         select(PropertyQuestion)
@@ -330,6 +344,10 @@ async def supplier_answer_question(
     if user.role not in ("supplier", "admin"):
         raise HTTPException(status_code=403, detail="Only suppliers can answer questions")
 
+    # Supplier must own the engagement's warehouse
+    if user.role == "supplier" and engagement.supplier_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     result = await db.execute(
         select(PropertyQuestion).where(PropertyQuestion.id == question_id)
     )
@@ -382,10 +400,10 @@ async def supplier_answer_question(
 # Property Knowledge Base (admin-managed)
 # ---------------------------------------------------------------------------
 
-knowledge_router = APIRouter(prefix="/api/properties", tags=["knowledge"])
+knowledge_router = APIRouter(prefix="/api", tags=["knowledge"])
 
 
-@knowledge_router.get("/{warehouse_id}/knowledge")
+@knowledge_router.get("/properties/{warehouse_id}/knowledge")
 async def get_property_knowledge(
     warehouse_id: str,
     request: Request,
@@ -402,45 +420,24 @@ async def get_property_knowledge(
     return [_serialize_knowledge(e) for e in entries]
 
 
-admin_knowledge_router = APIRouter(prefix="/api/admin/properties", tags=["admin-knowledge"])
+admin_knowledge_router = APIRouter(prefix="/api/admin", tags=["admin-knowledge"])
 
 
-@admin_knowledge_router.post("/{warehouse_id}/knowledge")
-async def create_knowledge_entry(
-    warehouse_id: str,
-    body: QuestionSubmitRequest,
-    request: Request,
-    user: User = Depends(get_current_user_dep),
-    db: AsyncSession = Depends(get_db),
-):
-    """Admin manually adds a knowledge base entry."""
-    if user.role not in ("admin",):
-        raise HTTPException(status_code=403, detail="Admin only")
-
-    # body.question_text is the question; we expect an answer in a separate field
-    # For simplicity, use the question_text as both question and answer seed
-    raise HTTPException(
-        status_code=501,
-        detail="Admin knowledge creation requires question + answer. Use POST with KnowledgeCreateRequest.",
-    )
-
-
-class KnowledgeCreateRequest(BaseModel):
+class KnowledgeEntryCreate(BaseModel):
     question: str
     answer: str
-    confidence: float = 1.0
 
 
-@admin_knowledge_router.post("/{warehouse_id}/knowledge/create")
+@admin_knowledge_router.post("/properties/{warehouse_id}/knowledge")
 async def admin_create_knowledge(
     warehouse_id: str,
-    body: KnowledgeCreateRequest,
+    body: KnowledgeEntryCreate,
     request: Request,
     user: User = Depends(get_current_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Admin creates a knowledge base entry for a property."""
-    if user.role not in ("admin",):
+    if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
 
     entry = PropertyKnowledgeEntry(
@@ -449,7 +446,7 @@ async def admin_create_knowledge(
         question=body.question,
         answer=body.answer,
         source="admin",
-        confidence=body.confidence,
+        confidence=1.0,
     )
     db.add(entry)
     await db.commit()

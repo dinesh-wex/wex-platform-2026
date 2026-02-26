@@ -25,6 +25,14 @@ from wex_platform.domain.models import (
     DealEvent,
     Warehouse,
     TruthCore,
+    Engagement,
+    EngagementEvent,
+)
+from wex_platform.domain.enums import (
+    EngagementStatus,
+    EngagementTier,
+    EngagementEventType,
+    EngagementActor,
 )
 from wex_platform.services.pricing_engine import PricingEngine
 
@@ -251,7 +259,7 @@ async def register_buyer(
         phone=body.phone,
     )
     db.add(buyer)
-    await db.flush()
+    await db.commit()
 
     return {
         "id": buyer.id,
@@ -350,7 +358,7 @@ async def create_buyer_need(
         status="active",
     )
     db.add(need)
-    await db.flush()
+    await db.commit()
 
     return {
         "id": need.id,
@@ -782,6 +790,38 @@ async def accept_match(
     )
     db.add(deal)
 
+    # Also create Engagement record for the new lifecycle system
+    engagement = Engagement(
+        id=str(uuid.uuid4()),
+        warehouse_id=match.warehouse_id,
+        buyer_need_id=need_id,
+        buyer_id=need.buyer_id,
+        supplier_id=match.warehouse.created_by or "",
+        status=EngagementStatus.BUYER_ACCEPTED.value,
+        tier=EngagementTier.TIER_1.value,
+        match_score=match.match_score,
+        match_rank=None,
+        supplier_rate_sqft=tc.supplier_rate_per_sqft,
+        buyer_rate_sqft=pricing["buyer_rate"],
+        monthly_supplier_payout=economics["monthly_supplier_payment"],
+        monthly_buyer_total=economics["monthly_buyer_payment"],
+        sqft=sqft,
+    )
+    db.add(engagement)
+
+    # Create engagement event
+    eng_event = EngagementEvent(
+        id=str(uuid.uuid4()),
+        engagement_id=engagement.id,
+        event_type=EngagementEventType.BUYER_ACCEPTED.value,
+        actor=EngagementActor.BUYER.value,
+        actor_id=need.buyer_id,
+        from_status=None,
+        to_status=EngagementStatus.BUYER_ACCEPTED.value,
+        data={"deal_id": deal.id, "path": body.deal_type},
+    )
+    db.add(eng_event)
+
     # Update match status
     match.status = "accepted"
 
@@ -800,11 +840,13 @@ async def accept_match(
     )
     db.add(event)
 
-    await db.flush()
+    await db.commit()
 
     # Return buyer-safe deal view
     return {
         "deal": _buyer_safe_deal(deal),
+        "deal_id": deal.id,
+        "engagement_id": engagement.id,
         "economics": {
             # ONLY buyer-facing economics - no supplier rate, no spread, no WEx revenue
             "monthly_payment": economics["monthly_buyer_payment"],
@@ -883,7 +925,7 @@ async def sign_guarantee(
     )
     db.add(event)
 
-    await db.flush()
+    await db.commit()
 
     # Return the deal WITH the full address now revealed
     warehouse_data = {}

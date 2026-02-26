@@ -209,6 +209,7 @@ async def anonymous_search(
 
     return SearchSessionResponse(
         session_token=token,
+        need_id=need_id,
         tier1=tier1_safe,
         tier2=tier2_safe,
         expires_at=expires.isoformat(),
@@ -245,6 +246,7 @@ async def get_search_session(
     results = session_record.results or {}
     return {
         "session_token": session_record.token,
+        "need_id": session_record.buyer_need_id,
         "tier1": results.get("tier1", []),
         "tier2": results.get("tier2", []),
         "requirements": session_record.requirements,

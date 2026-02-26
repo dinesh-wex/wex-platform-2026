@@ -840,6 +840,7 @@ function OptionsContent() {
   const router = useRouter();
   const sessionToken = searchParams.get("session");
   const legacyNeedId = searchParams.get("need_id"); // backwards compat
+  const [needId, setNeedId] = useState<string | null>(legacyNeedId);
 
   const [tier1, setTier1] = useState<MatchOption[]>([]);
   const [tier2, setTier2] = useState<MatchOption[]>([]);
@@ -1363,6 +1364,7 @@ function OptionsContent() {
     // If we have matching cached results from the search that just ran, use them
     // (avoids an extra API call since anonymousSearch already returned the data)
     if (cached && (cached.tier1?.length > 0 || cached.tier2?.length > 0)) {
+      if (cached.need_id) setNeedId(cached.need_id);
       const t1: MatchOption[] = (cached.tier1 || []).map(mapApiToMatchOption);
       const t2: MatchOption[] = (cached.tier2 || []).map(mapApiToMatchOption);
       setTier1(t1.sort((a: MatchOption, b: MatchOption) => b.match_score - a.match_score));
@@ -1374,6 +1376,7 @@ function OptionsContent() {
     try {
       // Fetch from backend session cache
       const data = await api.getSearchSession(token);
+      if (data.need_id) setNeedId(data.need_id);
       const t1: MatchOption[] = (data.tier1 || []).map(mapApiToMatchOption);
       const t2: MatchOption[] = (data.tier2 || []).map(mapApiToMatchOption);
 
@@ -1449,12 +1452,9 @@ function OptionsContent() {
   /*  Accept handler (opens contact modal first if needed)             */
   /* ---------------------------------------------------------------- */
   function handleAcceptClick(matchId: string) {
-    if (contactCaptured) {
-      executeAccept(matchId);
-    } else {
-      setPendingMatchId(matchId);
-      setContactModalOpen(true);
-    }
+    // Account creation is now handled inside TourBookingFlow (Step 1),
+    // so skip the old ContactCaptureModal and go straight to accept.
+    executeAccept(matchId);
   }
 
   function handleContactSubmitted() {
@@ -1487,24 +1487,37 @@ function OptionsContent() {
     const option = tier1.find((o) => o.match_id === matchId);
 
     try {
-      // Try to accept via API if we have a legacy need ID
-      const result = legacyNeedId
-        ? await api.acceptMatch(legacyNeedId, {
+      // Resolve need_id: state → session API fallback
+      let activeNeedId = needId;
+      if (!activeNeedId && sessionToken) {
+        try {
+          const session = await api.getSearchSession(sessionToken);
+          if (session.need_id) {
+            activeNeedId = session.need_id;
+            setNeedId(activeNeedId);
+          }
+        } catch { /* session fetch failed — continue without */ }
+      }
+
+      // Accept via API — creates the Deal record in backend
+      const result = activeNeedId
+        ? await api.acceptMatch(activeNeedId, {
             match_id: matchId,
             deal_type: "standard",
           })
         : null;
 
-      // Open TourBookingFlow instead of redirecting
-      const deal = result?.deal || {
-        id: result?.deal_id || `deal-${matchId}`,
-        warehouse_id: option?.warehouse_id || "",
-        sqft_allocated: option?.property.available_sqft || 0,
-        rate_per_sqft: option?.pricing.rate_sqft || 0,
-        monthly_payment: option?.pricing.monthly_total || 0,
-        term_months: option?.pricing.term_months || 6,
-        guarantee_signed_at: null,
-        status: "terms_accepted",
+      // Open TourBookingFlow — use engagement_id (new system) over deal.id (old system)
+      const rawDeal = result?.deal || {};
+      const deal = {
+        id: result?.engagement_id || rawDeal.id || result?.deal_id || `deal-${matchId}`,
+        warehouse_id: rawDeal.warehouse_id || option?.warehouse_id || "",
+        sqft_allocated: rawDeal.sqft_allocated || option?.property.available_sqft || 0,
+        rate_per_sqft: rawDeal.rate_per_sqft || option?.pricing.rate_sqft || 0,
+        monthly_payment: rawDeal.monthly_payment || option?.pricing.monthly_total || 0,
+        term_months: rawDeal.term_months || option?.pricing.term_months || 6,
+        guarantee_signed_at: rawDeal.guarantee_signed_at || null,
+        status: rawDeal.status || "terms_accepted",
       };
 
       const warehouse = {

@@ -82,7 +82,7 @@ export interface SupplierProfile {
 
 export type EngagementStatus =
   | 'deal_ping_sent' | 'deal_ping_accepted' | 'deal_ping_expired' | 'deal_ping_declined'
-  | 'matched' | 'buyer_reviewing' | 'buyer_accepted' | 'contact_captured' | 'guarantee_signed'
+  | 'matched' | 'buyer_reviewing' | 'buyer_accepted' | 'account_created' | 'guarantee_signed'
   | 'address_revealed' | 'tour_requested' | 'tour_confirmed' | 'tour_rescheduled'
   | 'instant_book_requested' | 'tour_completed' | 'buyer_confirmed' | 'agreement_sent'
   | 'agreement_signed' | 'onboarding' | 'active' | 'completed' | 'declined_by_buyer'
@@ -117,10 +117,10 @@ export interface Engagement {
   // Supplier terms
   supplierTermsAccepted?: boolean;
   supplierTermsVersion?: string;
-  // Buyer contact (nullable — revealed progressively)
-  buyerEmail?: string;
-  buyerPhone?: string;
+  // Buyer info
   buyerCompanyName?: string;
+  // Account creation
+  accountCreatedAt?: string;
   // Guarantee
   guaranteeSignedAt?: string;
   guaranteeIpAddress?: string;

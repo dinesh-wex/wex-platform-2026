@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wex_platform.domain.models import Warehouse, TruthCore, ContextualMemory
-from wex_platform.services.geocoding_service import GeocodingResult
+from wex_platform.services.geocoding_service import NormalizeResult as GeocodingResult
 
 
 async def create_warehouse_from_search(

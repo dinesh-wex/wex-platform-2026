@@ -50,9 +50,10 @@ TRANSITION_MAP: dict[EngagementStatus, dict[EngagementStatus, set[EngagementActo
         S.DECLINED_BY_BUYER: {A.BUYER},
     },
     S.BUYER_ACCEPTED: {
-        S.CONTACT_CAPTURED: {A.BUYER},
+        S.ACCOUNT_CREATED: {A.BUYER},
+        # v3: account creation is mandatory. Removed direct buyer_accepted → guarantee_signed path.
     },
-    S.CONTACT_CAPTURED: {
+    S.ACCOUNT_CREATED: {
         S.GUARANTEE_SIGNED: {A.BUYER},
     },
     S.GUARANTEE_SIGNED: {
@@ -110,7 +111,7 @@ TRANSITION_MAP: dict[EngagementStatus, dict[EngagementStatus, set[EngagementActo
 BUYER_DECLINE_STATES: set[EngagementStatus] = {
     S.BUYER_REVIEWING,
     S.BUYER_ACCEPTED,
-    S.CONTACT_CAPTURED,
+    S.ACCOUNT_CREATED,
     S.GUARANTEE_SIGNED,
     S.ADDRESS_REVEALED,
     S.TOUR_REQUESTED,
@@ -144,12 +145,15 @@ CANCELLABLE_STATES: set[EngagementStatus] = {
 
 # Deadline fields per status — maps status to the timestamp field used for expiry checks
 DEADLINE_FIELDS: dict[EngagementStatus, str] = {
-    S.DEAL_PING_SENT: "deal_ping_expires_at",
-    S.TOUR_REQUESTED: "tour_requested_at",       # 12h for supplier to confirm
-    S.TOUR_RESCHEDULED: "updated_at",             # 24h for reschedule response
-    S.TOUR_COMPLETED: "tour_completed_at",        # 72h buyer decision window
-    S.AGREEMENT_SENT: "agreement_sent_at",        # 72h signing deadline
-    S.ADDRESS_REVEALED: "updated_at",             # 7-day activity window
+    S.DEAL_PING_SENT: "deal_ping_expires_at",     # Absolute expiry timestamp
+    # Note: the following use relative timestamps — background jobs enforce the
+    # actual windows (12h, 24h, 72h, 7d).  The state machine only blocks
+    # forward transitions when the field holds an *absolute* expiry value.
+    # S.TOUR_REQUESTED uses tour_requested_at (12h supplier confirm window) — enforced by job
+    # S.TOUR_RESCHEDULED uses updated_at (24h reschedule response) — enforced by job
+    # S.TOUR_COMPLETED uses tour_completed_at (72h buyer decision) — enforced by job
+    # S.AGREEMENT_SENT uses agreement_sent_at (72h signing) — enforced by job
+    # S.ADDRESS_REVEALED uses updated_at (7-day activity window) — enforced by job
 }
 
 # Max tour reschedules before admin flag
@@ -234,10 +238,17 @@ class EngagementStateMachine:
                 deadline_value = getattr(engagement, deadline_field, None)
                 if deadline_value is not None:
                     now = datetime.now(timezone.utc)
-                    # Ensure deadline is tz-aware for comparison
-                    if deadline_value.tzinfo is None:
+                    # SQLite may return strings — parse if needed
+                    if isinstance(deadline_value, str):
+                        try:
+                            deadline_value = datetime.fromisoformat(deadline_value)
+                        except (ValueError, TypeError):
+                            deadline_value = None
+                    if deadline_value is None:
+                        pass  # Unparseable — skip deadline check
+                    elif deadline_value.tzinfo is None:
                         deadline_value = deadline_value.replace(tzinfo=timezone.utc)
-                    if now > deadline_value and target_status not in (
+                    if deadline_value is not None and now > deadline_value and target_status not in (
                         S.DEAL_PING_EXPIRED,
                         S.EXPIRED,
                     ):

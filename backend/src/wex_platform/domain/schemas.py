@@ -19,6 +19,7 @@ class UserCreate(BaseModel):
     role: str = "supplier"
     company: str | None = None
     phone: str | None = None
+    engagement_id: str | None = None
 
 
 class UserLogin(BaseModel):
@@ -460,6 +461,7 @@ class SearchSessionResponse(BaseModel):
     """Response from anonymous search."""
 
     session_token: str
+    need_id: str
     tier1: list[dict]
     tier2: list[dict]
     expires_at: datetime

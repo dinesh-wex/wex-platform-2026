@@ -16,17 +16,20 @@ from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wex_platform.app.routes.auth import get_current_user_dep
+from wex_platform.services.auth_service import decode_token
 from wex_platform.domain.enums import (
     EngagementActor,
     EngagementEventType,
     EngagementStatus,
 )
 from wex_platform.domain.models import (
+    BuyerAgreement,
     Engagement,
     EngagementAgreement,
     EngagementEvent,
     PaymentRecord,
     User,
+    Warehouse,
 )
 from wex_platform.infra.database import get_db
 from wex_platform.services.engagement_state_machine import (
@@ -53,12 +56,6 @@ class DealPingDeclineRequest(BaseModel):
     reason: Optional[str] = None
 
 
-class ContactSubmitRequest(BaseModel):
-    email: str
-    phone: str
-    company_name: Optional[str] = None
-
-
 class TourRequestBody(BaseModel):
     preferred_date: Optional[str] = None
     preferred_time: Optional[str] = None
@@ -80,6 +77,10 @@ class DeclineRequest(BaseModel):
 
 class CancelRequest(BaseModel):
     reason: Optional[str] = None
+
+
+class AcceptMatchRequest(BaseModel):
+    path: str  # "tour" or "instant_book"
 
 
 # ---------------------------------------------------------------------------
@@ -109,8 +110,6 @@ class EngagementBuyerView(BaseModel):
     deal_ping_expires_at: Optional[str] = None
 
     # Buyer contact
-    buyer_email: Optional[str] = None
-    buyer_phone: Optional[str] = None
     buyer_company_name: Optional[str] = None
 
     # Guarantee
@@ -189,10 +188,8 @@ class EngagementSupplierView(BaseModel):
     supplier_terms_accepted: bool = False
     supplier_terms_version: Optional[str] = None
 
-    # Buyer contact — only visible after contact_captured
+    # Buyer contact — only visible after account_created
     buyer_company_name: Optional[str] = None
-    buyer_email: Optional[str] = None
-    buyer_phone: Optional[str] = None
 
     # Tour
     tour_requested_at: Optional[str] = None
@@ -267,9 +264,8 @@ class EngagementAdminView(BaseModel):
     deal_ping_responded_at: Optional[str] = None
     supplier_terms_accepted: bool = False
     supplier_terms_version: Optional[str] = None
-    buyer_email: Optional[str] = None
-    buyer_phone: Optional[str] = None
     buyer_company_name: Optional[str] = None
+    account_created_at: Optional[str] = None
     guarantee_signed_at: Optional[str] = None
     guarantee_ip_address: Optional[str] = None
     guarantee_terms_version: Optional[str] = None
@@ -328,7 +324,7 @@ class EngagementEventOut(BaseModel):
 
 # Statuses AFTER which buyer contact info is visible to suppliers
 _POST_CONTACT_STATUSES = {
-    EngagementStatus.CONTACT_CAPTURED.value,
+    EngagementStatus.ACCOUNT_CREATED.value,
     EngagementStatus.GUARANTEE_SIGNED.value,
     EngagementStatus.ADDRESS_REVEALED.value,
     EngagementStatus.TOUR_REQUESTED.value,
@@ -410,9 +406,8 @@ def serialize_engagement(engagement: Engagement, role: str, actor: EngagementAct
             deal_ping_responded_at=_dt(engagement.deal_ping_responded_at),
             supplier_terms_accepted=engagement.supplier_terms_accepted or False,
             supplier_terms_version=engagement.supplier_terms_version,
-            buyer_email=engagement.buyer_email,
-            buyer_phone=engagement.buyer_phone,
             buyer_company_name=engagement.buyer_company_name,
+            account_created_at=_dt(engagement.account_created_at),
             guarantee_signed_at=_dt(engagement.guarantee_signed_at),
             guarantee_ip_address=engagement.guarantee_ip_address,
             guarantee_terms_version=engagement.guarantee_terms_version,
@@ -472,8 +467,6 @@ def serialize_engagement(engagement: Engagement, role: str, actor: EngagementAct
             supplier_terms_accepted=engagement.supplier_terms_accepted or False,
             supplier_terms_version=engagement.supplier_terms_version,
             buyer_company_name=engagement.buyer_company_name if show_contact else None,
-            buyer_email=engagement.buyer_email if show_contact else None,
-            buyer_phone=engagement.buyer_phone if show_contact else None,
             tour_requested_at=_dt(engagement.tour_requested_at),
             tour_requested_date=_dt(engagement.tour_requested_date),
             tour_requested_time=engagement.tour_requested_time,
@@ -520,8 +513,6 @@ def serialize_engagement(engagement: Engagement, role: str, actor: EngagementAct
             sqft=engagement.sqft,
             deal_ping_sent_at=_dt(engagement.deal_ping_sent_at),
             deal_ping_expires_at=_dt(engagement.deal_ping_expires_at),
-            buyer_email=engagement.buyer_email,
-            buyer_phone=engagement.buyer_phone,
             buyer_company_name=engagement.buyer_company_name,
             guarantee_signed_at=_dt(engagement.guarantee_signed_at),
             tour_requested_at=_dt(engagement.tour_requested_at),
@@ -559,6 +550,24 @@ def serialize_engagement(engagement: Engagement, role: str, actor: EngagementAct
         ).model_dump()
 
 
+async def get_optional_user_dep(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> Optional[User]:
+    """Optional auth: returns User if valid token present, else None."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.removeprefix("Bearer ")
+    payload = decode_token(token)
+    if not payload or "sub" not in payload:
+        return None
+    result = await db.execute(select(User).where(User.id == payload["sub"]))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active:
+        return None
+    return user
+
+
 async def _get_engagement_or_404(
     db: AsyncSession, engagement_id: str
 ) -> Engagement:
@@ -581,7 +590,7 @@ def _check_access(engagement: Engagement, user: User) -> None:
     if user.role == "buyer" and engagement.buyer_id == user.id:
         return
     # Buyers can also access engagements where buyer_id is not yet set
-    # if they have access via buyer_need (pre-contact_captured)
+    # if they have access via buyer_need (pre-account_created)
     if user.role == "buyer" and engagement.buyer_id is None:
         return  # Allow — will be tightened with buyer_need ownership check
     raise HTTPException(status_code=403, detail="Access denied")
@@ -637,19 +646,20 @@ async def _transition_engagement(
 @router.get("")
 async def list_engagements(
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
     status: Optional[str] = Query(None, description="Filter by status"),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=100),
 ):
     """List engagements for the current user, role-filtered."""
+    role = user.role if user else "buyer"
     query = select(Engagement)
 
-    if user.role == "supplier":
+    if role == "supplier":
         query = query.where(Engagement.supplier_id == user.id)
-    elif user.role == "buyer":
-        query = query.where(Engagement.buyer_id == user.id)
+    elif role == "buyer":
+        query = query.where(Engagement.buyer_id == (user.id if user else None))
     # admin sees all
 
     if status:
@@ -661,35 +671,38 @@ async def list_engagements(
     result = await db.execute(query)
     engagements = result.scalars().all()
 
-    actor = _actor_for_role(user.role)
-    return [serialize_engagement(e, user.role, actor) for e in engagements]
+    actor = _actor_for_role(role)
+    return [serialize_engagement(e, role, actor) for e in engagements]
 
 
 @router.get("/{engagement_id}")
 async def get_engagement(
     engagement_id: str,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Get a single engagement with role-filtered fields."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
 
-    actor = _actor_for_role(user.role)
-    return serialize_engagement(engagement, user.role, actor)
+    role = user.role if user else "buyer"
+    actor = _actor_for_role(role)
+    return serialize_engagement(engagement, role, actor)
 
 
 @router.get("/{engagement_id}/timeline")
 async def get_engagement_timeline(
     engagement_id: str,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the event timeline for an engagement."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
 
     result = await db.execute(
         select(EngagementEvent)
@@ -787,40 +800,76 @@ async def decline_deal_ping(
     return serialize_engagement(engagement, user.role, actor)
 
 
-# --- Contact ---
+# --- Accept Match ---
 
 
-@router.post("/{engagement_id}/contact")
-async def submit_contact(
+@router.post("/{engagement_id}/accept")
+async def accept_match(
     engagement_id: str,
-    body: ContactSubmitRequest,
+    body: AcceptMatchRequest,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
-    """Buyer submits contact info — this populates buyer_id."""
+    """Buyer accepts a match and chooses a path (tour or instant_book)."""
     engagement = await _get_engagement_or_404(db, engagement_id)
+    if user:
+        _check_access(engagement, user)
 
-    engagement.buyer_id = user.id  # THIS IS WHERE buyer_id GETS POPULATED
-    engagement.buyer_email = body.email
-    engagement.buyer_phone = body.phone
-    engagement.buyer_company_name = body.company_name
+    engagement.path = body.path
+    actor_id = user.id if user else "anonymous"
 
     try:
         await _transition_engagement(
             db, engagement,
-            EngagementStatus.CONTACT_CAPTURED,
+            EngagementStatus.BUYER_ACCEPTED,
             EngagementActor.BUYER,
-            user.id,
-            EngagementEventType.CONTACT_CAPTURED,
-            extra_data={"email": body.email, "company_name": body.company_name},
+            actor_id,
+            EngagementEventType.BUYER_ACCEPTED,
+            extra_data={"path": body.path},
         )
         await db.commit()
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    actor = _actor_for_role(user.role)
-    return serialize_engagement(engagement, user.role, actor)
+    logger.info("Engagement %s: buyer accepted with path=%s", engagement.id, body.path)
+
+    role = user.role if user else "buyer"
+    actor = _actor_for_role(role)
+    return serialize_engagement(engagement, role, actor)
+
+
+# --- Link Buyer (returning buyers who log in) ---
+
+
+@router.post("/{engagement_id}/link-buyer")
+async def link_buyer(
+    engagement_id: str,
+    request: Request,
+    user: User = Depends(get_current_user_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Links authenticated returning buyer to in-progress engagement after login."""
+    engagement = await _get_engagement_or_404(db, engagement_id)
+
+    now = datetime.now(timezone.utc)
+    engagement.buyer_id = user.id
+    engagement.account_created_at = now
+
+    try:
+        await _transition_engagement(
+            db, engagement,
+            EngagementStatus.ACCOUNT_CREATED,
+            EngagementActor.BUYER,
+            user.id,
+            EngagementEventType.ACCOUNT_CREATED,
+            extra_data={"method": "login"},
+        )
+        await db.commit()
+    except InvalidTransitionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return serialize_engagement(engagement, "buyer", EngagementActor.BUYER)
 
 
 # --- Guarantee ---
@@ -830,17 +879,23 @@ async def submit_contact(
 async def sign_guarantee(
     engagement_id: str,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
-    """Buyer signs the WEx guarantee, then system auto-reveals address."""
+    """Buyer signs the WEx guarantee, then system auto-reveals address.
+
+    Works for both authenticated and anonymous buyers.
+    """
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
 
     now = datetime.now(timezone.utc)
     engagement.guarantee_signed_at = now
     engagement.guarantee_ip_address = request.client.host if request.client else None
     engagement.guarantee_terms_version = "v1.0"  # Hardcoded for Inc 1
+
+    actor_id = user.id if user else "anonymous"
 
     try:
         # Step 1: buyer signs guarantee
@@ -848,10 +903,21 @@ async def sign_guarantee(
             db, engagement,
             EngagementStatus.GUARANTEE_SIGNED,
             EngagementActor.BUYER,
-            user.id,
+            actor_id,
             EngagementEventType.GUARANTEE_SIGNED,
             extra_data={"ip": engagement.guarantee_ip_address},
         )
+        # Create BuyerAgreement record for the occupancy guarantee
+        buyer_agreement = BuyerAgreement(
+            user_id=engagement.buyer_id,
+            buyer_id=engagement.buyer_id or "unknown",
+            deal_id=engagement.id,
+            agreement_type="occupancy_guarantee",
+            signed_at=now,
+            status="active",
+        )
+        db.add(buyer_agreement)
+
         # Step 2: system auto-reveals address
         await _transition_engagement(
             db, engagement,
@@ -864,8 +930,73 @@ async def sign_guarantee(
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    actor = _actor_for_role(user.role)
-    return serialize_engagement(engagement, user.role, actor)
+    role = user.role if user else "buyer"
+    actor = _actor_for_role(role)
+    return serialize_engagement(engagement, role, actor)
+
+
+# --- Property Details ---
+
+
+_POST_GUARANTEE_STATUSES = {
+    EngagementStatus.ADDRESS_REVEALED.value,
+    EngagementStatus.TOUR_REQUESTED.value,
+    EngagementStatus.TOUR_CONFIRMED.value,
+    EngagementStatus.TOUR_RESCHEDULED.value,
+    EngagementStatus.INSTANT_BOOK_REQUESTED.value,
+    EngagementStatus.TOUR_COMPLETED.value,
+    EngagementStatus.BUYER_CONFIRMED.value,
+    EngagementStatus.AGREEMENT_SENT.value,
+    EngagementStatus.AGREEMENT_SIGNED.value,
+    EngagementStatus.ONBOARDING.value,
+    EngagementStatus.ACTIVE.value,
+    EngagementStatus.COMPLETED.value,
+    EngagementStatus.DECLINED_BY_BUYER.value,
+    EngagementStatus.DECLINED_BY_SUPPLIER.value,
+}
+
+
+@router.get("/{engagement_id}/property")
+async def get_property_details(
+    engagement_id: str,
+    request: Request,
+    user: Optional[User] = Depends(get_optional_user_dep),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get full property details after the buyer has signed the guarantee.
+
+    Works for both authenticated and anonymous buyers.
+    """
+    engagement = await _get_engagement_or_404(db, engagement_id)
+    if user:
+        _check_access(engagement, user)
+
+    status_str = engagement.status if isinstance(engagement.status, str) else engagement.status.value
+    if status_str not in _POST_GUARANTEE_STATUSES:
+        raise HTTPException(
+            status_code=403,
+            detail="Property details available after guarantee is signed",
+        )
+
+    result = await db.execute(
+        select(Warehouse).where(Warehouse.id == engagement.warehouse_id)
+    )
+    warehouse = result.scalar_one_or_none()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail="Warehouse not found")
+
+    logger.info("Engagement %s: property details retrieved by user %s", engagement.id, user.id if user else "anonymous")
+
+    return {
+        "id": warehouse.id,
+        "name": warehouse.owner_name,
+        "address": warehouse.address,
+        "city": warehouse.city,
+        "state": warehouse.state,
+        "zip_code": warehouse.zip,
+        "total_sqft": warehouse.building_size_sqft,
+        "available_sqft": engagement.sqft,
+    }
 
 
 # --- Tour ---
@@ -876,12 +1007,13 @@ async def request_tour(
     engagement_id: str,
     body: TourRequestBody = TourRequestBody(),
     request: Request = None,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Buyer requests a property tour."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
 
     engagement.tour_requested_at = datetime.now(timezone.utc)
     engagement.path = "tour"
@@ -893,12 +1025,14 @@ async def request_tour(
             pass
     engagement.tour_requested_time = body.preferred_time
 
+    actor_id = user.id if user else "anonymous"
+
     try:
         await _transition_engagement(
             db, engagement,
             EngagementStatus.TOUR_REQUESTED,
             EngagementActor.BUYER,
-            user.id,
+            actor_id,
             EngagementEventType.TOUR_REQUESTED,
             extra_data={"preferred_date": body.preferred_date, "preferred_time": body.preferred_time},
         )
@@ -906,8 +1040,9 @@ async def request_tour(
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    actor = _actor_for_role(user.role)
-    return serialize_engagement(engagement, user.role, actor)
+    role = user.role if user else "buyer"
+    actor = _actor_for_role(role)
+    return serialize_engagement(engagement, role, actor)
 
 
 @router.post("/{engagement_id}/tour/confirm")
@@ -934,6 +1069,34 @@ async def confirm_tour(
             EngagementEventType.TOUR_CONFIRMED,
             extra_data={"scheduled_date": body.scheduled_date},
         )
+
+        # Notify buyer of tour confirmation
+        if engagement.buyer_id:
+            # Eager-load buyer to avoid async lazy-load error
+            from sqlalchemy import select as sa_select
+            from wex_platform.domain.models import User as UserModel
+            buyer_result = await db.execute(
+                sa_select(UserModel).where(UserModel.id == engagement.buyer_id)
+            )
+            buyer_user = buyer_result.scalar_one_or_none()
+            if buyer_user and buyer_user.email:
+                logger.info(
+                    "[engagement] tour_confirmed email would be sent to %s — engagement=%s, date=%s",
+                    buyer_user.email,
+                    engagement.id,
+                    body.scheduled_date,
+                )
+            else:
+                logger.warning(
+                    "[engagement] tour_confirmed but no buyer email — engagement=%s",
+                    engagement.id,
+                )
+        else:
+            logger.warning(
+                "[engagement] tour_confirmed but no buyer_id — engagement=%s",
+                engagement.id,
+            )
+
         await db.commit()
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -947,12 +1110,13 @@ async def reschedule_tour(
     engagement_id: str,
     body: TourRescheduleRequest,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Buyer or supplier reschedules a tour."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
 
     engagement.tour_reschedule_count = (engagement.tour_reschedule_count or 0) + 1
     engagement.tour_scheduled_date = datetime.fromisoformat(body.new_date)
@@ -965,15 +1129,17 @@ async def reschedule_tour(
         pass
     engagement.tour_rescheduled_time = body.new_time
 
-    actor_enum = _actor_for_role(user.role)
+    role = user.role if user else "buyer"
+    actor_enum = _actor_for_role(role)
     engagement.tour_rescheduled_by = actor_enum.value
+    actor_id = user.id if user else "anonymous"
 
     try:
         await _transition_engagement(
             db, engagement,
             EngagementStatus.TOUR_RESCHEDULED,
             actor_enum,
-            user.id,
+            actor_id,
             EngagementEventType.TOUR_RESCHEDULED,
             extra_data={"new_date": body.new_date, "new_time": body.new_time, "reason": body.reason},
         )
@@ -981,7 +1147,7 @@ async def reschedule_tour(
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    return serialize_engagement(engagement, user.role, actor_enum)
+    return serialize_engagement(engagement, role, actor_enum)
 
 
 # --- Instant Book ---
@@ -991,30 +1157,33 @@ async def reschedule_tour(
 async def request_instant_book(
     engagement_id: str,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Buyer requests instant book (skip tour)."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
 
     engagement.instant_book_requested_at = datetime.now(timezone.utc)
     engagement.path = "instant_book"
+    actor_id = user.id if user else "anonymous"
 
     try:
         await _transition_engagement(
             db, engagement,
             EngagementStatus.INSTANT_BOOK_REQUESTED,
             EngagementActor.BUYER,
-            user.id,
+            actor_id,
             EngagementEventType.INSTANT_BOOK_REQUESTED,
         )
         await db.commit()
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    actor = _actor_for_role(user.role)
-    return serialize_engagement(engagement, user.role, actor)
+    role = user.role if user else "buyer"
+    actor = _actor_for_role(role)
+    return serialize_engagement(engagement, role, actor)
 
 
 # --- Decline (generic) ---
@@ -1025,17 +1194,20 @@ async def decline_engagement(
     engagement_id: str,
     body: DeclineRequest,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Buyer or supplier declines the engagement."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
 
     now = datetime.now(timezone.utc)
-    actor_enum = _actor_for_role(user.role)
+    role = user.role if user else "buyer"
+    actor_enum = _actor_for_role(role)
+    actor_id = user.id if user else "anonymous"
 
-    if user.role == "supplier":
+    if role == "supplier":
         target = EngagementStatus.DECLINED_BY_SUPPLIER
         event_type = EngagementEventType.DECLINED_BY_SUPPLIER
         engagement.declined_by = "supplier"
@@ -1049,14 +1221,14 @@ async def decline_engagement(
 
     try:
         await _transition_engagement(
-            db, engagement, target, actor_enum, user.id, event_type,
+            db, engagement, target, actor_enum, actor_id, event_type,
             extra_data={"reason": body.reason},
         )
         await db.commit()
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    return serialize_engagement(engagement, user.role, actor_enum)
+    return serialize_engagement(engagement, role, actor_enum)
 
 
 @router.post("/{engagement_id}/cancel")
@@ -1248,16 +1420,18 @@ async def submit_tour_outcome(
     engagement_id: str,
     body: TourOutcomeRequest,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Buyer submits tour outcome: confirmed (proceed) or passed (decline)."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
 
     now = datetime.now(timezone.utc)
     engagement.tour_completed_at = now
     engagement.tour_outcome = body.outcome
+    actor_id = user.id if user else "anonymous"
 
     try:
         # First: system marks tour as completed
@@ -1275,7 +1449,7 @@ async def submit_tour_outcome(
                 db, engagement,
                 EngagementStatus.BUYER_CONFIRMED,
                 EngagementActor.BUYER,
-                user.id,
+                actor_id,
                 EngagementEventType.BUYER_CONFIRMED,
                 extra_data={"tour_outcome": "confirmed"},
             )
@@ -1314,7 +1488,7 @@ async def submit_tour_outcome(
                 db, engagement,
                 EngagementStatus.DECLINED_BY_BUYER,
                 EngagementActor.BUYER,
-                user.id,
+                actor_id,
                 EngagementEventType.BUYER_PASSED,
                 extra_data={"reason": body.reason},
             )
@@ -1325,8 +1499,9 @@ async def submit_tour_outcome(
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    actor = _actor_for_role(user.role)
-    return serialize_engagement(engagement, user.role, actor)
+    role = user.role if user else "buyer"
+    actor = _actor_for_role(role)
+    return serialize_engagement(engagement, role, actor)
 
 
 def _generate_agreement_terms(engagement: Engagement) -> str:
@@ -1363,12 +1538,13 @@ def _generate_agreement_terms(engagement: Engagement) -> str:
 async def get_agreement(
     engagement_id: str,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the current agreement for an engagement."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
 
     result = await db.execute(
         select(EngagementAgreement)
@@ -1380,7 +1556,8 @@ async def get_agreement(
     if not agreement:
         raise HTTPException(status_code=404, detail="No agreement found for this engagement")
 
-    return _serialize_agreement(agreement, user.role)
+    role = user.role if user else "buyer"
+    return _serialize_agreement(agreement, role)
 
 
 @router.post("/{engagement_id}/agreement/sign")
@@ -1388,12 +1565,15 @@ async def sign_agreement(
     engagement_id: str,
     body: AgreementSignRequest,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Sign the engagement agreement (buyer or supplier)."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
+
+    actor_id = user.id if user else "anonymous"
 
     result = await db.execute(
         select(EngagementAgreement)
@@ -1438,7 +1618,7 @@ async def sign_agreement(
             engagement_id=engagement.id,
             event_type=EngagementEventType.AGREEMENT_BUYER_SIGNED.value,
             actor=EngagementActor.BUYER.value,
-            actor_id=user.id,
+            actor_id=actor_id,
             from_status=engagement.status,
             to_status=engagement.status,
             data={"agreement_id": agreement.id},
@@ -1457,7 +1637,7 @@ async def sign_agreement(
             engagement_id=engagement.id,
             event_type=EngagementEventType.AGREEMENT_SUPPLIER_SIGNED.value,
             actor=EngagementActor.SUPPLIER.value,
-            actor_id=user.id,
+            actor_id=actor_id,
             from_status=engagement.status,
             to_status=engagement.status,
             data={"agreement_id": agreement.id},
@@ -1493,7 +1673,8 @@ async def sign_agreement(
             logger.warning("Agreement fully signed but transition failed: %s", e)
 
     await db.commit()
-    return _serialize_agreement(agreement, user.role)
+    role = user.role if user else "buyer"
+    return _serialize_agreement(agreement, role)
 
 
 # --- Onboarding ---
@@ -1503,12 +1684,13 @@ async def sign_agreement(
 async def get_onboarding_status(
     engagement_id: str,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Get onboarding status for an engagement."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
 
     all_complete = (
         bool(engagement.insurance_uploaded)
@@ -1532,12 +1714,16 @@ async def upload_insurance(
     engagement_id: str,
     body: OnboardingUploadRequest = OnboardingUploadRequest(),
     request: Request = None,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Mark insurance as uploaded."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
+
+    role = user.role if user else "buyer"
+    actor_id = user.id if user else "anonymous"
 
     engagement.insurance_uploaded = True
     engagement.updated_at = datetime.now(timezone.utc)
@@ -1546,8 +1732,8 @@ async def upload_insurance(
         id=str(uuid.uuid4()),
         engagement_id=engagement.id,
         event_type=EngagementEventType.INSURANCE_UPLOADED.value,
-        actor=_actor_for_role(user.role).value,
-        actor_id=user.id,
+        actor=_actor_for_role(role).value,
+        actor_id=actor_id,
         from_status=engagement.status,
         to_status=engagement.status,
         data={"document_url": body.document_url},
@@ -1555,7 +1741,7 @@ async def upload_insurance(
     db.add(event)
     logger.info("Onboarding: insurance uploaded (engagement=%s)", engagement.id)
 
-    await _check_onboarding_complete(db, engagement, user.id)
+    await _check_onboarding_complete(db, engagement, actor_id)
     await db.commit()
 
     return {"ok": True, "insurance_uploaded": True}
@@ -1566,12 +1752,16 @@ async def upload_company_docs(
     engagement_id: str,
     body: OnboardingUploadRequest = OnboardingUploadRequest(),
     request: Request = None,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Mark company docs as uploaded."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
+
+    role = user.role if user else "buyer"
+    actor_id = user.id if user else "anonymous"
 
     engagement.company_docs_uploaded = True
     engagement.updated_at = datetime.now(timezone.utc)
@@ -1580,8 +1770,8 @@ async def upload_company_docs(
         id=str(uuid.uuid4()),
         engagement_id=engagement.id,
         event_type=EngagementEventType.COMPANY_DOCS_UPLOADED.value,
-        actor=_actor_for_role(user.role).value,
-        actor_id=user.id,
+        actor=_actor_for_role(role).value,
+        actor_id=actor_id,
         from_status=engagement.status,
         to_status=engagement.status,
         data={"document_url": body.document_url},
@@ -1589,7 +1779,7 @@ async def upload_company_docs(
     db.add(event)
     logger.info("Onboarding: company docs uploaded (engagement=%s)", engagement.id)
 
-    await _check_onboarding_complete(db, engagement, user.id)
+    await _check_onboarding_complete(db, engagement, actor_id)
     await db.commit()
 
     return {"ok": True, "company_docs_uploaded": True}
@@ -1600,12 +1790,16 @@ async def submit_payment_method(
     engagement_id: str,
     body: PaymentMethodRequest = PaymentMethodRequest(),
     request: Request = None,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Submit payment method for onboarding."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
+
+    role = user.role if user else "buyer"
+    actor_id = user.id if user else "anonymous"
 
     engagement.payment_method_added = True
     engagement.updated_at = datetime.now(timezone.utc)
@@ -1614,8 +1808,8 @@ async def submit_payment_method(
         id=str(uuid.uuid4()),
         engagement_id=engagement.id,
         event_type=EngagementEventType.PAYMENT_METHOD_ADDED.value,
-        actor=_actor_for_role(user.role).value,
-        actor_id=user.id,
+        actor=_actor_for_role(role).value,
+        actor_id=actor_id,
         from_status=engagement.status,
         to_status=engagement.status,
         data={"payment_method_type": body.payment_method_type, "last_four": body.last_four},
@@ -1623,7 +1817,7 @@ async def submit_payment_method(
     db.add(event)
     logger.info("Onboarding: payment method added (engagement=%s)", engagement.id)
 
-    await _check_onboarding_complete(db, engagement, user.id)
+    await _check_onboarding_complete(db, engagement, actor_id)
     await db.commit()
 
     return {"ok": True, "payment_method_added": True}
@@ -1675,12 +1869,15 @@ async def _check_onboarding_complete(
 async def get_engagement_payments(
     engagement_id: str,
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Get payment records for an engagement."""
     engagement = await _get_engagement_or_404(db, engagement_id)
-    _check_access(engagement, user)
+    if user:
+        _check_access(engagement, user)
+
+    role = user.role if user else "buyer"
 
     result = await db.execute(
         select(PaymentRecord)
@@ -1689,7 +1886,7 @@ async def get_engagement_payments(
     )
     payments = result.scalars().all()
 
-    return [_serialize_payment(p, user.role) for p in payments]
+    return [_serialize_payment(p, role) for p in payments]
 
 
 # --- Buyer payments (cross-engagement) ---
@@ -1701,15 +1898,18 @@ buyer_payments_router = APIRouter(prefix="/api/buyer", tags=["buyer-payments"])
 @buyer_payments_router.get("/payments")
 async def get_buyer_payments(
     request: Request,
-    user: User = Depends(get_current_user_dep),
+    user: Optional[User] = Depends(get_optional_user_dep),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all payments across buyer's engagements."""
-    if user.role not in ("buyer", "admin"):
+    role = user.role if user else "buyer"
+    if role not in ("buyer", "admin"):
         raise HTTPException(status_code=403, detail="Buyers only")
 
+    actor_id = user.id if user else None
+
     eng_result = await db.execute(
-        select(Engagement.id).where(Engagement.buyer_id == user.id)
+        select(Engagement.id).where(Engagement.buyer_id == actor_id)
     )
     eng_ids = [row[0] for row in eng_result.fetchall()]
 
@@ -1723,4 +1923,4 @@ async def get_buyer_payments(
     )
     payments = result.scalars().all()
 
-    return [_serialize_payment(p, user.role) for p in payments]
+    return [_serialize_payment(p, role) for p in payments]

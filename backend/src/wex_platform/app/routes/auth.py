@@ -1,12 +1,18 @@
 """Authentication routes: signup, login, me, profile update."""
 
+import logging
+import uuid
 from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wex_platform.domain.models import User
+from wex_platform.domain.enums import (
+    EngagementActor,
+    EngagementEventType,
+    EngagementStatus,
+)
+from wex_platform.domain.models import Engagement, EngagementEvent, User
 from wex_platform.domain.schemas import (
     TokenResponse,
     UserCreate,
@@ -22,6 +28,8 @@ from wex_platform.services.auth_service import (
     get_user_by_email,
     verify_password,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -75,8 +83,53 @@ async def signup(data: UserCreate, db: AsyncSession = Depends(get_db)):
     user = await create_user(
         db, data.email, data.password, data.name, data.role, data.company, data.phone
     )
+
+    # If engagement_id provided and engagement is in buyer_accepted state, link it
+    linked_engagement_id = None
+    if data.engagement_id:
+        result = await db.execute(
+            select(Engagement).where(
+                Engagement.id == str(data.engagement_id),
+                Engagement.status == EngagementStatus.BUYER_ACCEPTED.value,
+            )
+        )
+        engagement = result.scalar_one_or_none()
+        if engagement:
+            now = datetime.now(timezone.utc)
+            engagement.buyer_id = user.id
+            engagement.account_created_at = now
+            engagement.status = EngagementStatus.ACCOUNT_CREATED.value
+            engagement.updated_at = now
+
+            event = EngagementEvent(
+                id=str(uuid.uuid4()),
+                engagement_id=engagement.id,
+                event_type=EngagementEventType.ACCOUNT_CREATED.value,
+                actor=EngagementActor.BUYER.value,
+                actor_id=user.id,
+                from_status=EngagementStatus.BUYER_ACCEPTED.value,
+                to_status=EngagementStatus.ACCOUNT_CREATED.value,
+                data={"method": "registration", "user_id": user.id},
+            )
+            db.add(event)
+            linked_engagement_id = str(data.engagement_id)
+            logger.info(
+                "Signup linked engagement %s to user %s", engagement.id, user.id
+            )
+
+    await db.commit()
     token = create_access_token(user.id, user.role)
-    return TokenResponse(access_token=token, user=UserResponse.model_validate(user))
+    response = TokenResponse(access_token=token, user=UserResponse.model_validate(user))
+    resp_dict = response.model_dump()
+    if linked_engagement_id:
+        resp_dict["engagement_id"] = linked_engagement_id
+    return resp_dict
+
+
+# /register alias for spec compliance
+@router.post("/register", response_model=TokenResponse)
+async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
+    return await signup(data=data, db=db)
 
 
 @router.post("/login", response_model=TokenResponse)

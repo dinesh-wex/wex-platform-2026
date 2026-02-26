@@ -29,7 +29,7 @@ const IN_PROGRESS_STATUSES: EngagementStatus[] = [
   "matched",
   "buyer_reviewing",
   "buyer_accepted",
-  "contact_captured",
+  "account_created",
   "guarantee_signed",
   "address_revealed",
   "tour_confirmed",

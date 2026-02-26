@@ -644,7 +644,7 @@ export default function EngagementDetailPage() {
                     buyerRevealed ? "text-slate-900" : "text-slate-400 italic"
                   }`}
                 >
-                  {buyerRevealed ? (engagement.buyerEmail || "Available") : "Via WEx only"}
+                  {buyerRevealed ? "Available" : "Via WEx only"}
                 </span>
               </div>
             </div>
