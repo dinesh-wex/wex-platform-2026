@@ -31,13 +31,14 @@ class Settings(BaseSettings):
 
     # CORS / Frontend
     cors_origins: str = "http://localhost:3000"
-    frontend_url: str = "http://localhost:3000"
+    frontend_url: str = "https://warehouseexchange.com"
 
     # Aircall
     aircall_number_id: str = ""
     aircall_api_id: str = ""
     aircall_api_token: str = ""
     aircall_webhook_token: str = ""
+    aircall_buyer_number_id: str = ""
 
     # Admin
     admin_password: str = "wex2026"

@@ -15,12 +15,21 @@ class Base(DeclarativeBase):
 settings = get_settings()
 
 # Auto-detect driver from DATABASE_URL
-engine = create_async_engine(
-    settings.database_url,
-    echo=settings.debug,
-    # SQLite needs check_same_thread=False
-    connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
-)
+_is_sqlite = "sqlite" in settings.database_url
+_connect_args = {}
+if _is_sqlite:
+    _connect_args["check_same_thread"] = False
+    _connect_args["timeout"] = 30  # Wait up to 30s for write lock (default 5s)
+
+_engine_kwargs = {
+    "echo": False,  # Set True only when debugging SQL queries — very verbose
+    "connect_args": _connect_args,
+}
+if not _is_sqlite:
+    _engine_kwargs["pool_size"] = 5
+    _engine_kwargs["max_overflow"] = 10
+
+engine = create_async_engine(settings.database_url, **_engine_kwargs)
 
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -36,8 +45,18 @@ async def get_db():
 
 async def init_db():
     """Create all tables (for local dev). Use Alembic for production migrations."""
+    # Ensure SMS models are registered with Base.metadata
+    import wex_platform.domain.sms_models  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Enable WAL mode for SQLite — allows concurrent reads + single writer
+    # without "database is locked" errors from background tasks.
+    if _is_sqlite:
+        async with engine.begin() as conn:
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA busy_timeout=30000"))
 
     # SQLite doesn't support ADD COLUMN IF NOT EXISTS, so we run each
     # migration and silently ignore "duplicate column" errors.
@@ -68,6 +87,9 @@ async def init_db():
         "UPDATE warehouses SET available_sqft = (SELECT tc.max_sqft FROM truth_cores tc WHERE tc.warehouse_id = warehouses.id) WHERE available_sqft IS NULL",
         # --- Property pipeline v2: add property_id FK to contextual_memories ---
         "ALTER TABLE contextual_memories ADD COLUMN property_id VARCHAR(36)",
+        "ALTER TABLE engagements ADD COLUMN source_channel VARCHAR(10) DEFAULT 'web'",
+        "ALTER TABLE sms_conversation_states ADD COLUMN search_session_token VARCHAR(64)",
+        "ALTER TABLE sms_conversation_states ADD COLUMN name_requested_at_turn INTEGER",
     ]
 
     if "sqlite" in settings.database_url:

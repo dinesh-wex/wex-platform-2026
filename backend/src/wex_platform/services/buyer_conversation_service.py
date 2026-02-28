@@ -260,6 +260,91 @@ class BuyerConversationService:
         return buyer_need
 
     # ------------------------------------------------------------------
+    # SMS state management
+    # ------------------------------------------------------------------
+
+    async def get_or_create_sms_state(
+        self,
+        buyer_id: str,
+        conversation_id: str,
+        phone: str,
+    ) -> "SMSConversationState":
+        """Find the SMS conversation state or create a new one.
+
+        Args:
+            buyer_id: The buyer's UUID.
+            conversation_id: The conversation UUID.
+            phone: E.164 phone number.
+
+        Returns:
+            The SMSConversationState record.
+        """
+        from wex_platform.domain.sms_models import SMSConversationState
+
+        result = await self.db.execute(
+            select(SMSConversationState).where(
+                SMSConversationState.conversation_id == conversation_id,
+            )
+        )
+        state = result.scalar_one_or_none()
+
+        if state:
+            return state
+
+        state = SMSConversationState(
+            id=str(uuid.uuid4()),
+            buyer_id=buyer_id,
+            conversation_id=conversation_id,
+            phone=phone,
+        )
+        self.db.add(state)
+        await self.db.flush()
+        logger.info("Created SMSConversationState %s for conversation %s", state.id, conversation_id)
+        return state
+
+    # ------------------------------------------------------------------
+    # Cross-channel linking
+    # ------------------------------------------------------------------
+
+    async def link_web_account(self, phone: str, user_id: str, email: str | None = None) -> bool:
+        """Link a web-created User account to an existing SMS buyer.
+
+        Called when a user signs up via web and we detect they already have
+        an SMS conversation (matching by phone number).
+
+        Updates:
+        - Buyer.email if provided
+        - SMSConversationState.buyer_email if found
+
+        Returns True if a link was made, False if no SMS buyer found.
+        """
+        from wex_platform.domain.sms_models import SMSConversationState
+
+        # Find buyer by phone
+        result = await self.db.execute(
+            select(Buyer).where(Buyer.phone == phone)
+        )
+        buyer = result.scalar_one_or_none()
+        if not buyer:
+            return False
+
+        # Update buyer email
+        if email and not buyer.email:
+            buyer.email = email
+
+        # Update SMS conversation state
+        result = await self.db.execute(
+            select(SMSConversationState).where(SMSConversationState.phone == phone)
+        )
+        states = result.scalars().all()
+        for state in states:
+            if email and not state.buyer_email:
+                state.buyer_email = email
+
+        await self.db.flush()
+        return True
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 

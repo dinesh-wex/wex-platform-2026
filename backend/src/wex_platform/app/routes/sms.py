@@ -224,7 +224,7 @@ async def _handle_supplier_reply(
         # Auto-respond with the tokenized link
         frontend_url = settings.frontend_url
         response_msg = (
-            f"Got it — ${counter_rate:.2f}/sqft noted. "
+            f"Got it, ${counter_rate:.2f}/sqft noted. "
             f"Complete the quick review to finalize:\n"
             f"→ {frontend_url}/dla/{dla_token.token}"
         )
@@ -247,7 +247,7 @@ async def _handle_supplier_reply(
         # Send the tokenized link
         frontend_url = settings.frontend_url
         response_msg = (
-            f"Great! Here's your personalized link to review the deal — "
+            f"Great! Here's your personalized link to review the deal. "
             f"takes less than 5 minutes:\n"
             f"→ {frontend_url}/dla/{dla_token.token}"
         )
@@ -269,7 +269,7 @@ async def _handle_supplier_reply(
         await db.commit()
 
         response_msg = (
-            "Understood — no problem. Your property stays on file and "
+            "Understood, no problem. Your property stays on file and "
             "we'll only reach out if there's a strong match in the future."
         )
         await sms_service.send_sms(from_number, response_msg)

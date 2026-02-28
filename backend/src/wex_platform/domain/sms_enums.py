@@ -1,0 +1,20 @@
+"""SMS-specific enums for the buyer journey state machine."""
+
+from enum import Enum
+
+
+class SMSPhase(str, Enum):
+    """Phase of an SMS buyer conversation."""
+    INTAKE = "INTAKE"
+    QUALIFYING = "QUALIFYING"
+    PRESENTING = "PRESENTING"
+    PROPERTY_FOCUSED = "PROPERTY_FOCUSED"
+    AWAITING_ANSWER = "AWAITING_ANSWER"
+    COLLECTING_INFO = "COLLECTING_INFO"
+    COMMITMENT = "COMMITMENT"
+    GUARANTEE_PENDING = "GUARANTEE_PENDING"
+    TOUR_SCHEDULING = "TOUR_SCHEDULING"
+    ACTIVE = "ACTIVE"
+    COMPLETED = "COMPLETED"
+    DORMANT = "DORMANT"
+    ABANDONED = "ABANDONED"

@@ -868,15 +868,16 @@ class Engagement(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     warehouse_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
-    buyer_need_id = Column(String(36), ForeignKey("buyer_needs.id"), nullable=False)
+    buyer_need_id = Column(String(36), ForeignKey("buyer_needs.id"), nullable=True)  # nullable for SMS-originated
     buyer_id = Column(String(36), ForeignKey("buyers.id"), nullable=True)
     # supplier_id is AUDIT ONLY — records who actioned the deal ping.
     # Never use for authorization. Use company_id via the property FK instead.
-    supplier_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+    supplier_id = Column(String(36), ForeignKey("users.id"), nullable=True)  # nullable for SMS-originated
 
     # Status
     status = Column(String(50), nullable=False, default="deal_ping_sent", index=True)
     tier = Column(String(20), nullable=False)  # EngagementTier
+    source_channel = Column(String(10), default="web")  # web, sms
     path = Column(String(20), nullable=True)  # EngagementPath — set when buyer chooses
 
     # Matching

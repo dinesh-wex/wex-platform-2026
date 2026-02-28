@@ -290,11 +290,7 @@ class ResponseGenerator(BaseAgent):
         """
         # Deterministic fast-path for greetings
         if intent == INTENT_GREETING:
-            return (
-                "Hey! I'm the WEx warehouse assistant. "
-                "Tell me what kind of space you need — size, location, "
-                "and what you'll store. I'll find options fast."
-            )
+            return "This is Warehouse Exchange. Looking for warehouse space? What city, state and how much space?"
 
         history_context = ""
         if conversation_history:
@@ -352,7 +348,7 @@ class ResponseGenerator(BaseAgent):
         if intent == INTENT_NEW_SEARCH:
             if criteria and criteria.get("location"):
                 return (
-                    f"Got it — looking for space in {criteria['location']}. "
+                    f"Got it, looking for space in {criteria['location']}. "
                     f"Searching now, I'll text you back with options shortly."
                 )
             return (
@@ -361,18 +357,18 @@ class ResponseGenerator(BaseAgent):
             )
 
         if intent == INTENT_REFINE_SEARCH:
-            return "Noted — updating your search with those details. One moment."
+            return "Noted, updating your search with those details. One moment."
 
         if intent == INTENT_QUESTION:
             return (
-                "Good question — let me look into that for you. "
+                "Good question, let me look into that for you. "
                 "I'll text back shortly with an answer."
             )
 
         return (
             "Thanks for reaching out to WEx! "
-            "Tell me what kind of warehouse space you need — "
-            "city, size, and what you'll use it for."
+            "Tell me what kind of warehouse space you need. "
+            "City, size, and what you'll use it for."
         )
 
 

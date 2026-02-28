@@ -484,10 +484,10 @@ class DLAService:
             # Build honest response about competition
             if proposed_rate > (buyer_budget or 0) and buyer_budget > 0:
                 message = (
-                    f"Got it — we've noted your rate of ${proposed_rate:.2f}/sqft. "
+                    f"Got it, we've noted your rate of ${proposed_rate:.2f}/sqft. "
                     f"The buyer's current budget is closer to ${buyer_budget:.2f}, "
-                    f"so we'll present your space but want to be upfront — "
-                    f"there are already {competing} spaces within their budget range. "
+                    f"so we'll present your space but want to be upfront. "
+                    f"There are already {competing} spaces within their budget range. "
                     f"We'll let you know what they decide."
                 )
             else:
@@ -643,7 +643,7 @@ class DLAService:
                     "buyer_email": buyer.email,
                     "buyer_phone": buyer.phone,
                     "message": (
-                        f"Good news — a new space just confirmed availability for your "
+                        f"Good news, a new space just confirmed availability for your "
                         f"requirements. {city or ''}, "
                         f"{bldg_sqft or 'N/A'} sqft, "
                         f"${dla_token.supplier_rate:.2f}/sqft."
