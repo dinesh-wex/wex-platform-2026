@@ -109,7 +109,7 @@ class BuyerSMSOrchestrator:
                 plan = CriteriaPlan(
                     intent="facility_info",
                     action=None,
-                    response_hint="Here are the matches again. Summarize the top options briefly (city, sqft, rate).",
+                    response_hint="Here are the matches again. Summarize the top options briefly (city and rate only, never mention property sqft).",
                 )
                 phase = "PRESENTING"
                 state.focused_match_id = None  # Unfocus
@@ -266,7 +266,7 @@ class BuyerSMSOrchestrator:
         ):
             match_summaries = presented_match_summaries
             phase = "PRESENTING"
-            plan.response_hint = f"All qualifying info collected. Found {len(match_summaries)} matches. Tell the buyer how many you found and briefly summarize the top options (city, sqft, rate)."
+            plan.response_hint = f"All qualifying info collected. Found {len(match_summaries)} matches. Tell the buyer how many you found and briefly summarize the top options (city, rate, and monthly estimate — never mention property sqft)."
 
         elif plan.action == "search" and all_qualifying_done:
             # All questions answered — trigger ClearingEngine search
@@ -276,7 +276,7 @@ class BuyerSMSOrchestrator:
 
             if match_summaries:
                 phase = "PRESENTING"
-                plan.response_hint = f"Found {len(match_summaries)} options. Tell the buyer how many you found and briefly summarize the top options (city, sqft, rate)."
+                plan.response_hint = f"Found {len(match_summaries)} options. Tell the buyer how many you found and briefly summarize the top options (city, rate, and monthly estimate — never mention property sqft)."
             else:
                 phase = "QUALIFYING"
                 plan.response_hint = "Search ran but found no matches. Tell the buyer nothing exact right now, but you're expanding the search and will text them when something opens up."
@@ -352,9 +352,15 @@ class BuyerSMSOrchestrator:
         # ── Phase-specific handling ──
 
         # COLLECTING_INFO: collect name/email for commitment flow
-        if plan.action == "collect_info" or phase == "COLLECTING_INFO":
-            # Name already extracted opportunistically above
-
+        # Only enter when buyer explicitly wants to commit OR we're already collecting.
+        # Do NOT enter just because buyer provided their name in PRESENTING phase
+        # (that's handled by the name-link block below).
+        _in_commitment_flow = (
+            phase == "COLLECTING_INFO"
+            or (plan.action == "collect_info" and phase not in ("PRESENTING", "QUALIFYING"))
+            or plan.action == "commitment_handoff"
+        )
+        if _in_commitment_flow:
             if interpretation.emails:
                 state.buyer_email = interpretation.emails[0]
 
@@ -364,7 +370,7 @@ class BuyerSMSOrchestrator:
                 plan.response_hint = "Ask for the buyer's name to proceed with booking"
             elif not state.buyer_email:
                 phase = "COLLECTING_INFO"
-                plan.response_hint = "Got their name, now ask for email to proceed"
+                plan.response_hint = "Got their name, now ask for email to send over the details"
             else:
                 # We have name + email -> proceed to commitment
                 phase = "COMMITMENT"
@@ -441,6 +447,45 @@ class BuyerSMSOrchestrator:
             state.name_requested_at_turn = state.turn
             name_capture_prompt = "What's your name by the way?"
 
+        # == Name just captured → send search link with best match highlight ==
+        # Only fires on the EXACT turn after name was requested (one-shot)
+        if (
+            state.renter_first_name
+            and state.name_requested_at_turn is not None
+            and (state.turn or 0) == state.name_requested_at_turn + 1
+            and state.search_session_token
+        ):
+            from wex_platform.app.config import get_settings
+            settings = get_settings()
+            search_link = f"{settings.frontend_url}/buyer/options?session={state.search_session_token}"
+
+            # Build best match context — pass raw data, let response agent handle tone
+            # (the normal gatekeeper→polisher pipeline enforces limits at 800 for URL messages)
+            best_match_ctx = ""
+            if match_summaries:
+                best = match_summaries[0]
+                city = best.get("city", "")
+                rate = best.get("rate", "")
+                monthly = best.get("monthly")
+                reasoning = best.get("reasoning", "")
+                description = best.get("description", "")
+                highlight = reasoning[:200] or description[:200] or ""
+                if city:
+                    rate_str = f"${rate}/sqft" if rate else ""
+                    monthly_str = f", about ${monthly:,}/mo" if monthly else ""
+                    best_match_ctx = f" Best match is in {city} at {rate_str}{monthly_str}."
+                    if highlight:
+                        best_match_ctx += f" Why it's a good fit: {highlight}"
+
+            plan.response_hint = (
+                f"Buyer just gave their name. Acknowledge warmly using their name."
+                f"{best_match_ctx} "
+                f"Then share this link to review all options: {search_link} . "
+                f"Weave the best match info into a brief natural sentence in your broker voice. "
+                f"Do NOT copy the 'why it's a good fit' text verbatim, paraphrase it naturally. "
+                f"Do NOT list all matches again. Do NOT push for tours or commitment."
+            )
+
         # == 7. Response Agent (LLM) ==
         response_agent = ResponseAgent()
         is_first = (state.turn or 0) <= 1
@@ -461,7 +506,8 @@ class BuyerSMSOrchestrator:
 
         # == 8. Gatekeeper -> Polisher retry loop ==
         polisher = PolisherAgent()
-        max_len = 800 if is_first else 480
+        has_url = "http://" in response_text or "https://" in response_text
+        max_len = 800 if (is_first or has_url) else 480
         context = None
         if plan.intent == "commitment":
             context = "commitment"
@@ -554,9 +600,10 @@ class BuyerSMSOrchestrator:
             if not tier1:
                 return None
 
-            # Build summaries
+            # Build summaries with buyer's requested sqft for monthly estimate
             from wex_platform.agents.sms.context_builder import build_match_summaries
-            summaries = build_match_summaries(tier1)
+            buyer_sqft = criteria.get("sqft") if criteria else None
+            summaries = build_match_summaries(tier1, buyer_sqft=buyer_sqft)
 
             # Store presented IDs
             state.presented_match_ids = [s["id"] for s in summaries if s.get("id")]

@@ -45,8 +45,12 @@ def build_response_context(
     }
 
 
-def build_match_summaries(matches: list) -> list[dict]:
+def build_match_summaries(matches: list, buyer_sqft: int | None = None) -> list[dict]:
     """Build match summary dicts from ClearingEngine tier1 results or ORM objects.
+
+    Args:
+        matches: ClearingEngine tier1 results or ORM objects.
+        buyer_sqft: Buyer's requested sqft — used to calculate monthly estimate.
 
     ClearingEngine tier1 match structure:
         {
@@ -80,6 +84,10 @@ def build_match_summaries(matches: list) -> list[dict]:
                 or match.get("rate")
             )
 
+            monthly = round(rate * buyer_sqft) if rate and buyer_sqft else None
+            # Match reasoning from ClearingAgent LLM + property description
+            reasoning = match.get("reasoning", "")
+            description = wh.get("description", "") or ""
             summaries.append({
                 "id": prop_id,
                 "city": city,
@@ -87,7 +95,10 @@ def build_match_summaries(matches: list) -> list[dict]:
                 "address": address,
                 "sqft": sqft,
                 "rate": rate,
+                "monthly": monthly,
                 "match_score": match.get("match_score"),
+                "reasoning": reasoning,
+                "description": description,
             })
         else:
             # ORM object

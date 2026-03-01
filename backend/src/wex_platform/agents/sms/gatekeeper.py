@@ -36,7 +36,14 @@ def validate_outbound(
     if not text or not text.strip():
         return GatekeeperResult(ok=False, hint="Empty reply", violation="empty")
 
-    max_len = MAX_FIRST_MESSAGE if is_first_message else MAX_FOLLOWUP
+    # Messages with URLs get extra room — URLs are non-compressible
+    has_url = "http://" in text or "https://" in text
+    if is_first_message:
+        max_len = MAX_FIRST_MESSAGE
+    elif has_url:
+        max_len = MAX_FIRST_MESSAGE  # Relax to 800 when a link is present
+    else:
+        max_len = MAX_FOLLOWUP
     if len(text) > max_len:
         return GatekeeperResult(
             ok=False,

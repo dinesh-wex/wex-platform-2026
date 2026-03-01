@@ -38,7 +38,12 @@ class ResponseAgent(BaseAgent):
         if intent == "greeting":
             return "This is Warehouse Exchange. Looking for warehouse space? What city, state and how much space?"
 
-        max_len = MAX_FIRST_MESSAGE if is_first_message else MAX_FOLLOWUP
+        # Messages with links get the first-message limit (800) since URLs are long
+        has_link = response_hint and "http" in (response_hint or "")
+        if is_first_message or has_link:
+            max_len = MAX_FIRST_MESSAGE
+        else:
+            max_len = MAX_FOLLOWUP
 
         history_ctx = ""
         if conversation_history:
@@ -59,7 +64,10 @@ class ResponseAgent(BaseAgent):
                 city = m.get('city', '?')
                 state_abbr = m.get('state', '')
                 location = f"{city}, {state_abbr}" if state_abbr else city
-                lines.append(f"  Option {i+1}: {location}, {m.get('sqft', '?')} sqft, ${m.get('rate', '?')}/sqft")
+                rate_str = f"${m.get('rate', '?')}/sqft"
+                monthly = m.get('monthly')
+                monthly_str = f" (~${monthly:,}/mo)" if monthly else ""
+                lines.append(f"  Option {i+1}: {location}, {rate_str}{monthly_str}")
             matches_ctx = "\nMatches found:\n" + "\n".join(lines)
 
         hint_ctx = f"\nResponse hint: {response_hint}" if response_hint else ""
@@ -74,6 +82,9 @@ class ResponseAgent(BaseAgent):
         prompt = (
             f"You are a warehouse leasing broker replying via text message. "
             f"Be professional but warm — like a helpful colleague, not a chatbot.\n\n"
+            f"## TERMINOLOGY\n"
+            f"- This is WAREHOUSE LEASING, not hospitality. NEVER say 'stay', 'book a stay', 'accommodation'.\n"
+            f"- Use: 'lease', 'term', 'space', 'warehouse', 'rent'. Example: '10 month lease' NOT '10 month stay'.\n\n"
             f"## TONE GUIDELINES\n"
             f"- Write like a real person texting, not a template or script\n"
             f"- Vary your responses — don't start every message the same way\n"
@@ -95,10 +106,13 @@ class ResponseAgent(BaseAgent):
             f"- Do NOT volunteer missing features or negatives unless asked\n"
             f"- NEVER mention owners, landlords, or coordinating with anyone. You ARE the service.\n"
             f"- Answer ONLY the current question — don't reference previous escalations\n"
-            f"- No full addresses — city/area only (like Airbnb until tour booked)\n\n"
+            f"- No full addresses — city/area only (like Airbnb until tour booked)\n"
+            f"- NEVER mention the property's total building size or available sqft to the buyer. "
+            f"Properties are flexible — buyers rent exactly the space they need within a larger building. "
+            f"A match means the property can accommodate their size. Just present city and rate.\n\n"
             f"## LENGTH\n"
             f"Keep reply under {max_len} characters.\n"
-            f"{'First message — include links and alternatives if multiple matches.' if is_first_message else 'Follow-up — be concise, no links needed.'}\n\n"
+            f"{'First message — can be longer, summarize key matches.' if is_first_message else 'Follow-up — be concise.'}\n\n"
             f"Phase: {phase}\nIntent: {intent}\n"
             f"Buyer's message: \"{message}\"\n"
             f"{history_ctx}{criteria_ctx}{property_ctx}{matches_ctx}{hint_ctx}{name_ctx}{retry_ctx}\n\n"
@@ -106,12 +120,14 @@ class ResponseAgent(BaseAgent):
             f"- new_search/refine_search: Confirm what you understood, say you're searching\n"
             f"- facility_info: Answer from data if available, otherwise say you'll look into it\n"
             f"- tour_request: Acknowledge interest, ask for 2-3 preferred days/times\n"
-            f"- commitment: Acknowledge interest, guide to next step\n"
-            f"- provide_info: Confirm receipt, ask for next needed field\n"
+            f"- commitment: Acknowledge interest, share the link from response hint\n"
+            f"- provide_info: Confirm receipt naturally. If response hint has a link, share it\n"
             f"- unknown/other: Ask what kind of space they need (city, size, use)\n\n"
+            f"IMPORTANT: Do NOT proactively push for tours, bookings, or commitments. "
+            f"Let the buyer browse options and decide on their own.\n\n"
             f"When presenting matches, give a brief count and summary of the top options "
-            f"(city, sqft, rate per sqft). Do NOT include any links or URLs. "
-            f"Do NOT list each match individually — just summarize the top 2-3 briefly.\n"
+            f"(city, rate per sqft, and estimated monthly cost). Do NOT mention property size/sqft. "
+            f"Only include a link/URL if the response hint explicitly provides one.\n"
             f"Respond with ONLY the SMS text, nothing else."
         )
 
