@@ -45,8 +45,9 @@ async def get_db():
 
 async def init_db():
     """Create all tables (for local dev). Use Alembic for production migrations."""
-    # Ensure SMS models are registered with Base.metadata
+    # Ensure SMS and voice models are registered with Base.metadata
     import wex_platform.domain.sms_models  # noqa: F401
+    import wex_platform.domain.voice_models  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -90,6 +91,12 @@ async def init_db():
         "ALTER TABLE engagements ADD COLUMN source_channel VARCHAR(10) DEFAULT 'web'",
         "ALTER TABLE sms_conversation_states ADD COLUMN search_session_token VARCHAR(64)",
         "ALTER TABLE sms_conversation_states ADD COLUMN name_requested_at_turn INTEGER",
+        # --- Voice call state migrations ---
+        "ALTER TABLE voice_call_states ADD COLUMN answered_questions JSON",
+        "ALTER TABLE voice_call_states ADD COLUMN call_transcript JSON",
+        "ALTER TABLE voice_call_states ADD COLUMN recording_url VARCHAR(500)",
+        # --- Escalation threads: source_type for voice/sms ---
+        "ALTER TABLE escalation_threads ADD COLUMN source_type VARCHAR(20) DEFAULT 'sms'",
     ]
 
     if "sqlite" in settings.database_url:

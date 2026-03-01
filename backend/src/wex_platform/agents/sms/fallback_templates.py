@@ -24,6 +24,9 @@ TEMPLATES = {
     "matches_found": (
         "Found {count} spaces that could work. Want me to walk through the top options?"
     ),
+    "matches_with_link": (
+        "Found {count} spaces that could work. Check out the top options here: {link}"
+    ),
     "no_matches": (
         "Nothing exact right now, but I'm expanding the search. "
         "I'll text you when something opens up."
@@ -33,6 +36,18 @@ TEMPLATES = {
     ),
     "clarify_sqft": (
         "How much space do you need? Even a rough estimate helps."
+    ),
+    "clarify_use_type": (
+        "What will you be using the space for? Storage, fulfillment, distribution?"
+    ),
+    "clarify_timing": (
+        "When do you need the space? ASAP, next month, or a few months out?"
+    ),
+    "clarify_requirements": (
+        "Any special requirements? Dock doors, office space, climate control?"
+    ),
+    "clarify_duration": (
+        "How long do you need the space? A few months, a year, or flexible?"
     ),
     "tour_request": (
         "What are two or three days and times that work for you? "
@@ -50,6 +65,9 @@ TEMPLATES = {
     "escalation_wait": (
         "That's not listed here. I can check with the warehouse owner "
         "and get back to you, usually within a couple hours."
+    ),
+    "awaiting_answer": (
+        "I'm still checking on that. I'll text you as soon as I hear back."
     ),
     "unknown": (
         "What kind of warehouse space are you looking for? "

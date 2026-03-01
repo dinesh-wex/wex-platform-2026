@@ -261,7 +261,8 @@ async def test_journey_search_and_focus(db_session):
             intent="new_search",
             action="search",
             criteria={"location": "Commerce, CA", "sqft": 10000, "use_type": "storage",
-                      "timing": "ASAP", "duration": "6_months", "goods_type": "general"},
+                      "timing": "ASAP", "duration": "6_months", "goods_type": "general",
+                      "requirements": "dock doors"},
         )
         mock_reply.return_value = _good_reply(
             "Found 3 options in Commerce CA! Option 1: 10k sqft $0.85/sqft. "
@@ -358,7 +359,8 @@ async def test_journey_escalation_flow(db_session):
             intent="new_search",
             action="search",
             criteria={"location": "Commerce, CA", "sqft": 15000, "use_type": "storage",
-                      "timing": "ASAP", "duration": "6_months", "goods_type": "general"},
+                      "timing": "ASAP", "duration": "6_months", "goods_type": "general",
+                      "requirements": "dock doors"},
         )
         mock_reply.return_value = _good_reply(
             "Found 1 option in Commerce CA! 15k sqft at $0.90/sqft. Reply 1 to learn more."

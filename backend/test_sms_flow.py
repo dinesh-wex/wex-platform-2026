@@ -36,10 +36,11 @@ TEST_PHONE = "+15551234567"
 
 TURNS = [
     ("Hey", "greeting response"),
-    ("Looking for warehouse in Carson CA", "asks qualifying questions"),
-    ("2000 sqft for furniture storage", "asks timing/duration"),
-    ("ASAP and 8 months", "runs search, presents matches, asks name"),
-    ("James", "sends search link with best match highlight"),
+    ("Carson, CA", "city and state — should ask sqft/use_type"),
+    ("5000 sqft for distribution", "sqft + use_type — should ask timing/duration/requirements"),
+    ("July 1, about 12 months", "timing + duration — should ask requirements"),
+    ("Need dock doors and an office", "requirements — should run search and present matches"),
+    ("Peter", "name capture — should send search link"),
 ]
 
 
@@ -212,19 +213,19 @@ async def main():
 
         results.append((result, state))
 
-    # ── Turn 5 verification ──
+    # ── Final turn verification (name-capture -> search-link) ──
     print(f"\n{'=' * 70}")
-    print("TURN 5 VERIFICATION (name-capture -> search-link)")
+    print("FINAL TURN VERIFICATION (name-capture -> search-link)")
     print(f"{'=' * 70}")
 
-    if len(results) >= 5:
-        r5, s5 = results[4]
-        response = r5.response
+    if len(results) >= 6:
+        r_final, s_final = results[5]
+        response = r_final.response
 
         # Check for tunnel / frontend URL in the response
         from wex_platform.app.config import get_settings
         settings = get_settings()
-        has_link = settings.frontend_url in response or "/search/session/" in response
+        has_link = settings.frontend_url in response or "/buyer/options" in response
         print(f"  Contains search link:       {'YES' if has_link else 'NO'}")
 
         # Check if response re-lists all options (look for numbered list pattern like "1.", "2.", "3.")
@@ -234,17 +235,17 @@ async def main():
         print(f"  Re-lists all options:       {'YES (BAD!)' if re_lists_options else 'NO (GOOD)'}")
 
         # Check name acknowledgment
-        acknowledges_name = "james" in response.lower() or "James" in response
-        print(f"  Acknowledges name 'James':  {'YES' if acknowledges_name else 'NO'}")
+        acknowledges_name = "peter" in response.lower()
+        print(f"  Acknowledges name 'Peter':  {'YES' if acknowledges_name else 'NO'}")
 
         # Check phase
-        phase_ok = r5.phase == "PRESENTING"
-        print(f"  Phase is PRESENTING:        {'YES' if phase_ok else f'NO ({r5.phase})'}")
+        phase_ok = r_final.phase == "PRESENTING"
+        print(f"  Phase is PRESENTING:        {'YES' if phase_ok else f'NO ({r_final.phase})'}")
 
         # Summary
         print(f"\n  {'PASS' if (has_link and not re_lists_options and acknowledges_name and phase_ok) else 'FAIL'}")
     else:
-        print("  Could not run Turn 5 verification (earlier turns failed).")
+        print("  Could not run final turn verification (earlier turns failed).")
 
     print()
 

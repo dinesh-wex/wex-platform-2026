@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     aircall_webhook_token: str = ""
     aircall_buyer_number_id: str = ""
 
+    # Vapi Voice Agent
+    vapi_api_key: str = ""
+    vapi_server_secret: str = ""
+    vapi_phone_number_id: str = ""
+    vapi_voice_id: str = ""
+
     # Admin
     admin_password: str = "wex2026"
 

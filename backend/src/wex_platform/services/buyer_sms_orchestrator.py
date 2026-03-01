@@ -35,6 +35,38 @@ class OrchestratorResult:
     error: str | None = None
 
 
+# Facility requirement keywords — used to validate that the "requirements" field
+# actually contains physical facility needs, not misclassified timing/duration text.
+_FACILITY_KEYWORDS = frozenset({
+    "office", "parking", "dock", "clear height", "climate", "sprinkler",
+    "power", "drive-in", "loading", "hvac", "insulated", "heated",
+    "cooled", "refrigerated", "freezer", "yard", "fenced", "security",
+    "24/7", "rail", "ev charging", "ramp", "floor", "ceiling",
+    "restroom", "bathroom", "ac ", "a/c", "air condition",
+})
+
+# Negative answers to the deal-breaker question — buyer explicitly said "no requirements"
+_NO_REQUIREMENTS_PATTERNS = frozenset({
+    "no", "nope", "nah", "none", "nothing", "n/a", "na", "not really",
+    "no requirements", "no deal breakers", "no dealbreakers", "no deal-breakers",
+    "nothing special", "i'm good", "im good", "all good", "that's it", "thats it",
+    "no specifics", "no specific requirements", "no must haves", "no must-haves",
+    "no thanks", "none needed",
+})
+
+
+def _requirements_resolved(value) -> bool:
+    """Return True if requirements question has been answered (yes with specifics, or no)."""
+    if not value or not isinstance(value, str):
+        return False
+    lower = value.lower().strip()
+    # Explicit "no requirements" answer
+    if lower in _NO_REQUIREMENTS_PATTERNS:
+        return True
+    # Actual facility keywords
+    return any(kw in lower for kw in _FACILITY_KEYWORDS)
+
+
 class BuyerSMSOrchestrator:
     """Orchestrates the full buyer SMS pipeline.
 
@@ -67,7 +99,7 @@ class BuyerSMSOrchestrator:
         from wex_platform.agents.sms.message_interpreter import interpret_message
         from wex_platform.agents.sms.criteria_agent import CriteriaAgent
         from wex_platform.agents.sms.response_agent import ResponseAgent
-        from wex_platform.agents.sms.gatekeeper import validate_outbound, validate_inbound
+        from wex_platform.agents.sms.gatekeeper import validate_outbound, validate_inbound, trim_to_limit
         from wex_platform.agents.sms.polisher_agent import PolisherAgent
         from wex_platform.agents.sms.fallback_templates import get_fallback
         from wex_platform.agents.sms.context_builder import build_match_summaries
@@ -143,10 +175,11 @@ class BuyerSMSOrchestrator:
                     if gate.ok:
                         break
                     if attempt < 2:
-                        response_text = await polisher.polish(response_text, gate.hint, max_length=max_len)
+                        polish_result = await polisher.polish(response_text, gate.hint, is_first_message=is_first)
+                        response_text = polish_result.polished_text if polish_result.ok else response_text
                     else:
-                        from wex_platform.agents.sms.fallback_templates import get_fallback
                         response_text = get_fallback(plan.intent, count=len(presented_match_summaries))
+                        response_text = trim_to_limit(response_text, is_first_message=is_first)
 
                 # == Update state ==
                 state.phase = phase
@@ -202,6 +235,17 @@ class BuyerSMSOrchestrator:
         # Remove None values
         merged_criteria = {k: v for k, v in merged_criteria.items() if v is not None}
 
+        # Deterministic: if buyer says "no" to deal-breakers, mark requirements as answered
+        msg_lower = message.strip().lower().rstrip(".!?")
+        if msg_lower in _NO_REQUIREMENTS_PATTERNS and not _requirements_resolved(merged_criteria.get("requirements")):
+            merged_criteria["requirements"] = "none"
+
+        logger.info(
+            "ORCHESTRATOR DEBUG | turn=%s phone=%s | existing_criteria=%s | plan.criteria=%s | merged_criteria=%s | plan.intent=%s plan.action=%s plan.response_hint=%s",
+            state.turn, phone, existing_criteria, plan.criteria, merged_criteria,
+            plan.intent, plan.action, plan.response_hint,
+        )
+
         readiness = 0.0
         if merged_criteria.get("location"):
             readiness += 0.3
@@ -209,9 +253,13 @@ class BuyerSMSOrchestrator:
             readiness += 0.25
         if merged_criteria.get("use_type"):
             readiness += 0.25
-        extras = {"features", "goods_type", "timing", "duration"}
+        extras = {"features", "goods_type", "timing", "duration", "requirements"}
         for key in extras:
-            if merged_criteria.get(key):
+            if key == "requirements":
+                # Only count if it has actual facility keywords, not misclassified timing
+                if _requirements_resolved(merged_criteria.get(key)):
+                    readiness += 0.1
+            elif merged_criteria.get(key):
                 readiness += 0.1
         readiness = min(readiness, 1.0)
         state.criteria_readiness = readiness
@@ -230,15 +278,26 @@ class BuyerSMSOrchestrator:
         # not what the LLM inferred this turn, to ensure we always ask.
         prior = existing_criteria or {}
         extra_missing = []
+        if not _requirements_resolved(prior.get("requirements")) and not _requirements_resolved(merged_criteria.get("requirements")):
+            extra_missing.append("deal-breakers — ask specifically: 'Do you need office space or parking? Any other must-haves like dock doors, climate control, or 24/7 access?'")
         if not prior.get("timing") and not merged_criteria.get("timing"):
             extra_missing.append("when they need it")
         if not prior.get("duration") and not merged_criteria.get("duration"):
             extra_missing.append("how many months they need the space")
 
+        logger.info(
+            "ORCHESTRATOR DEBUG | readiness=%.2f has_core=%s | missing_fields=%s | extra_missing=%s | criteria_snapshot=%s",
+            readiness, readiness >= 0.8, missing_fields, extra_missing, state.criteria_snapshot,
+        )
+
         # Build response_hint for missing core fields
         if plan.intent in ("new_search", "refine_search") and missing_fields:
             if not plan.response_hint:
                 plan.response_hint = f"Still need: {', '.join(missing_fields)}. Ask naturally in one message."
+
+        # Forward clarification from criteria agent
+        if plan.clarification_needed and not plan.response_hint:
+            plan.response_hint = plan.clarification_needed
 
         # ── Backward phase movement ──
         # If buyer is in PRESENTING/PROPERTY_FOCUSED but gives new criteria → re-search
@@ -295,10 +354,15 @@ class BuyerSMSOrchestrator:
 
             detail_fetcher = DetailFetcher(self.db)
 
-            if interpretation.topics:
+            topics_to_fetch = list(interpretation.topics) if interpretation.topics else []
+            if plan.asked_fields:
+                for af in plan.asked_fields:
+                    if af not in topics_to_fetch:
+                        topics_to_fetch.append(af)
+            if topics_to_fetch:
                 fetch_results = await detail_fetcher.fetch_by_topics(
                     property_id=resolved_property_id,
-                    topics=interpretation.topics,
+                    topics=topics_to_fetch,
                     state=state,
                 )
 
@@ -348,6 +412,19 @@ class BuyerSMSOrchestrator:
 
         elif plan.intent in ("new_search", "refine_search") and readiness < 0.6:
             phase = "QUALIFYING"
+
+        # Deterministic override: when core fields are present but extras are missing,
+        # ALWAYS tell the response agent to ask — overrides whatever the criteria agent LLM said
+        logger.info(
+            "ORCHESTRATOR DEBUG | SAFETY NET CHECK: has_core_fields=%s extra_missing=%s → fires=%s",
+            has_core_fields, extra_missing, bool(has_core_fields and extra_missing),
+        )
+        if has_core_fields and extra_missing:
+            phase = "QUALIFYING"
+            plan.response_hint = (
+                f"Got the basics. Still need: {', '.join(extra_missing)}. "
+                f"Ask naturally in one short message."
+            )
 
         # ── Phase-specific handling ──
 
@@ -513,6 +590,8 @@ class BuyerSMSOrchestrator:
             context = "commitment"
         elif plan.intent == "tour_request":
             context = "tour"
+        elif phase == "AWAITING_ANSWER":
+            context = "awaiting_answer"
 
         for attempt in range(3):
             gate = validate_outbound(response_text, is_first_message=is_first, context=context)
@@ -522,7 +601,8 @@ class BuyerSMSOrchestrator:
             logger.warning("Gatekeeper rejected (attempt %d): %s", attempt + 1, gate.hint)
 
             if attempt < 2:
-                response_text = await polisher.polish(response_text, gate.hint, max_length=max_len)
+                polish_result = await polisher.polish(response_text, gate.hint, is_first_message=is_first)
+                response_text = polish_result.polished_text if polish_result.ok else response_text
             else:
                 # Fallback template
                 location = merged_criteria.get("location") if merged_criteria else None
@@ -531,6 +611,7 @@ class BuyerSMSOrchestrator:
                     location=location,
                     count=len(match_summaries) if match_summaries else 0,
                 )
+                response_text = trim_to_limit(response_text, is_first_message=is_first)
                 logger.warning("Using fallback template after 3 gatekeeper rejections")
 
         # == 9. Update state ==

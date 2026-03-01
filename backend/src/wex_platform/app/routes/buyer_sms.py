@@ -252,8 +252,19 @@ async def _process_buyer_message(
                     if existing_need.requirements:
                         existing_criteria.update({
                             k: v for k, v in existing_need.requirements.items()
-                            if k in ("goods_type", "timing")
+                            if k in ("goods_type", "timing", "duration", "requirements")
                         })
+
+            # Also pull criteria from state's snapshot (persisted each turn,
+            # covers the gap before a BuyerNeed is created by search)
+            if state.criteria_snapshot:
+                if not existing_criteria:
+                    existing_criteria = {}
+                for key in ("location", "sqft", "use_type", "timing", "duration",
+                            "requirements", "goods_type", "features"):
+                    val = state.criteria_snapshot.get(key)
+                    if val and not existing_criteria.get(key):
+                        existing_criteria[key] = val
 
             # Run orchestrator
             from wex_platform.services.buyer_sms_orchestrator import BuyerSMSOrchestrator

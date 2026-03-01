@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
-from wex_platform.agents.sms.contracts import CriteriaPlan, MessageInterpretation
+from wex_platform.agents.sms.contracts import CriteriaPlan, MessageInterpretation, PolishResult
 from wex_platform.domain.models import Buyer, BuyerConversation
 from wex_platform.domain.sms_models import SMSConversationState
 from wex_platform.services.buyer_sms_orchestrator import BuyerSMSOrchestrator
@@ -101,7 +101,8 @@ class TestSearchFlow:
             intent="new_search",
             action="search",
             criteria={"location": "Detroit", "sqft": 10000, "use_type": "storage",
-                      "timing": "ASAP", "duration": "6_months", "goods_type": "general"},
+                      "timing": "ASAP", "duration": "6_months", "goods_type": "general",
+                      "requirements": "dock doors"},
             confidence=0.9,
         )
 
@@ -158,7 +159,9 @@ class TestGatekeeperPolisherLoop:
         ):
             MockCriteria.return_value.plan = AsyncMock(return_value=mock_plan)
             MockResponse.return_value.generate_reply = AsyncMock(return_value=long_response)
-            MockPolisher.return_value.polish = AsyncMock(return_value=short_response)
+            MockPolisher.return_value.polish = AsyncMock(
+                return_value=PolishResult(ok=True, polished_text=short_response)
+            )
 
             result = await orchestrator.process_message(
                 phone="+15551234567",
@@ -193,7 +196,9 @@ class TestThreeFailuresFallback:
             MockCriteria.return_value.plan = AsyncMock(return_value=mock_plan)
             MockResponse.return_value.generate_reply = AsyncMock(return_value=always_too_long)
             # Polisher also returns too-long text
-            MockPolisher.return_value.polish = AsyncMock(return_value=always_too_long)
+            MockPolisher.return_value.polish = AsyncMock(
+                return_value=PolishResult(ok=False, error_code="TOO_LONG", polished_text=always_too_long)
+            )
 
             result = await orchestrator.process_message(
                 phone="+15551234567",

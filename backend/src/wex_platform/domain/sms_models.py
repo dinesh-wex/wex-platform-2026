@@ -50,7 +50,8 @@ class EscalationThread(Base):
     __tablename__ = "escalation_threads"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    conversation_state_id = Column(String(36), ForeignKey("sms_conversation_states.id"), nullable=False)
+    conversation_state_id = Column(String(36), nullable=False)
+    source_type = Column(String(20), default="sms")  # "sms" or "voice"
     property_id = Column(String(36), ForeignKey("properties.id"), nullable=False)
     question_text = Column(Text, nullable=False)
     field_key = Column(String(100), nullable=True)
@@ -71,7 +72,7 @@ class SmsSignupToken(Base):
     __tablename__ = "sms_signup_tokens"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    conversation_state_id = Column(String(36), ForeignKey("sms_conversation_states.id"), nullable=False)
+    conversation_state_id = Column(String(36), ForeignKey("sms_conversation_states.id"), nullable=True)
     token = Column(String(64), unique=True, nullable=False, index=True)
     action = Column(String(30), nullable=False)
     buyer_phone = Column(String(50), nullable=False)

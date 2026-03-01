@@ -38,6 +38,7 @@ class DetailFetcher:
                 field_key=field_key,
                 value=str(known.get("value", "")),
                 formatted=known.get("formatted", ""),
+                label=get_label(field_key),
             )
 
         # Layer 2: Query DB
@@ -47,6 +48,7 @@ class DetailFetcher:
                 status="UNMAPPED",
                 field_key=field_key,
                 needs_escalation=True,
+                label=get_label(field_key),
             )
 
         table = catalog_entry["table"]
@@ -59,6 +61,7 @@ class DetailFetcher:
                 status="UNMAPPED",
                 field_key=field_key,
                 needs_escalation=True,
+                label=get_label(field_key),
             )
 
         # Format
@@ -72,6 +75,7 @@ class DetailFetcher:
             field_key=field_key,
             value=str(value),
             formatted=formatted,
+            label=get_label(field_key),
         )
 
     async def fetch_by_topics(

@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from wex_platform.app.config import get_settings
 from wex_platform.infra.database import async_session, init_db
 from wex_platform.services.hold_monitor import check_hold_expiry_warnings, expire_holds
+from wex_platform.services.vapi_assistant_config import register_vapi_phone_number
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,15 @@ async def hold_monitor_loop():
 async def lifespan(app: FastAPI):
     """Application lifespan: initialize database on startup."""
     await init_db()
+
+    # Register Vapi phone number (non-blocking: don't crash app if it fails)
+    settings = get_settings()
+    if settings.vapi_api_key:
+        try:
+            await register_vapi_phone_number(f"{settings.frontend_url}/api/voice/webhook")
+        except Exception as e:
+            logger.warning("Failed to register Vapi phone number: %s", e)
+
     asyncio.create_task(hold_monitor_loop())
     yield
 
@@ -88,6 +98,7 @@ from wex_platform.app.routes.sms_reply_tool import router as sms_reply_router
 from wex_platform.app.routes.sms_guarantee import router as sms_guarantee_router
 from wex_platform.app.routes.sms_scheduler import router as sms_scheduler_router
 from wex_platform.app.routes.sms_optin import router as sms_optin_router
+from wex_platform.app.routes.vapi_webhook import router as vapi_webhook_router
 
 app.include_router(auth_router)
 app.include_router(agreements_router)
@@ -116,6 +127,7 @@ app.include_router(sms_reply_router)
 app.include_router(sms_guarantee_router)
 app.include_router(sms_scheduler_router)
 app.include_router(sms_optin_router)
+app.include_router(vapi_webhook_router)
 
 # Static file mount for uploaded photos
 _uploads_dir = Path(__file__).resolve().parents[3] / "uploads"
