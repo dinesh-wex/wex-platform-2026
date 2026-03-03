@@ -342,17 +342,17 @@ async def _handle_end_of_call(message: dict, db: AsyncSession) -> JSONResponse:
     first_name = call_state.buyer_name.split()[0] if call_state.buyer_name else ""
     name_prefix = f"Hey {first_name}, " if first_name else "Hey, "
 
-    if call_state.guarantee_link_token and not call_state.sms_sent:
-        # Booking link SMS
+    if call_state.search_session_token and not call_state.sms_sent:
+        # Options link SMS — always preferred when a search was done
+        link = f"{settings.frontend_url}/buyer/options?session={call_state.search_session_token}"
+        sms_text = f"{name_prefix}it's Jess from Warehouse Exchange. Here are the options we discussed: {link}"
+        await _send_follow_up_sms(sms_phone, sms_text, call_state)
+
+    elif call_state.guarantee_link_token and not call_state.sms_sent:
+        # Booking link SMS — fallback when no search was done
         base = settings.backend_url or settings.frontend_url
         link = f"{base}/sms/guarantee/{call_state.guarantee_link_token}"
         sms_text = f"{name_prefix}it's Jess from Warehouse Exchange. Here's the link to complete your warehouse booking: {link}"
-        await _send_follow_up_sms(sms_phone, sms_text, call_state)
-
-    elif call_state.search_session_token and not call_state.sms_sent:
-        # Search options link SMS
-        link = f"{settings.frontend_url}/buyer/options?session={call_state.search_session_token}"
-        sms_text = f"{name_prefix}it's Jess from Warehouse Exchange. Here are the options we discussed: {link}"
         await _send_follow_up_sms(sms_phone, sms_text, call_state)
 
     # Send deferred escalation emails for any questions asked during the call.
