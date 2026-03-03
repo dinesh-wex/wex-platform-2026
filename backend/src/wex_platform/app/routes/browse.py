@@ -195,6 +195,7 @@ async def get_listings(
             "building_type": _building_type_label(prop.property_type),
             "features": _extract_features(pk),
             "has_image": bool(prop.primary_image_url),
+            "image_url": prop.primary_image_url or None,
         }
         listings.append(listing)
 

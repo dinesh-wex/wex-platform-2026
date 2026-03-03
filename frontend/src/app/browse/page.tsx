@@ -51,6 +51,7 @@ interface Listing {
   building_type: string;
   features: ListingFeature[];
   has_image: boolean;
+  image_url?: string | null;
 }
 
 interface BrowseResponse {
@@ -375,9 +376,17 @@ function ListingCard({ listing, index, onClick }: ListingCardProps) {
       onClick={onClick}
       className="group cursor-pointer overflow-hidden rounded-xl border border-gray-800 bg-gray-900 transition-all hover:border-gray-700 hover:shadow-lg hover:shadow-blue-900/10"
     >
-      {/* Gradient placeholder for satellite image */}
-      <div className="relative h-40 bg-gradient-to-br from-gray-800 to-gray-700 flex items-center justify-center">
-        <MapPin className="h-10 w-10 text-gray-600 group-hover:text-gray-500 transition-colors" />
+      {/* Property image or gradient placeholder */}
+      <div className="relative h-40 bg-gradient-to-br from-gray-800 to-gray-700 flex items-center justify-center overflow-hidden">
+        {listing.image_url ? (
+          <img
+            src={listing.image_url}
+            alt={listing.location.display}
+            className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
+          />
+        ) : (
+          <MapPin className="h-10 w-10 text-gray-600 group-hover:text-gray-500 transition-colors" />
+        )}
         {/* Building type badge */}
         <span className="absolute top-3 right-3 rounded-full bg-gray-900/80 backdrop-blur-sm px-2.5 py-1 text-xs font-medium text-gray-300 border border-gray-700">
           {listing.building_type}
