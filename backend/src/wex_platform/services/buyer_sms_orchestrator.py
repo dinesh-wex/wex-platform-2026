@@ -390,6 +390,7 @@ class BuyerSMSOrchestrator:
                             question_text=message,
                             field_key=result.field_key,
                             state=state,
+                            source_type="sms",
                         )
                         if esc_result.get("escalated"):
                             phase = "AWAITING_ANSWER"
@@ -398,9 +399,40 @@ class BuyerSMSOrchestrator:
                                 property_data = {"id": resolved_property_id, "answers": {}, "source": "escalation_cache"}
                             if result.field_key:
                                 property_data["answers"][result.field_key] = esc_result["answer"]
+                        elif esc_result.get("waiting"):
+                            phase = "AWAITING_ANSWER"
             else:
-                # No specific topics detected, use stub for general lookup
-                property_data = self._stub_lookup(resolved_property_id, presented_match_summaries)
+                # No mapped topics detected.
+                # If this is a facility_info question (buyer asked something specific),
+                # escalate it instead of silently dropping it.
+                # If it's just general browsing, use the stub as before.
+                if plan.intent == "facility_info":
+                    from wex_platform.services.escalation_service import EscalationService
+                    esc_service = EscalationService(self.db)
+                    esc_result = await esc_service.check_and_escalate(
+                        property_id=resolved_property_id,
+                        question_text=message,
+                        field_key=None,
+                        state=state,
+                        source_type="sms",
+                    )
+                    if esc_result.get("escalated"):
+                        phase = "AWAITING_ANSWER"
+                    elif esc_result.get("answer"):
+                        property_data = {
+                            "id": resolved_property_id,
+                            "answers": {"_unmapped": esc_result["answer"]},
+                            "source": "escalation_cache",
+                        }
+                    elif esc_result.get("waiting"):
+                        property_data = {
+                            "id": resolved_property_id,
+                            "answers": {"_unmapped": "We're still checking on that with the warehouse owner."},
+                            "source": "escalation_pending",
+                        }
+                else:
+                    # General lookup with no specific question — return stub summary
+                    property_data = self._stub_lookup(resolved_property_id, presented_match_summaries)
 
             if resolved_property_id != state.focused_match_id:
                 state.focused_match_id = resolved_property_id

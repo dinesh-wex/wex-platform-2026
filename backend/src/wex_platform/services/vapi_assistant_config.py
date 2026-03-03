@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # "Rachel" - calm professional female
 
 
-def build_assistant_config(caller_phone: str, buyer_name: str | None = None) -> dict:
+def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms_context: dict | None = None) -> dict:
     """Build the Vapi assistant configuration for an inbound call.
 
     Returns a dict with the full assistant config including:
@@ -23,11 +23,52 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None) -> 
     settings = get_settings()
     voice_id = settings.vapi_voice_id or DEFAULT_VOICE_ID
 
-    # Build dynamic first message
-    if buyer_name:
-        first_message = f"Hey {buyer_name}, thanks for calling Warehouse Exchange. I help businesses find warehouse space. How can I help you today?"
+    # Build dynamic first message — 3 tiers based on SMS history
+    if sms_context and sms_context.get("presented_match_ids"):
+        count = len(sms_context["presented_match_ids"])
+        first_name = buyer_name.split()[0] if buyer_name else None
+        if first_name:
+            first_message = (
+                f"Hey {first_name}, I can see we've been texting about warehouse space. "
+                f"I have those {count} option{'s' if count != 1 else ''} pulled up — "
+                f"want to go over them?"
+            )
+        else:
+            first_message = (
+                f"Hey there, I can see we've been texting about warehouse space. "
+                f"I have those {count} option{'s' if count != 1 else ''} pulled up — "
+                f"want to go over them?"
+            )
+    elif sms_context and sms_context.get("criteria_snapshot"):
+        criteria = sms_context["criteria_snapshot"]
+        city = None
+        if criteria.get("location"):
+            city = criteria["location"].split(",")[0].strip()
+        first_name = buyer_name.split()[0] if buyer_name else None
+        if first_name and city:
+            first_message = (
+                f"Hey {first_name}, I can see we were chatting about space in {city}. "
+                f"Want to pick up where we left off?"
+            )
+        elif first_name:
+            first_message = (
+                f"Hey {first_name}, I can see we've been texting. How can I help you today?"
+            )
+        else:
+            first_message = (
+                "Hey there, I can see we've been texting about warehouse space. "
+                "How can I help you today?"
+            )
+    elif buyer_name:
+        first_message = (
+            f"Hey {buyer_name}, thanks for calling Warehouse Exchange. "
+            "I help businesses find warehouse space. How can I help you today?"
+        )
     else:
-        first_message = "Hey there, thanks for calling Warehouse Exchange. I help businesses find warehouse space. What's your name?"
+        first_message = (
+            "Hey there, thanks for calling Warehouse Exchange. "
+            "I help businesses find warehouse space. What's your name?"
+        )
 
     return {
         "assistant": {
@@ -35,7 +76,7 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None) -> 
                 "provider": "google",
                 "model": "gemini-3-flash-preview",
                 "messages": [
-                    {"role": "system", "content": _build_system_prompt()}
+                    {"role": "system", "content": _build_system_prompt(sms_context=sms_context)}
                 ],
                 "tools": _build_tool_definitions(),
                 "temperature": 0.7,
@@ -56,9 +97,9 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None) -> 
     }
 
 
-def _build_system_prompt() -> str:
+def _build_system_prompt(sms_context: dict | None = None) -> str:
     """Build the voice agent system prompt."""
-    return """You are a warehouse space broker at Warehouse Exchange (WEx). You help businesses find warehouse and industrial space. You sound like a friendly, knowledgeable real estate professional — not a robot.
+    base_prompt = """You are a warehouse space broker at Warehouse Exchange (WEx). You help businesses find warehouse and industrial space. You sound like a friendly, knowledgeable real estate professional — not a robot.
 
 CONVERSATION FLOW:
 1. GREET AND GET NAME: Start with a warm greeting. Ask for the caller's name right away. Use their name naturally throughout the call (2-3 times, not every sentence).
@@ -130,6 +171,84 @@ TERMINOLOGY:
 ESCALATION:
 - When you can't answer a question, tell the caller: "I'll check with the warehouse owner and text you back with the answer"
 - Default follow-up is by text. If they prefer a callback, note that."""
+    sms_section = _build_sms_context_section(sms_context) if sms_context else ""
+    return base_prompt + sms_section
+
+
+def _build_sms_context_section(sms_context: dict | None) -> str:
+    """Generate a dynamic system prompt section summarizing prior SMS history.
+
+    Appended to the base system prompt when the caller has an active SMS
+    conversation, so the voice agent doesn't re-ask answered questions.
+    """
+    if not sms_context:
+        return ""
+
+    lines = ["\n\nSMS CONVERSATION CONTEXT:"]
+    lines.append("This caller has been texting with WEx before this call. Key context:")
+
+    criteria = sms_context.get("criteria_snapshot") or {}
+
+    # Summarize known criteria
+    criteria_parts = []
+    if criteria.get("location"):
+        criteria_parts.append(f"location: {criteria['location']}")
+    if criteria.get("sqft"):
+        criteria_parts.append(f"size: {criteria['sqft']} sq ft")
+    if criteria.get("use_type"):
+        criteria_parts.append(f"use type: {criteria['use_type']}")
+    if criteria.get("timing"):
+        criteria_parts.append(f"timing: {criteria['timing']}")
+    if criteria.get("duration"):
+        criteria_parts.append(f"duration: {criteria['duration']}")
+    if criteria.get("requirements") and criteria["requirements"] not in ("none", ""):
+        criteria_parts.append(f"requirements: {criteria['requirements']}")
+
+    if criteria_parts:
+        lines.append(f"- Prior criteria collected via SMS: {', '.join(criteria_parts)}")
+    else:
+        lines.append("- No criteria collected yet via SMS")
+
+    # Summarize presented matches
+    presented = sms_context.get("presented_match_ids") or []
+    if presented:
+        lines.append(f"- {len(presented)} properties were already presented via SMS")
+        focused = sms_context.get("focused_match_id")
+        if focused and focused in presented:
+            idx = presented.index(focused) + 1
+            lines.append(f"- Buyer was focused on option {idx} in the SMS conversation")
+
+    # Phase description
+    phase = sms_context.get("phase", "INTAKE")
+    phase_descriptions = {
+        "INTAKE": "just started texting",
+        "QUALIFYING": "was being qualified (answering screening questions)",
+        "PRESENTING": "was reviewing presented property options",
+        "PROPERTY_FOCUSED": "was asking questions about a specific property",
+        "AWAITING_ANSWER": "was waiting for a supplier to answer a question",
+        "COLLECTING_INFO": "was providing contact info for booking",
+        "COMMITMENT": "was in the commitment/booking flow",
+        "GUARANTEE_PENDING": "was sent a booking guarantee link",
+    }
+    phase_desc = phase_descriptions.get(phase, phase)
+    lines.append(f"- SMS conversation phase: {phase_desc}")
+
+    # Cached answers summary
+    answered_qs = sms_context.get("answered_questions") or []
+    if answered_qs:
+        lines.append(f"- {len(answered_qs)} questions already answered and cached")
+
+    lines.append("\nINSTRUCTIONS FOR HANDLING SMS CONTEXT:")
+    if criteria_parts:
+        lines.append("- Do NOT re-ask questions that were already answered via text")
+        lines.append("- You can reference their criteria: \"I see you were looking for X in Y\"")
+    if presented:
+        lines.append("- Buyer has already seen options. Offer to review them or search for more.")
+        lines.append("- Only use search_properties if the buyer wants to change their criteria")
+    else:
+        lines.append("- Buyer has criteria but hasn't seen matches yet. You can search immediately.")
+
+    return "\n".join(lines)
 
 
 def _build_tool_definitions() -> list[dict]:

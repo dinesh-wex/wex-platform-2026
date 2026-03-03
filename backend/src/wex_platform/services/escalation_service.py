@@ -26,13 +26,17 @@ class EscalationService:
         question_text: str,
         field_key: str | None,
         state,  # SMSConversationState
+        source_type: str = "sms",
     ) -> dict:
-        """3-layer check before creating an escalation.
+        """4-layer check before creating an escalation.
 
         Returns dict with:
           - escalated: bool
           - answer: str | None (if found without escalating)
           - thread_id: str | None (if escalated)
+
+        source_type: the originating channel (e.g. "sms", "voice") passed through
+          to the created thread for cross-channel dedup tracking.
         """
         # Layer 1: Check known_answers for this property + field
         if field_key:
@@ -54,12 +58,21 @@ class EscalationService:
             elif existing.status == "pending":
                 return {"escalated": False, "answer": None, "thread_id": existing.id, "waiting": True}
 
+        # Layer 4: Cross-channel dedup — check other channels' threads for same property/question
+        cross = await self._find_existing_thread_cross_channel(property_id, field_key, question_text)
+        if cross:
+            if cross.status == "answered" and cross.answer_sent_text:
+                return {"escalated": False, "answer": cross.answer_sent_text}
+            elif cross.status == "pending":
+                return {"escalated": False, "answer": None, "thread_id": cross.id, "waiting": True}
+
         # All checks missed -> create escalation
         thread = await self._create_thread(
             conversation_state_id=state.id,
             property_id=property_id,
             question_text=question_text,
             field_key=field_key,
+            source_type=source_type,
         )
 
         # Update pending escalations on state
@@ -142,12 +155,44 @@ class EscalationService:
         result = await self.db.execute(query.order_by(EscalationThread.created_at.desc()).limit(1))
         return result.scalar_one_or_none()
 
+    async def _find_existing_thread_cross_channel(
+        self, property_id: str, field_key: str | None, question_text: str
+    ) -> EscalationThread | None:
+        """Find an escalation thread across ALL channels for the same property+question.
+
+        Unlike _find_existing_thread(), this does NOT filter by conversation_state_id,
+        enabling SMS threads to be found by a voice call and vice versa.
+        Used as Layer 4 to prevent duplicate escalations across channels.
+        """
+        query = select(EscalationThread).where(
+            EscalationThread.property_id == property_id,
+        )
+        if field_key:
+            query = query.where(EscalationThread.field_key == field_key)
+
+        result = await self.db.execute(
+            query.order_by(EscalationThread.created_at.desc()).limit(20)
+        )
+        threads = result.scalars().all()
+
+        for thread in threads:
+            if not field_key:
+                # For unmapped questions, use text matching to find the right thread
+                if self._questions_match(question_text, thread.question_text):
+                    return thread
+            else:
+                # field_key match is sufficient (already filtered in query)
+                return thread
+
+        return None
+
     async def _create_thread(
         self,
         conversation_state_id: str,
         property_id: str,
         question_text: str,
         field_key: str | None,
+        source_type: str = "sms",
     ) -> EscalationThread:
         """Create a new escalation thread."""
         thread = EscalationThread(
@@ -158,6 +203,7 @@ class EscalationService:
             field_key=field_key,
             status="pending",
             sla_deadline_at=datetime.utcnow() + timedelta(hours=ESCALATION_SLA_HOURS),
+            source_type=source_type,
         )
         self.db.add(thread)
         await self.db.flush()

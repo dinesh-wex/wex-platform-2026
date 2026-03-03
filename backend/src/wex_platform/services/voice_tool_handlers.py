@@ -89,22 +89,50 @@ class VoiceToolHandlers:
             # 2. Parse location into city/state
             city, state = _parse_location(location)
 
-            # 3. Create BuyerNeed (same pattern as buyer_sms_orchestrator._run_search)
+            # 3. Get or reuse BuyerNeed — reuse if seeded from SMS and criteria still match
             parsed_features = features or []
-            buyer_need = BuyerNeed(
-                id=str(uuid.uuid4()),
-                buyer_id=buyer.id,
-                city=city,
-                state=state,
-                min_sqft=int(sqft * 0.8) if sqft else None,
-                max_sqft=int(sqft * 1.2) if sqft else None,
-                use_type=use_type or "general",
-                needed_from=_parse_timing(timing),
-                duration_months=_parse_duration(duration),
-                requirements={"features": parsed_features} if parsed_features else {},
-            )
-            self.db.add(buyer_need)
-            await self.db.flush()
+            reuse_existing = False
+
+            if self.call_state.buyer_need_id:
+                # VoiceCallState was seeded from an SMS conversation.
+                # NOTE: VoiceCallState is seeded from SMS once at call start and updated
+                # independently. SMSConversationState is NEVER written to by voice handlers.
+                # If criteria diverge (different city/sqft), we create a voice-only BuyerNeed.
+                need_result = await self.db.execute(
+                    select(BuyerNeed).where(BuyerNeed.id == self.call_state.buyer_need_id)
+                )
+                existing_need = need_result.scalar_one_or_none()
+
+                if existing_need:
+                    city_match = (existing_need.city or "").lower() == city.lower()
+                    sqft_in_range = (
+                        existing_need.min_sqft is not None
+                        and existing_need.max_sqft is not None
+                        and existing_need.min_sqft <= sqft <= existing_need.max_sqft
+                    )
+                    if city_match and sqft_in_range:
+                        reuse_existing = True
+                        buyer_need = existing_need
+                        logger.info(
+                            "Reusing SMS-seeded BuyerNeed %s for voice call (city=%s, sqft=%d)",
+                            existing_need.id, city, sqft,
+                        )
+
+            if not reuse_existing:
+                buyer_need = BuyerNeed(
+                    id=str(uuid.uuid4()),
+                    buyer_id=buyer.id,
+                    city=city,
+                    state=state,
+                    min_sqft=int(sqft * 0.8) if sqft else None,
+                    max_sqft=int(sqft * 1.2) if sqft else None,
+                    use_type=use_type or "general",
+                    needed_from=_parse_timing(timing),
+                    duration_months=_parse_duration(duration),
+                    requirements={"features": parsed_features} if parsed_features else {},
+                )
+                self.db.add(buyer_need)
+                await self.db.flush()
 
             self.call_state.buyer_need_id = buyer_need.id
 
@@ -120,6 +148,30 @@ class VoiceToolHandlers:
                     await self.db.flush()
             except Exception as e:
                 logger.warning("Geocoding failed for '%s': %s", location, e)
+
+            # 5a. Early return: if we're reusing an existing BuyerNeed and already have
+            # cached match summaries from the SMS conversation, skip the ClearingEngine.
+            if reuse_existing and self.call_state.match_summaries:
+                voice_summaries = self.call_state.match_summaries
+                self.call_state.presented_match_ids = [s["id"] for s in voice_summaries if s.get("id")]
+                await self.db.flush()
+
+                lines = [
+                    f"Based on what we found for you earlier, I have "
+                    f"{len(voice_summaries)} option{'s' if len(voice_summaries) != 1 else ''}."
+                ]
+                for i, s in enumerate(voice_summaries, 1):
+                    rate_str = f"{s['rate']:.2f} per square foot" if s.get("rate") else "rate to be confirmed"
+                    monthly_str = f", about ${s['monthly']:,} a month" if s.get("monthly") else ""
+                    features_str = f". {', '.join(s['features'])}" if s.get("features") else ""
+                    lines.append(
+                        f"Option {i} is in {s['city']}"
+                        f"{', ' + s['state'] if s.get('state') else ''} "
+                        f"at ${rate_str}{monthly_str}{features_str}."
+                    )
+                lines.append("Any of those sound interesting?")
+                text = " ".join(lines)
+                return _gate_voice_output(text)
 
             # 5. Run ClearingEngine
             from wex_platform.services.clearing_engine import ClearingEngine
@@ -327,18 +379,23 @@ class VoiceToolHandlers:
                 esc_service = EscalationService(self.db)
 
                 escalated_labels = []
+                waiting_labels = []
                 for r in needs_escalation:
                     esc_result = await esc_service.check_and_escalate(
                         property_id=property_id,
                         question_text=f"Buyer asked about {r.field_key or 'property details'} via voice call",
                         field_key=r.field_key,
                         state=self.call_state,
+                        source_type="voice",
                     )
                     if esc_result.get("answer"):
                         # Got answer from cache or previous escalation
                         parts.append(f"{r.label or r.field_key}: {esc_result['answer']}.")
                     elif esc_result.get("escalated"):
                         escalated_labels.append(r.label or r.field_key or "that detail")
+                    elif esc_result.get("waiting"):
+                        # Already escalated via another channel — pending
+                        waiting_labels.append(r.label or r.field_key or "that detail")
 
                 if escalated_labels:
                     if len(escalated_labels) == 1:
@@ -352,6 +409,41 @@ class VoiceToolHandlers:
                             f"I don't have info on {items} right now. "
                             "I'll check with the warehouse owner and text you back."
                         )
+
+                if waiting_labels:
+                    if len(waiting_labels) == 1:
+                        parts.append(
+                            f"We're still waiting to hear back on {waiting_labels[0]} from the warehouse owner."
+                        )
+                    else:
+                        items = " and ".join(waiting_labels)
+                        parts.append(
+                            f"We're still waiting to hear back on {items} from the warehouse owner."
+                        )
+
+            # Handle fully unmapped topics (topics were provided but none matched topic_catalog)
+            # fetch_by_topics returned empty list — no mapped fields, no escalation yet.
+            if not fetch_results and topics:
+                # Normalize topic names: "ev_charging" -> "ev charging"
+                # This ensures _questions_match() finds SMS escalations like "does it have ev charging?"
+                question_text = ', '.join(t.replace('_', ' ') for t in topics)
+                from wex_platform.services.escalation_service import EscalationService
+                esc_service = EscalationService(self.db)
+                esc_result = await esc_service.check_and_escalate(
+                    property_id=property_id,
+                    question_text=question_text,
+                    field_key=None,
+                    state=self.call_state,
+                    source_type="voice",
+                )
+                if esc_result.get("answer"):
+                    parts.append(esc_result["answer"])
+                elif esc_result.get("waiting"):
+                    parts.append("We're still checking on that with the warehouse owner. Should hear back soon.")
+                elif esc_result.get("escalated"):
+                    parts.append(
+                        "I don't have that right now. I'll check with the warehouse owner and text you back."
+                    )
 
             if not parts:
                 return (

@@ -11,7 +11,7 @@ import hmac
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wex_platform.app.config import get_settings
 from wex_platform.domain.voice_models import VoiceCallState
 from wex_platform.domain.models import Buyer
+from wex_platform.domain.sms_models import SMSConversationState
 from wex_platform.infra.database import async_session
 
 logger = logging.getLogger(__name__)
@@ -70,8 +71,9 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
 
     1. Extract caller phone and Vapi call ID
     2. Look up existing Buyer to personalize greeting
-    3. Create VoiceCallState to track this call
-    4. Build and return assistant config via build_assistant_config()
+    3. Look up most recent active SMS conversation state for cross-channel seeding
+    4. Create VoiceCallState seeded from SMS state where available
+    5. Build and return assistant config via build_assistant_config()
     """
     call = message.get("call", {})
     caller_phone = call.get("customer", {}).get("number", "")
@@ -79,13 +81,53 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
 
     # Look up existing buyer by phone to personalize
     buyer_name = None
+    buyer_id = None
     if caller_phone:
         result = await db.execute(
             select(Buyer).where(Buyer.phone == caller_phone)
         )
         buyer = result.scalar_one_or_none()
-        if buyer and buyer.name:
-            buyer_name = buyer.name
+        if buyer:
+            buyer_id = buyer.id
+            if buyer.name:
+                buyer_name = buyer.name
+
+    # Look up most recent active SMS conversation state (30-day freshness window)
+    # No terminal phases exist in the enum (no ABANDONED/DORMANT), so we use
+    # a time-based filter to avoid surfacing stale context from old conversations.
+    FRESHNESS_DAYS = 30
+    sms_context = None
+    if caller_phone:
+        sms_result = await db.execute(
+            select(SMSConversationState)
+            .where(
+                SMSConversationState.phone == caller_phone,
+                SMSConversationState.opted_out == False,
+                SMSConversationState.updated_at >= datetime.now(timezone.utc) - timedelta(days=FRESHNESS_DAYS),
+            )
+            .order_by(SMSConversationState.updated_at.desc())
+            .limit(1)
+        )
+        sms_state = sms_result.scalar_one_or_none()
+
+        if sms_state:
+            sms_context = {
+                "phase": sms_state.phase,
+                "criteria_snapshot": sms_state.criteria_snapshot or {},
+                "presented_match_ids": sms_state.presented_match_ids or [],
+                "focused_match_id": sms_state.focused_match_id,
+                "renter_first_name": sms_state.renter_first_name,
+                "known_answers": sms_state.known_answers or {},
+                "answered_questions": sms_state.answered_questions or [],
+                "buyer_need_id": sms_state.buyer_need_id,
+                "conversation_id": sms_state.conversation_id,
+                "sms_state_id": sms_state.id,
+            }
+            # Prefer SMS-captured name — more recently verified than Buyer.name
+            if sms_state.renter_first_name:
+                buyer_name = sms_state.renter_first_name
+                if sms_state.renter_last_name:
+                    buyer_name = f"{sms_state.renter_first_name} {sms_state.renter_last_name}"
 
     # Create VoiceCallState for this call
     call_state = VoiceCallState(
@@ -95,13 +137,34 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
         verified_phone=caller_phone,  # Default to caller ID; updated if they give alternate
         call_started_at=datetime.now(timezone.utc),
     )
+
+    # Seed cross-channel fields from SMS state when available.
+    # VoiceCallState is seeded once here and updated independently for the call.
+    # SMSConversationState is NEVER written to by voice handlers — channels are independent.
+    if sms_context:
+        call_state.buyer_id = buyer_id
+        call_state.conversation_id = sms_context["conversation_id"]
+        call_state.buyer_need_id = sms_context["buyer_need_id"]
+        call_state.known_answers = sms_context["known_answers"]
+        call_state.answered_questions = sms_context["answered_questions"]
+        call_state.presented_match_ids = sms_context["presented_match_ids"]
+        call_state.buyer_name = buyer_name
+
+        sms_summaries = sms_context["criteria_snapshot"].get("match_summaries")
+        if sms_summaries:
+            call_state.match_summaries = _build_voice_summaries_from_sms(sms_summaries)
+
     db.add(call_state)
     await db.commit()
 
     # Build and return assistant config
     try:
         from wex_platform.services.vapi_assistant_config import build_assistant_config
-        config = build_assistant_config(caller_phone=caller_phone, buyer_name=buyer_name)
+        config = build_assistant_config(
+            caller_phone=caller_phone,
+            buyer_name=buyer_name,
+            sms_context=sms_context,
+        )
     except ImportError:
         logger.warning("vapi_assistant_config not available yet, returning minimal config")
         config = _fallback_assistant_config(caller_phone, buyer_name)
@@ -330,3 +393,31 @@ def _fallback_assistant_config(caller_phone: str, buyer_name: str | None) -> dic
             },
         }
     }
+
+
+def _build_voice_summaries_from_sms(sms_summaries: list[dict]) -> list[dict]:
+    """Convert SMS match summary format to VoiceCallState.match_summaries format.
+
+    SMS match summaries (from build_match_summaries in context_builder.py) have:
+        id, city, state, rate, monthly, match_score, description, reasoning, address
+
+    VoiceCallState.match_summaries (used by lookup_property_details) needs:
+        id, city, state, rate, monthly, score, features, instant_book
+
+    features is intentionally left empty — forces lookup_property_details to
+    fetch fresh from DetailFetcher when the buyer asks about specific details.
+    Caps at 3 entries to match the voice tool's 3-option limit.
+    """
+    voice_summaries = []
+    for s in (sms_summaries or [])[:3]:
+        voice_summaries.append({
+            "id": s.get("id", ""),
+            "city": s.get("city", ""),
+            "state": s.get("state", ""),
+            "rate": s.get("rate"),
+            "monthly": s.get("monthly"),
+            "score": s.get("match_score"),
+            "features": [],
+            "instant_book": False,
+        })
+    return voice_summaries
