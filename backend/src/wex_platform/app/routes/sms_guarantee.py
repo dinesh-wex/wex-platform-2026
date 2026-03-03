@@ -48,7 +48,7 @@ async def guarantee_page(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WEx Occupancy Guarantee</title>
+    <title>Warehouse Exchange Occupancy Guarantee</title>
     <style>
         body {{ font-family: -apple-system, system-ui, sans-serif; padding: 20px; max-width: 500px; margin: 0 auto; }}
         h1 {{ font-size: 1.5em; color: #1a1a1a; }}
@@ -61,7 +61,7 @@ async def guarantee_page(
     </style>
 </head>
 <body>
-    <h1>WEx Occupancy Guarantee</h1>
+    <h1>Warehouse Exchange Occupancy Guarantee</h1>
     <p>Sign below to confirm your interest and unlock the property address.</p>
     <form id="signForm">
         <div class="field">
@@ -72,7 +72,7 @@ async def guarantee_page(
             <label>Email</label>
             <input type="email" id="signer_email" value="{email}">
         </div>
-        <p class="terms">By signing, you agree to WEx's occupancy guarantee terms.
+        <p class="terms">By signing, you agree to Warehouse Exchange's occupancy guarantee terms.
         You will not be charged unless you proceed with a lease.</p>
         <button type="submit">Sign & View Property</button>
     </form>

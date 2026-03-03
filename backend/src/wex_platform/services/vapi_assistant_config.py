@@ -29,15 +29,15 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
         first_name = buyer_name.split()[0] if buyer_name else None
         if first_name:
             first_message = (
-                f"Hey {first_name}, I can see we've been texting about warehouse space. "
-                f"I have those {count} option{'s' if count != 1 else ''} pulled up — "
-                f"want to go over them?"
+                f"Hey {first_name}, this is Jess from Warehouse Exchange. "
+                f"I've got those {count} option{'s' if count != 1 else ''} pulled up "
+                f"from our conversation, want to walk through them?"
             )
         else:
             first_message = (
-                f"Hey there, I can see we've been texting about warehouse space. "
-                f"I have those {count} option{'s' if count != 1 else ''} pulled up — "
-                f"want to go over them?"
+                f"Hey, this is Jess with Warehouse Exchange. "
+                f"I've got {count} option{'s' if count != 1 else ''} ready from your texts, "
+                f"want me to run through them?"
             )
     elif sms_context and sms_context.get("criteria_snapshot"):
         criteria = sms_context["criteria_snapshot"]
@@ -47,27 +47,29 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
         first_name = buyer_name.split()[0] if buyer_name else None
         if first_name and city:
             first_message = (
-                f"Hey {first_name}, I can see we were chatting about space in {city}. "
-                f"Want to pick up where we left off?"
+                f"Hey {first_name}, this is Jess from Warehouse Exchange. "
+                f"Looks like you were asking about space in {city}, "
+                f"want to pick up where we left off?"
             )
         elif first_name:
             first_message = (
-                f"Hey {first_name}, I can see we've been texting. How can I help you today?"
+                f"Hey {first_name}, this is Jess. "
+                f"I've got your info from our texts, how can I help?"
             )
         else:
             first_message = (
-                "Hey there, I can see we've been texting about warehouse space. "
-                "How can I help you today?"
+                "Hey, this is Jess with Warehouse Exchange. "
+                "I see you were texting with us about space, what can I do for you?"
             )
     elif buyer_name:
         first_message = (
-            f"Hey {buyer_name}, thanks for calling Warehouse Exchange. "
-            "I help businesses find warehouse space. How can I help you today?"
+            f"Hey {buyer_name}, this is Jess with Warehouse Exchange. "
+            "What kind of space are you looking for?"
         )
     else:
         first_message = (
-            "Hey there, thanks for calling Warehouse Exchange. "
-            "I help businesses find warehouse space. What's your name?"
+            "Hey, thanks for calling Warehouse Exchange, this is Jess. "
+            "Who am I speaking with?"
         )
 
     return {
@@ -99,10 +101,10 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
 
 def _build_system_prompt(sms_context: dict | None = None) -> str:
     """Build the voice agent system prompt."""
-    base_prompt = """You are a warehouse space broker at Warehouse Exchange (WEx). You help businesses find warehouse and industrial space. You sound like a friendly, knowledgeable real estate professional — not a robot.
+    base_prompt = """You are Jess, a warehouse space broker at Warehouse Exchange. You help businesses find warehouse and industrial space. You sound like a friendly, knowledgeable real estate professional — not a robot.
 
 CONVERSATION FLOW:
-1. GREET AND GET NAME: Start with a warm greeting. Ask for the caller's name right away. Use their name naturally throughout the call (2-3 times, not every sentence).
+1. GET NAME: You've already introduced yourself in the greeting. If you don't have the caller's name yet, ask for it naturally. Use their name throughout the call (2-3 times, not every sentence).
 
 2. VERIFY PHONE: After getting their name, confirm the caller ID number is the right one to text: "And just to make sure, is this the best number to reach you by text?" If they give an alternate number, note it.
 
@@ -185,7 +187,7 @@ def _build_sms_context_section(sms_context: dict | None) -> str:
         return ""
 
     lines = ["\n\nSMS CONVERSATION CONTEXT:"]
-    lines.append("This caller has been texting with WEx before this call. Key context:")
+    lines.append("This caller has been texting with Warehouse Exchange before this call. Key context:")
 
     criteria = sms_context.get("criteria_snapshot") or {}
 

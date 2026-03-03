@@ -360,10 +360,11 @@ class BuyerSMSOrchestrator:
                     if af not in topics_to_fetch:
                         topics_to_fetch.append(af)
             if topics_to_fetch:
-                fetch_results = await detail_fetcher.fetch_by_topics(
+                fetch_results = await detail_fetcher.fetch_with_insight_fallback(
                     property_id=resolved_property_id,
                     topics=topics_to_fetch,
                     state=state,
+                    question_text=message,
                 )
 
                 # Check if any need escalation
@@ -407,29 +408,45 @@ class BuyerSMSOrchestrator:
                 # escalate it instead of silently dropping it.
                 # If it's just general browsing, use the stub as before.
                 if plan.intent == "facility_info":
-                    from wex_platform.services.escalation_service import EscalationService
-                    esc_service = EscalationService(self.db)
-                    esc_result = await esc_service.check_and_escalate(
+                    # Try PropertyInsight first — check knowledge stores before escalating
+                    from wex_platform.services.property_insight_service import PropertyInsightService
+                    insight_service = PropertyInsightService(self.db)
+                    insight = await insight_service.search(
                         property_id=resolved_property_id,
-                        question_text=message,
-                        field_key=None,
-                        state=state,
-                        source_type="sms",
+                        question=message,
+                        channel="sms",
                     )
-                    if esc_result.get("escalated"):
-                        phase = "AWAITING_ANSWER"
-                    elif esc_result.get("answer"):
+                    if insight.found and insight.answer:
                         property_data = {
                             "id": resolved_property_id,
-                            "answers": {"_unmapped": esc_result["answer"]},
-                            "source": "escalation_cache",
+                            "answers": {"_insight": insight.answer},
+                            "source": "property_insight",
                         }
-                    elif esc_result.get("waiting"):
-                        property_data = {
-                            "id": resolved_property_id,
-                            "answers": {"_unmapped": "We're still checking on that with the warehouse owner."},
-                            "source": "escalation_pending",
-                        }
+                    else:
+                        # PropertyInsight couldn't answer — fall through to escalation
+                        from wex_platform.services.escalation_service import EscalationService
+                        esc_service = EscalationService(self.db)
+                        esc_result = await esc_service.check_and_escalate(
+                            property_id=resolved_property_id,
+                            question_text=message,
+                            field_key=None,
+                            state=state,
+                            source_type="sms",
+                        )
+                        if esc_result.get("escalated"):
+                            phase = "AWAITING_ANSWER"
+                        elif esc_result.get("answer"):
+                            property_data = {
+                                "id": resolved_property_id,
+                                "answers": {"_unmapped": esc_result["answer"]},
+                                "source": "escalation_cache",
+                            }
+                        elif esc_result.get("waiting"):
+                            property_data = {
+                                "id": resolved_property_id,
+                                "answers": {"_unmapped": "We're still checking on that with the warehouse owner."},
+                                "source": "escalation_pending",
+                            }
                 else:
                     # General lookup with no specific question — return stub summary
                     property_data = self._stub_lookup(resolved_property_id, presented_match_summaries)

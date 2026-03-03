@@ -336,7 +336,7 @@ async def _handle_stop(db: AsyncSession, phone: str, sms_service: SMSService) ->
     try:
         await sms_service.send_buyer_sms(
             phone,
-            "You've been unsubscribed from WEx messages. Text START to re-subscribe."
+            "You've been unsubscribed from Warehouse Exchange messages. Text START to re-subscribe."
         )
     except Exception as e:
         logger.error("Failed to send STOP confirmation to %s: %s", phone, e)
@@ -350,7 +350,7 @@ async def _handle_help(phone: str, sms_service: SMSService) -> dict:
     try:
         await sms_service.send_buyer_sms(
             phone,
-            "WEx Warehouse Exchange - find warehouse space via text. "
+            "Warehouse Exchange - find warehouse space via text. "
             "Tell me a city, size, and use type to search. "
             "Reply STOP to opt out. Questions? support@warehouseexchange.com"
         )

@@ -1704,7 +1704,7 @@ def _generate_agreement_terms(engagement: Engagement) -> str:
     return (
         f"WAREHOUSE EXCHANGE LEASE AGREEMENT\n\n"
         f"This Lease Agreement ('Agreement') is entered into between the Supplier "
-        f"and the Buyer for warehouse space facilitated through Warehouse Exchange (WEx).\n\n"
+        f"and the Buyer for warehouse space facilitated through Warehouse Exchange.\n\n"
         f"SPACE: {sqft:,} sq ft at the Property identified in this engagement.\n\n"
         f"RATES:\n"
         f"- Buyer Monthly Rate: ${monthly_buyer:,.2f} (${buyer_rate:.4f}/sq ft)\n"
@@ -1713,9 +1713,9 @@ def _generate_agreement_terms(engagement: Engagement) -> str:
         f"TERMS AND CONDITIONS:\n"
         f"1. Buyer shall pay monthly rent on or before the 1st of each month.\n"
         f"2. Supplier shall maintain the property in good working condition.\n"
-        f"3. WEx facilitates payments between parties.\n"
+        f"3. Warehouse Exchange facilitates payments between parties.\n"
         f"4. Either party may terminate with 30 days written notice.\n"
-        f"5. This agreement is subject to WEx Platform Terms of Service.\n\n"
+        f"5. This agreement is subject to Warehouse Exchange Platform Terms of Service.\n\n"
         f"By signing below, both parties agree to the terms of this lease.\n"
     )
 

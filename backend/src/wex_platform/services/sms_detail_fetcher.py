@@ -92,6 +92,46 @@ class DetailFetcher:
             results.append(result)
         return results
 
+    async def fetch_with_insight_fallback(
+        self,
+        property_id: str,
+        topics: list[str],
+        state,
+        question_text: str,  # Required — no default to prevent empty-string bugs
+        channel: str = "sms",
+    ) -> list[DetailFetchResult]:
+        """Like fetch_by_topics, but checks PropertyInsight for needs_escalation results.
+
+        For any result where needs_escalation=True (mapped field but NULL in DB,
+        or unmapped field), attempts a PropertyInsight lookup. If PropertyInsight
+        finds an answer, converts those results to FOUND with source="property_insight".
+        """
+        results = await self.fetch_by_topics(property_id, topics, state)
+
+        if not question_text:
+            return results
+
+        needs_insight = [r for r in results if r.needs_escalation]
+        if not needs_insight:
+            return results
+
+        # Lazy import to avoid circular dependency
+        from wex_platform.services.property_insight_service import PropertyInsightService
+
+        insight_service = PropertyInsightService(self.db)
+        insight = await insight_service.search(property_id, question_text, channel=channel)
+
+        if insight.found and insight.answer:
+            for r in results:
+                if r.needs_escalation:
+                    r.status = "FOUND"
+                    r.value = insight.answer
+                    r.formatted = insight.answer
+                    r.needs_escalation = False
+                    r.source = "property_insight"
+
+        return results
+
     async def _query_field(self, property_id: str, table: str, column: str):
         """Query a single field from the appropriate table."""
         if table == "knowledge":

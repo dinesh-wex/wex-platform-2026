@@ -4,6 +4,7 @@ Each handler bridges a Vapi tool-call to existing WEx services,
 running a mini-pipeline: validate -> execute -> gate -> format for voice.
 """
 
+import asyncio
 import logging
 import re
 import secrets
@@ -424,26 +425,60 @@ class VoiceToolHandlers:
             # Handle fully unmapped topics (topics were provided but none matched topic_catalog)
             # fetch_by_topics returned empty list — no mapped fields, no escalation yet.
             if not fetch_results and topics:
-                # Normalize topic names: "ev_charging" -> "ev charging"
-                # This ensures _questions_match() finds SMS escalations like "does it have ev charging?"
-                question_text = ', '.join(t.replace('_', ' ') for t in topics)
-                from wex_platform.services.escalation_service import EscalationService
-                esc_service = EscalationService(self.db)
-                esc_result = await esc_service.check_and_escalate(
-                    property_id=property_id,
-                    question_text=question_text,
-                    field_key=None,
-                    state=self.call_state,
-                    source_type="voice",
-                )
-                if esc_result.get("answer"):
-                    parts.append(esc_result["answer"])
-                elif esc_result.get("waiting"):
-                    parts.append("We're still checking on that with the warehouse owner. Should hear back soon.")
-                elif esc_result.get("escalated"):
-                    parts.append(
-                        "I don't have that right now. I'll check with the warehouse owner and text you back."
+                topic_labels = ', '.join(t.replace('_', ' ') for t in topics)
+
+                # Try to get the buyer's actual question from the last transcript entry
+                # for a more descriptive escalation. Fall back to topic labels.
+                question_text = topic_labels
+                transcript = self.call_state.call_transcript
+                if isinstance(transcript, list) and transcript:
+                    # Find last user message in transcript
+                    for entry in reversed(transcript):
+                        if isinstance(entry, dict) and entry.get("role") == "user":
+                            raw_q = entry.get("content", "").strip()
+                            if raw_q and len(raw_q) > 5:
+                                question_text = raw_q
+                            break
+
+                # Try PropertyInsight first (4-second timeout for voice)
+                insight_found = False
+                try:
+                    from wex_platform.services.property_insight_service import PropertyInsightService
+                    insight_service = PropertyInsightService(self.db)
+                    insight = await asyncio.wait_for(
+                        insight_service.search(property_id, question_text, channel="voice"),
+                        timeout=4.0,
                     )
+                    if insight.found and insight.answer:
+                        parts.append(insight.answer)
+                        insight_found = True
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "PropertyInsight timed out (4s) for property %s, falling through to escalation",
+                        property_id,
+                    )
+                except Exception:
+                    logger.exception("PropertyInsight error for property %s", property_id)
+
+                if not insight_found:
+                    # Fall through to escalation (existing code)
+                    from wex_platform.services.escalation_service import EscalationService
+                    esc_service = EscalationService(self.db)
+                    esc_result = await esc_service.check_and_escalate(
+                        property_id=property_id,
+                        question_text=question_text,
+                        field_key=None,
+                        state=self.call_state,
+                        source_type="voice",
+                    )
+                    if esc_result.get("answer"):
+                        parts.append(esc_result["answer"])
+                    elif esc_result.get("waiting"):
+                        parts.append("We're still checking on that with the warehouse owner. Should hear back soon.")
+                    elif esc_result.get("escalated"):
+                        parts.append(
+                            "I don't have that right now. I'll check with the warehouse owner and text you back."
+                        )
 
             if not parts:
                 return (

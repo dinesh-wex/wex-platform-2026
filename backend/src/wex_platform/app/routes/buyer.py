@@ -569,7 +569,7 @@ async def buyer_need_chat_start(
         logger.warning("BuyerAgent not available, returning fallback response")
 
         initial_msg = (
-            "Welcome to WEx! I'm here to help you find the perfect warehouse "
+            "Welcome to Warehouse Exchange! I'm here to help you find the perfect warehouse "
             "space. Let's start by understanding your needs. What type of "
             "operations will you be running in the space?"
         )

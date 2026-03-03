@@ -23,7 +23,7 @@ class SmsTokenService:
 
     async def create_guarantee_token(
         self,
-        conversation_state_id: str,
+        conversation_state_id: str | None,
         buyer_phone: str,
         engagement_id: str | None = None,
         prefilled_name: str | None = None,

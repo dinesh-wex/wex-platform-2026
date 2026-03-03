@@ -1,4 +1,5 @@
 """Escalation Service — handles unanswerable property questions."""
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -85,7 +86,89 @@ class EscalationService:
         }
         state.pending_escalations = pending
 
+        # After thread creation, send email notification (fire-and-forget)
+        asyncio.ensure_future(self._send_escalation_email(thread, state))
+
         return {"escalated": True, "answer": None, "thread_id": thread.id}
+
+    async def _send_escalation_email(self, thread, state) -> None:
+        """Fire-and-forget email notification for new escalation."""
+        try:
+            from wex_platform.services.email_service import send_escalation_email
+            from wex_platform.domain.models import Property, Warehouse
+            from wex_platform.app.config import get_settings
+
+            settings = get_settings()
+
+            # Look up property address
+            address = "Unknown Property"
+            prop_result = await self.db.execute(
+                select(Property).where(Property.id == thread.property_id)
+            )
+            prop = prop_result.scalar_one_or_none()
+            if prop:
+                parts = [p for p in [prop.address, prop.city, prop.state] if p]
+                address = ", ".join(parts) if parts else "Unknown Property"
+            else:
+                wh_result = await self.db.execute(
+                    select(Warehouse).where(Warehouse.id == thread.property_id)
+                )
+                wh = wh_result.scalar_one_or_none()
+                if wh and wh.address:
+                    address = wh.address
+
+            # Build reply tool URL
+            base_url = settings.frontend_url.rstrip("/")
+            reply_tool_url = f"{base_url}/api/sms/internal/form/{thread.id}?token={settings.admin_password}"
+
+            # Get recent messages — SMS uses messages/conversation_history,
+            # Voice uses call_transcript
+            recent_messages = []
+            if state:
+                history = (
+                    getattr(state, 'conversation_history', None)
+                    or getattr(state, 'messages', None)
+                    or getattr(state, 'call_transcript', None)
+                    or []
+                )
+                if isinstance(history, list):
+                    recent_messages = history[-5:] if len(history) > 5 else history
+
+            # Extract buyer phone/name — field names differ between
+            # SMSConversationState (.phone, .renter_first_name) and
+            # VoiceCallState (.caller_phone/.verified_phone, .buyer_name)
+            buyer_phone = "Unknown"
+            buyer_name = "Unknown"
+            if state:
+                buyer_phone = (
+                    getattr(state, 'phone', None)
+                    or getattr(state, 'verified_phone', None)
+                    or getattr(state, 'caller_phone', None)
+                    or "Unknown"
+                )
+                buyer_name = (
+                    getattr(state, 'renter_first_name', None)
+                    or getattr(state, 'buyer_name', None)
+                    or "Unknown"
+                )
+
+            # Build email data
+            data = {
+                "property_address": address,
+                "property_id": thread.property_id,
+                "question_text": thread.question_text,
+                "source_type": thread.source_type or "sms",
+                "buyer_phone": buyer_phone,
+                "buyer_name": buyer_name,
+                "thread_id": thread.id,
+                "reply_tool_url": reply_tool_url,
+                "recent_messages": recent_messages,
+                "field_key": thread.field_key,
+            }
+
+            await send_escalation_email(data)
+        except Exception:
+            logger.exception("Failed to send escalation email for thread %s", thread.id)
 
     async def record_answer(
         self,

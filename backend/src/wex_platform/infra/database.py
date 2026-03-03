@@ -107,6 +107,48 @@ async def init_db():
                 except Exception:
                     pass  # Column already exists — safe to ignore
 
+        # Fix sms_signup_tokens.conversation_state_id to be nullable
+        # (voice calls have no SMS conversation state).
+        # SQLite cannot ALTER COLUMN, so recreate the table if needed.
+        async with engine.begin() as conn:
+            try:
+                result = await conn.execute(text("PRAGMA table_info(sms_signup_tokens)"))
+                rows = result.fetchall()
+                needs_fix = any(
+                    row[1] == "conversation_state_id" and row[3] == 1  # notnull=1
+                    for row in rows
+                )
+                if needs_fix:
+                    await conn.execute(text(
+                        "CREATE TABLE sms_signup_tokens_new ("
+                        "  id VARCHAR(36) PRIMARY KEY,"
+                        "  conversation_state_id VARCHAR(36) REFERENCES sms_conversation_states(id),"
+                        "  token VARCHAR(64) NOT NULL UNIQUE,"
+                        "  action VARCHAR(30) NOT NULL,"
+                        "  buyer_phone VARCHAR(50) NOT NULL,"
+                        "  prefilled_name VARCHAR(200),"
+                        "  prefilled_email VARCHAR(255),"
+                        "  engagement_id VARCHAR(36),"
+                        "  expires_at DATETIME NOT NULL,"
+                        "  used BOOLEAN DEFAULT 0,"
+                        "  used_at DATETIME,"
+                        "  created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+                        ")"
+                    ))
+                    await conn.execute(text(
+                        "INSERT INTO sms_signup_tokens_new SELECT * FROM sms_signup_tokens"
+                    ))
+                    await conn.execute(text("DROP TABLE sms_signup_tokens"))
+                    await conn.execute(text(
+                        "ALTER TABLE sms_signup_tokens_new RENAME TO sms_signup_tokens"
+                    ))
+                    await conn.execute(text(
+                        "CREATE UNIQUE INDEX ix_sms_signup_tokens_token ON sms_signup_tokens(token)"
+                    ))
+                    print("[init_db] Fixed sms_signup_tokens.conversation_state_id → nullable")
+            except Exception:
+                pass  # Table may not exist yet — create_all handles it
+
         # Backfill new property tables from legacy data
         from wex_platform.services.backfill_properties import backfill_properties
         async with async_session() as session:

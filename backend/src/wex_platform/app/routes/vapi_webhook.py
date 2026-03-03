@@ -258,7 +258,11 @@ async def _handle_tool_calls(message: dict, db: AsyncSession) -> JSONResponse:
             "result": result_text,
         })
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as e:
+        logger.error("Tool-call commit failed (rolling back): %s", e, exc_info=True)
+        await db.rollback()
 
     return JSONResponse({"results": results})
 
@@ -304,13 +308,13 @@ async def _handle_end_of_call(message: dict, db: AsyncSession) -> JSONResponse:
     if call_state.guarantee_link_token and not call_state.sms_sent:
         # Booking link SMS
         link = f"{settings.frontend_url}/sms/guarantee/{call_state.guarantee_link_token}"
-        sms_text = f"{name_prefix}here's the link to complete your warehouse booking: {link}"
+        sms_text = f"{name_prefix}it's Jess from Warehouse Exchange. Here's the link to complete your warehouse booking: {link}"
         await _send_follow_up_sms(sms_phone, sms_text, call_state)
 
     elif call_state.search_session_token and not call_state.sms_sent:
         # Search options link SMS
         link = f"{settings.frontend_url}/buyer/options?session={call_state.search_session_token}"
-        sms_text = f"{name_prefix}here are the warehouse options we discussed: {link}"
+        sms_text = f"{name_prefix}it's Jess from Warehouse Exchange. Here are the options we discussed: {link}"
         await _send_follow_up_sms(sms_phone, sms_text, call_state)
 
     await db.commit()
@@ -385,8 +389,8 @@ def _fallback_assistant_config(caller_phone: str, buyer_name: str | None) -> dic
                     {
                         "role": "system",
                         "content": (
-                            "You are a helpful warehouse leasing assistant for "
-                            "Warehouse Exchange (WEx). Help callers find warehouse space."
+                            "You are Jess, a helpful warehouse leasing assistant for "
+                            "Warehouse Exchange. Help callers find warehouse space."
                         ),
                     }
                 ],

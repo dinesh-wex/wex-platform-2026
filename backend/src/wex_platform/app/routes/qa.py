@@ -427,7 +427,7 @@ async def submit_anonymous_question(
     )
     db.add(question)
     await db.commit()
-    return {"ok": True, "message": "Your question has been sent. WEx will follow up via email."}
+    return {"ok": True, "message": "Your question has been sent. Warehouse Exchange will follow up via email."}
 
 
 # ---------------------------------------------------------------------------

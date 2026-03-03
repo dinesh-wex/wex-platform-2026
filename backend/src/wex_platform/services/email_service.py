@@ -366,9 +366,9 @@ async def send_internal_alert(data: dict) -> bool:
         address = data.get("address", "Unknown")
         html_body = _build_internal_alert_html(data)
         mail = Mail(
-            from_email=Email(alert_from, "WEx Alerts"),
+            from_email=Email(alert_from, "Warehouse Exchange Alerts"),
             to_emails=To(alert_to),
-            subject=f"[WEx EarnCheck] New Supplier Lead: {address}",
+            subject=f"[Warehouse Exchange] New Supplier Lead: {address}",
             html_content=HtmlContent(html_body),
         )
         result = await asyncio.to_thread(_send_mail, mail)
@@ -377,4 +377,156 @@ async def send_internal_alert(data: dict) -> bool:
         return result
     except Exception:
         logger.exception("Failed to send internal alert for %s", data.get("address"))
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Escalation emails (buyer question the AI cannot answer)
+# ---------------------------------------------------------------------------
+
+
+def _build_escalation_email_html(data: dict) -> str:
+    """Build HTML email for an escalation notification (buyer question needs answer)."""
+    property_address = data.get("property_address", "Unknown Property")
+    property_id = data.get("property_id", "N/A")
+    question_text = data.get("question_text", "")
+    source_type = data.get("source_type", "unknown")
+    buyer_phone = data.get("buyer_phone", "N/A")
+    buyer_name = data.get("buyer_name") or "Unknown"
+    thread_id = data.get("thread_id", "N/A")
+    reply_tool_url = data.get("reply_tool_url", "#")
+    recent_messages = data.get("recent_messages") or []
+    field_key = data.get("field_key")
+
+    channel_display = "SMS" if source_type == "sms" else "Voice" if source_type == "voice" else source_type.title()
+
+    # Build recent conversation rows (last 5)
+    conversation_rows = ""
+    for msg in recent_messages[-5:]:
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")
+        if role == "buyer":
+            prefix = "&#128229; Buyer"
+            color = "#1f2937"
+        else:
+            prefix = "&#128228; Agent"
+            color = "#4b5563"
+        conversation_rows += (
+            f'<p style="margin: 6px 0; font-size: 13px; color: {color};">'
+            f'<strong>{prefix}:</strong> {content}</p>'
+        )
+
+    if not conversation_rows:
+        conversation_rows = '<p style="margin: 6px 0; font-size: 13px; color: #6b7280;">No recent messages available.</p>'
+
+    # Optional field key line
+    field_key_row = ""
+    if field_key:
+        field_key_row = f"""
+    <tr>
+      <td style="padding: 10px; background-color: #f8f9fa; border: 1px solid #dee2e6; width: 30%;"><strong>Field</strong></td>
+      <td style="padding: 10px; border: 1px solid #dee2e6;">{field_key}</td>
+    </tr>"""
+
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+
+  <div style="background-color: #f8f9fa; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 20px;">
+    <h2 style="margin: 0 0 10px 0; color: #dc3545;">Escalation &mdash; Buyer Question Needs Answer</h2>
+    <p style="margin: 0; font-size: 14px; color: #666;">Action required &mdash; PropertyInsight + cache could not resolve</p>
+  </div>
+
+  <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+    <tr>
+      <td style="padding: 10px; background-color: #f8f9fa; border: 1px solid #dee2e6; width: 30%;"><strong>Property</strong></td>
+      <td style="padding: 10px; border: 1px solid #dee2e6;">{property_address}</td>
+    </tr>
+    <tr>
+      <td style="padding: 10px; background-color: #f8f9fa; border: 1px solid #dee2e6;"><strong>Property ID</strong></td>
+      <td style="padding: 10px; border: 1px solid #dee2e6;">{property_id}</td>
+    </tr>
+    <tr>
+      <td style="padding: 10px; background-color: #f8f9fa; border: 1px solid #dee2e6;"><strong>Buyer</strong></td>
+      <td style="padding: 10px; border: 1px solid #dee2e6;">
+        {buyer_name}<br>
+        <a href="tel:{buyer_phone}" style="color: #007bff;">{buyer_phone}</a>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 10px; background-color: #f8f9fa; border: 1px solid #dee2e6;"><strong>Channel</strong></td>
+      <td style="padding: 10px; border: 1px solid #dee2e6;">{channel_display}</td>
+    </tr>{field_key_row}
+  </table>
+
+  <div style="background-color: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 15px; margin-bottom: 20px;">
+    <h3 style="margin: 0 0 10px 0; color: #856404;">Question</h3>
+    <p style="margin: 0; white-space: pre-wrap;">{question_text}</p>
+  </div>
+
+  <div style="background-color: #e7f3ff; border: 1px solid #b6d4fe; border-radius: 4px; padding: 15px; margin-bottom: 20px;">
+    <h3 style="margin: 0 0 10px 0; color: #084298;">Recent Conversation</h3>
+    {conversation_rows}
+  </div>
+
+  <div style="text-align: center; margin: 30px 0;">
+    <a href="{reply_tool_url}"
+       style="display: inline-block; background-color: #007bff; color: #ffffff; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
+      Open Reply Tool
+    </a>
+  </div>
+
+  <p style="text-align: center; font-size: 12px; color: #666;">
+    If the button doesn't work, copy this link:<br>
+    <a href="{reply_tool_url}" style="color: #007bff; word-break: break-all;">{reply_tool_url}</a>
+  </p>
+
+  <hr style="border: none; border-top: 1px solid #dee2e6; margin: 20px 0;">
+
+  <div style="background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; padding: 10px; margin-bottom: 15px;">
+    <p style="margin: 0; color: #721c24; font-size: 13px;">
+      <strong>Important:</strong> This is an internal ops notification. The property owner has NOT been contacted.
+    </p>
+  </div>
+
+  <p style="font-size: 11px; color: #999;">
+    Thread ID: {thread_id}<br>
+    Property ID: {property_id}
+  </p>
+
+</body>
+</html>
+"""
+    return html
+
+
+async def send_escalation_email(data: dict) -> bool:
+    """Send escalation notification when PropertyInsight + cache can't answer a buyer question."""
+    api_key, alert_from, alert_to = _get_config()
+    if not api_key:
+        logger.warning("SendGrid not configured, skipping escalation email")
+        return False
+
+    property_address = data.get("property_address", "Unknown Property")
+    html = _build_escalation_email_html(data)
+
+    mail = Mail(
+        from_email=Email(alert_from, "Warehouse Exchange Escalation"),
+        to_emails=alert_to,
+        subject=f"[Warehouse Exchange] Buyer Question — {property_address}",
+        html_content=Content("text/html", html),
+    )
+
+    try:
+        success = await asyncio.to_thread(_send_mail, mail)
+        if success:
+            logger.info("Escalation email sent for thread %s", data.get("thread_id"))
+        return success
+    except Exception:
+        logger.exception("Failed to send escalation email")
         return False
