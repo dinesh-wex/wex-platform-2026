@@ -43,7 +43,7 @@ async def guarantee_page(
     email = html.escape(token_record.prefilled_email or "")
 
     # Simple mobile-optimized HTML form
-    html = f"""<!DOCTYPE html>
+    page_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -114,7 +114,7 @@ async def guarantee_page(
 </body>
 </html>"""
 
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=page_html)
 
 
 @router.post("/{token}/sign")
