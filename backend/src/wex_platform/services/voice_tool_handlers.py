@@ -382,9 +382,12 @@ class VoiceToolHandlers:
                 escalated_labels = []
                 waiting_labels = []
                 for r in needs_escalation:
+                    # Use the AI-interpreted field label (from Vapi's topic mapping),
+                    # not the raw speech transcription which has STT artifacts.
+                    question_text = r.label or (r.field_key or "").replace("_", " ") or "property details"
                     esc_result = await esc_service.check_and_escalate(
                         property_id=property_id,
-                        question_text=f"Buyer asked about {r.field_key or 'property details'} via voice call",
+                        question_text=question_text,
                         field_key=r.field_key,
                         state=self.call_state,
                         source_type="voice",
@@ -425,20 +428,10 @@ class VoiceToolHandlers:
             # Handle fully unmapped topics (topics were provided but none matched topic_catalog)
             # fetch_by_topics returned empty list — no mapped fields, no escalation yet.
             if not fetch_results and topics:
+                # Use the AI-interpreted topic names (from Vapi's LLM tool call),
+                # not the raw speech transcription which has STT artifacts.
                 topic_labels = ', '.join(t.replace('_', ' ') for t in topics)
-
-                # Try to get the buyer's actual question from the last transcript entry
-                # for a more descriptive escalation. Fall back to topic labels.
                 question_text = topic_labels
-                transcript = self.call_state.call_transcript
-                if isinstance(transcript, list) and transcript:
-                    # Find last user message in transcript
-                    for entry in reversed(transcript):
-                        if isinstance(entry, dict) and entry.get("role") == "user":
-                            raw_q = entry.get("content", "").strip()
-                            if raw_q and len(raw_q) > 5:
-                                question_text = raw_q
-                            break
 
                 # Try PropertyInsight first (4-second timeout for voice)
                 insight_found = False

@@ -48,9 +48,10 @@ class EngagementBridge:
         # Find a supplier for this property via PropertyContact
         supplier_id = await self._resolve_supplier_id(property_id)
 
-        # Email dedup: check if User already exists with this email
+        # Email dedup: check if User already exists with this email or phone
         is_new_user = True
         user = None
+        synthetic_email = f"sms_{buyer_phone.replace('+', '').replace('-', '')}@sms.warehouseexchange.com"
 
         if buyer_email:
             result = await self.db.execute(
@@ -61,12 +62,24 @@ class EngagementBridge:
                 is_new_user = False
                 logger.info("Found existing user %s for email %s", user.id, buyer_email)
 
+        if not user:
+            # Also check by synthetic SMS email or phone (voice callers have no email)
+            result = await self.db.execute(
+                select(User).where(
+                    (User.email == synthetic_email) | (User.phone == buyer_phone)
+                )
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                is_new_user = False
+                logger.info("Found existing user %s by phone/synthetic email", user.id)
+
         # Create User if needed
         if not user:
             from passlib.hash import bcrypt
             user = User(
                 id=str(uuid.uuid4()),
-                email=buyer_email or f"sms_{buyer_phone.replace('+', '').replace('-', '')}@sms.warehouseexchange.com",
+                email=buyer_email or synthetic_email,
                 password_hash=bcrypt.hash(str(uuid.uuid4())),  # Random password, they'll use SMS
                 name=buyer_name or "SMS Buyer",
                 phone=buyer_phone,

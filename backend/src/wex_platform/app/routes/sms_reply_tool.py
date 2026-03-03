@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wex_platform.app.config import get_settings
 from wex_platform.domain.models import BuyerConversation, Property, Warehouse
 from wex_platform.domain.sms_models import EscalationThread, SMSConversationState
+from wex_platform.domain.voice_models import VoiceCallState
 from wex_platform.infra.database import get_db
 from wex_platform.services.sms_service import SMSService
 
@@ -40,6 +41,18 @@ async def reply_form(
     db: AsyncSession = Depends(get_db),
 ):
     """Serve an HTML reply form for operators to answer escalated questions."""
+    try:
+        return await _render_reply_form(thread_id, token, db)
+    except Exception:
+        logger.exception("reply_form crashed for thread %s", thread_id)
+        return HTMLResponse(
+            content=_render_error_page("Internal error — check server logs"),
+            status_code=500,
+        )
+
+
+async def _render_reply_form(thread_id: str, token: str, db: AsyncSession) -> HTMLResponse:
+    """Inner form rendering — separated so the outer handler can catch errors."""
     settings = get_settings()
 
     # --- auth via query-param token ---
@@ -60,15 +73,31 @@ async def reply_form(
             status_code=404,
         )
 
-    # --- load conversation state ---
+    # --- load conversation state (SMS or Voice) ---
     state = None
+    voice_state = None
     if thread.conversation_state_id:
-        state_result = await db.execute(
-            select(SMSConversationState).where(
-                SMSConversationState.id == thread.conversation_state_id
+        try:
+            state_result = await db.execute(
+                select(SMSConversationState).where(
+                    SMSConversationState.id == thread.conversation_state_id
+                )
             )
-        )
-        state = state_result.scalar_one_or_none()
+            state = state_result.scalar_one_or_none()
+        except Exception:
+            logger.exception("Failed to load SMSConversationState %s", thread.conversation_state_id)
+
+        # Voice escalations store VoiceCallState.id as conversation_state_id
+        if not state:
+            try:
+                voice_result = await db.execute(
+                    select(VoiceCallState).where(
+                        VoiceCallState.id == thread.conversation_state_id
+                    )
+                )
+                voice_state = voice_result.scalar_one_or_none()
+            except Exception:
+                logger.exception("Failed to load VoiceCallState %s", thread.conversation_state_id)
 
     # --- property address ---
     address = "Unknown"
@@ -88,7 +117,7 @@ async def reply_form(
             parts = [p for p in [wh.address, wh.city, wh.state] if p]
             address = ", ".join(parts) if parts else "Unknown"
 
-    # --- buyer info ---
+    # --- buyer info (SMS or Voice state) ---
     buyer_name = "(unknown)"
     buyer_phone = ""
     if state:
@@ -96,11 +125,16 @@ async def reply_form(
         last = state.renter_last_name or ""
         buyer_name = f"{first} {last}".strip() or "(unknown)"
         buyer_phone = state.phone or ""
+    elif voice_state:
+        buyer_name = voice_state.buyer_name or "(unknown)"
+        buyer_phone = voice_state.verified_phone or voice_state.caller_phone or ""
 
     channel = thread.source_type or "sms"
 
-    # --- recent messages (last 5 from BuyerConversation) ---
+    # --- recent messages (last 5 from BuyerConversation or VoiceCallState transcript) ---
     messages_html = "<p>No recent messages.</p>"
+    recent = None
+
     if state and state.conversation_id:
         conv_result = await db.execute(
             select(BuyerConversation).where(
@@ -110,24 +144,27 @@ async def reply_form(
         conv = conv_result.scalar_one_or_none()
         if conv and conv.messages:
             recent = (conv.messages or [])[-5:]
-            if recent:
-                parts = []
-                for msg in recent:
-                    role = msg.get("role", "unknown")
-                    content = msg.get("content", "")
-                    ts = msg.get("timestamp", "")
-                    css_class = "buyer" if role == "buyer" else "agent"
-                    label = "Buyer" if role == "buyer" else "Agent"
-                    parts.append(
-                        f'<div class="message {css_class}">'
-                        f'<div class="message-header">'
-                        f'<span class="direction">{label}</span>'
-                        f'<span class="time">{html_escape(str(ts))}</span>'
-                        f'</div>'
-                        f'<div class="message-body">{html_escape(str(content))}</div>'
-                        f'</div>'
-                    )
-                messages_html = "\n".join(parts)
+    elif voice_state and isinstance(voice_state.call_transcript, list):
+        recent = voice_state.call_transcript[-5:]
+
+    if recent:
+        parts = []
+        for msg in recent:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            ts = msg.get("timestamp", "")
+            css_class = "buyer" if role in ("buyer", "user") else "agent"
+            label = "Buyer" if role in ("buyer", "user") else "Agent"
+            parts.append(
+                f'<div class="message {css_class}">'
+                f'<div class="message-header">'
+                f'<span class="direction">{label}</span>'
+                f'<span class="time">{html_escape(str(ts))}</span>'
+                f'</div>'
+                f'<div class="message-body">{html_escape(str(content))}</div>'
+                f'</div>'
+            )
+        messages_html = "\n".join(parts)
 
     # --- already-answered banner ---
     answered_banner = ""
@@ -461,13 +498,23 @@ async def submit_reply(
     if thread.status == "answered":
         raise HTTPException(status_code=400, detail="Thread already answered")
 
-    # Load conversation state
+    # Load conversation state (SMS or Voice)
+    state = None
+    voice_state = None
     state_result = await db.execute(
         select(SMSConversationState).where(
             SMSConversationState.id == thread.conversation_state_id
         )
     )
     state = state_result.scalar_one_or_none()
+
+    if not state:
+        voice_result = await db.execute(
+            select(VoiceCallState).where(
+                VoiceCallState.id == thread.conversation_state_id
+            )
+        )
+        voice_state = voice_result.scalar_one_or_none()
 
     # Record the answer
     from wex_platform.services.escalation_service import EscalationService
@@ -476,7 +523,7 @@ async def submit_reply(
         thread_id=thread_id,
         answer_text=body.answer,
         answered_by=body.answered_by,
-        state=state,
+        state=state or voice_state,
     )
 
     if not thread:
@@ -496,8 +543,29 @@ async def submit_reply(
         history = getattr(state, "messages", None) or getattr(state, "conversation_history", None) or []
         if isinstance(history, list):
             recent_messages = history[-5:]
+    elif voice_state and isinstance(voice_state.call_transcript, list):
+        recent_messages = voice_state.call_transcript[-5:]
 
     field_label = get_label(thread.field_key) if thread.field_key else None
+
+    # Look up property location so the reply references which warehouse
+    property_location = None
+    if thread.property_id:
+        prop_result = await db.execute(
+            select(Property).where(Property.id == thread.property_id)
+        )
+        prop = prop_result.scalar_one_or_none()
+        if prop:
+            parts = [p for p in [prop.city, prop.state] if p]
+            property_location = ", ".join(parts) if parts else None
+        else:
+            wh_result = await db.execute(
+                select(Warehouse).where(Warehouse.id == thread.property_id)
+            )
+            wh = wh_result.scalar_one_or_none()
+            if wh:
+                parts = [p for p in [wh.city, wh.state] if p]
+                property_location = ", ".join(parts) if parts else None
 
     polish_result = await polisher.polish_reply(
         raw_answer=body.answer,
@@ -505,6 +573,7 @@ async def submit_reply(
         field_key=thread.field_key,
         field_label=field_label,
         recent_messages=recent_messages,
+        property_location=property_location,
         max_length=320,
     )
 
@@ -519,10 +588,11 @@ async def submit_reply(
     else:
         # Polishing failed — build a reasonable fallback with question context
         logger.warning("Reply polish failed (code=%s), using template fallback", polish_result.error_code)
+        loc_prefix = f"For the warehouse in {property_location}, " if property_location else ""
         if thread.field_key and field_label:
-            response_text = f"Got an answer on {field_label}: {body.answer}"
+            response_text = f"{loc_prefix}got an answer on {field_label}: {body.answer}"
         elif thread.question_text:
-            response_text = f'You asked "{thread.question_text}" - {body.answer}'
+            response_text = f'{loc_prefix}you asked "{thread.question_text}" - {body.answer}'
         else:
             response_text = f"Got an answer on your question: {body.answer}"
         sent_mode = "raw"
@@ -547,15 +617,22 @@ async def submit_reply(
     thread.answer_sent_mode = sent_mode
 
     # ── Step 4: Send to buyer ──
+    buyer_phone = None
     if state and state.phone:
+        buyer_phone = state.phone
+    elif voice_state:
+        buyer_phone = voice_state.verified_phone or voice_state.caller_phone
+
+    if buyer_phone:
         try:
             sms_service = SMSService()
-            await sms_service.send_buyer_sms(state.phone, response_text)
+            await sms_service.send_buyer_sms(buyer_phone, response_text)
 
-            # Update state
-            state.last_system_message_at = datetime.now(timezone.utc)
-            if state.phase == "AWAITING_ANSWER":
-                state.phase = "PROPERTY_FOCUSED"
+            # Update SMS state if applicable
+            if state:
+                state.last_system_message_at = datetime.now(timezone.utc)
+                if state.phase == "AWAITING_ANSWER":
+                    state.phase = "PROPERTY_FOCUSED"
 
         except Exception as e:
             logger.error("Failed to send escalation answer SMS: %s", e)

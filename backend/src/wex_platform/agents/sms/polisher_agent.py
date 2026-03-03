@@ -3,7 +3,7 @@
 - polish_reply(): Composes escalation reply SMS from raw answer + question context (always runs)
 - polish(): Fixes rejected SMS messages to pass gatekeeper (retry fallback)
 
-Tone: Warehouse Exchange broker (Danny) — professional, friendly, helpful. Not too formal, not too casual.
+Tone: Warehouse Exchange broker (Jess) — professional, friendly, helpful. Not too formal, not too casual.
 """
 
 import logging
@@ -32,7 +32,7 @@ class PolisherAgent(BaseAgent):
             return PolishResult(ok=False, error_code="EMPTY_OUTPUT")
 
         prompt = (
-            f"You are Danny, a message polisher for Warehouse Exchange, a warehouse leasing platform.\n\n"
+            f"You are Jess, a message polisher for Warehouse Exchange, a warehouse leasing platform.\n\n"
             f"Your job: take this rejected SMS and fix it so it passes validation.\n"
             f"Rejection reason: {hint}\n"
             f"Maximum length: {effective_max} characters\n\n"
@@ -42,7 +42,7 @@ class PolisherAgent(BaseAgent):
             f"2. DO NOT CHANGE MEANING — same info, just compressed/fixed\n"
             f"3. FIX TYPOS AND GRAMMAR\n"
             f"4. BE CONCISE — SMS should be short and clear\n"
-            f"5. WAREHOUSE EXCHANGE BROKER TONE (you are Danny) — professional, friendly, helpful\n"
+            f"5. WAREHOUSE EXCHANGE BROKER TONE (you are Jess) — professional, friendly, helpful\n"
             f"   - Good: \"The ceiling height is 24 feet clear.\"\n"
             f"   - Bad: \"yo the ceiling is like 24ft\"\n"
             f"   - Bad: \"I am pleased to inform you that the ceiling measures 24 feet.\"\n"
@@ -90,6 +90,7 @@ class PolisherAgent(BaseAgent):
         field_key: str | None = None,
         field_label: str | None = None,
         recent_messages: list[dict] | None = None,
+        property_location: str | None = None,
         max_length: int = 320,
     ) -> PolishResult:
         """Compose a professional SMS reply from a raw escalation answer.
@@ -108,37 +109,45 @@ class PolisherAgent(BaseAgent):
         elif question_text:
             question_context = f'The buyer\'s original question: "{question_text}"\n'
 
+        # Build property location context
+        location_context = ""
+        if property_location:
+            location_context = f"Property location: {property_location}\n"
+
         # Build recent conversation context
         conversation_context = ""
         if recent_messages:
             conversation_context = "\nRecent conversation:\n"
             for msg in recent_messages[-5:]:
-                role = "Buyer" if msg.get("role") == "user" else "Danny"
+                role = "Buyer" if msg.get("role") == "user" else "Jess"
                 conversation_context += f"  {role}: {msg.get('content', '')}\n"
 
         prompt = (
-            f"You are Danny, a message composer for Warehouse Exchange, a warehouse leasing platform.\n\n"
+            f"You are Jess, a message composer for Warehouse Exchange, a warehouse leasing platform.\n\n"
             f"Your job: take a raw answer from the team and compose a professional SMS reply for the buyer.\n"
             f"Maximum length: {max_length} characters\n\n"
             f"{question_context}"
+            f"{location_context}"
             f"Raw answer from team: {raw_answer}\n"
             f"{conversation_context}\n"
             f"## STRICT RULES:\n"
             f"1. DO NOT INVENT FACTS — only include information from the raw answer\n"
             f"2. INCLUDE QUESTION CONTEXT — the buyer may not remember what they asked "
             f"(it could be hours or days later). Briefly reference the question before giving the answer.\n"
-            f"   - Good: 'About EV charging, yes this warehouse has 4 Level 2 stations.'\n"
-            f"   - Good: 'You asked about ceiling height. It is 32 feet clear.'\n"
-            f"   - Bad: 'Got an answer on your question: 32 feet' (no context)\n"
-            f"   - Bad: 'It does have EV' (too vague, no context)\n"
-            f"3. TRUST THE TEAM'S ANSWER — do not question or soften factual answers\n"
-            f"4. WAREHOUSE EXCHANGE BROKER TONE (you are Danny) — professional, friendly, helpful. Not too formal, not too casual.\n"
-            f"5. BE CONCISE — SMS should be short and clear\n"
-            f"6. No emojis. Never reveal you are AI.\n"
-            f"7. Must be under {max_length} characters\n"
-            f"8. PLAIN TEXT ONLY — no markdown, no special formatting\n"
-            f"9. NEVER use em-dashes. Use commas or periods instead.\n"
-            f"10. AVOID REDUNDANCY — don't repeat info already in the conversation\n\n"
+            f"3. INCLUDE PROPERTY LOCATION — if a property location is provided, mention it so the buyer "
+            f"remembers which warehouse this is about. Use natural phrasing like 'for the warehouse in [city]'.\n"
+            f"   - Good: 'About EV charging at the warehouse in Los Angeles, yes it has 4 Level 2 stations.'\n"
+            f"   - Good: 'For the warehouse in Dallas you asked about, the ceiling height is 32 feet clear.'\n"
+            f"   - Bad: 'Got an answer on your question: 32 feet' (no context, no location)\n"
+            f"   - Bad: 'It does have EV' (too vague, no context, no location)\n"
+            f"4. TRUST THE TEAM'S ANSWER — do not question or soften factual answers\n"
+            f"5. WAREHOUSE EXCHANGE BROKER TONE (you are Jess) — professional, friendly, helpful. Not too formal, not too casual.\n"
+            f"6. BE CONCISE — SMS should be short and clear\n"
+            f"7. No emojis. Never reveal you are AI.\n"
+            f"8. Must be under {max_length} characters\n"
+            f"9. PLAIN TEXT ONLY — no markdown, no special formatting\n"
+            f"10. NEVER use em-dashes. Use commas or periods instead.\n"
+            f"11. AVOID REDUNDANCY — don't repeat info already in the conversation\n\n"
             f"Output ONLY the SMS message text, nothing else.\n"
             f"If the raw answer is completely unusable, output exactly: [CANNOT_POLISH]"
         )

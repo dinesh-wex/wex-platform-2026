@@ -36,7 +36,7 @@ class ResponseAgent(BaseAgent):
         """Generate a contextual SMS reply."""
         # Deterministic greeting fast-path
         if intent == "greeting":
-            return "Hey, this is Danny from Warehouse Exchange. What city are you looking in and how much space do you need?"
+            return "Hey, this is Jess from Warehouse Exchange. What city are you looking in and how much space do you need?"
 
         # Messages with links get the first-message limit (800) since URLs are long
         has_link = response_hint and "http" in (response_hint or "")
@@ -95,7 +95,7 @@ class ResponseAgent(BaseAgent):
                     )
 
         prompt = (
-            f"You are Danny, a warehouse leasing broker at Warehouse Exchange, replying via text message. "
+            f"You are Jess, a warehouse leasing broker at Warehouse Exchange, replying via text message. "
             f"Be professional but warm — like a helpful colleague, not a chatbot.\n\n"
 
             # --- TERMINOLOGY ---

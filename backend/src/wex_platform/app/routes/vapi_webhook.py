@@ -203,6 +203,29 @@ async def _handle_tool_calls(message: dict, db: AsyncSession) -> JSONResponse:
             ]
         })
 
+    # Extract conversation transcript from Vapi message so tool handlers
+    # can access the buyer's actual question (not just topic slugs).
+    # Vapi sends the conversation in message.artifact.messages during tool calls.
+    # Normalize Vapi format ("message" field, "bot" role) to our standard
+    # ("content" field, "assistant" role) so downstream code is consistent.
+    artifact_messages = message.get("artifact", {}).get("messages")
+    if isinstance(artifact_messages, list) and artifact_messages:
+        # Log first few raw messages to understand Vapi's format
+        for i, raw_msg in enumerate(artifact_messages[:3]):
+            logger.info("Vapi artifact msg[%d] keys=%s role=%s", i, list(raw_msg.keys()) if isinstance(raw_msg, dict) else type(raw_msg), raw_msg.get("role") if isinstance(raw_msg, dict) else "N/A")
+
+        normalized = []
+        for msg in artifact_messages:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", "")
+            text = msg.get("content") or msg.get("message") or ""
+            if role == "bot":
+                role = "assistant"
+            normalized.append({"role": role, "content": text})
+        call_state.call_transcript = normalized
+        logger.info("Saved %d transcript messages from artifact", len(normalized))
+
     from wex_platform.services.voice_tool_handlers import VoiceToolHandlers
     handlers = VoiceToolHandlers(db=db, call_state=call_state)
 
@@ -296,7 +319,21 @@ async def _handle_end_of_call(message: dict, db: AsyncSession) -> JSONResponse:
     call_state.call_ended_at = datetime.now(timezone.utc)
     call_state.call_duration_seconds = message.get("durationSeconds")
     call_state.call_summary = message.get("summary")
-    call_state.call_transcript = message.get("transcript")
+    # Normalize Vapi transcript format to our standard
+    raw_transcript = message.get("transcript")
+    if isinstance(raw_transcript, list):
+        normalized = []
+        for msg in raw_transcript:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", "")
+            text = msg.get("content") or msg.get("message") or ""
+            if role == "bot":
+                role = "assistant"
+            normalized.append({"role": role, "content": text})
+        call_state.call_transcript = normalized
+    else:
+        call_state.call_transcript = raw_transcript
     call_state.recording_url = message.get("recordingUrl") or call.get("recordingUrl")
 
     # Determine SMS recipient and greeting
@@ -316,6 +353,17 @@ async def _handle_end_of_call(message: dict, db: AsyncSession) -> JSONResponse:
         link = f"{settings.frontend_url}/buyer/options?session={call_state.search_session_token}"
         sms_text = f"{name_prefix}it's Jess from Warehouse Exchange. Here are the options we discussed: {link}"
         await _send_follow_up_sms(sms_phone, sms_text, call_state)
+
+    # Send deferred escalation emails for any questions asked during the call.
+    # Voice escalations are batched — emails deferred until call ends so we
+    # don't spam ops while the buyer is still talking.
+    if call_state.pending_escalations:
+        try:
+            from wex_platform.services.escalation_service import EscalationService
+            esc_service = EscalationService(db)
+            await esc_service.send_pending_voice_emails(call_state)
+        except Exception:
+            logger.exception("Failed to send deferred voice escalation emails")
 
     await db.commit()
     return JSONResponse({"ok": True})

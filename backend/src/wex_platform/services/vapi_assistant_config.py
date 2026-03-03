@@ -309,7 +309,19 @@ def _build_tool_definitions() -> list[dict]:
                         "topics": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "What to look up: dock_doors, office, clear_height, parking, pricing, availability, access_hours, sprinkler, climate_control, year_built, construction_type"
+                            "description": (
+                                "What to look up. Use these exact topic names: "
+                                "clear_height_ft, dock_doors, dock_doors_receiving, dock_doors_shipping, "
+                                "power_supply, has_office, has_sprinkler, "
+                                "parking_spaces, trailer_parking, "
+                                "building_size_sqft, year_built, year_renovated, "
+                                "construction_type, zoning, rail_served, fenced_yard, "
+                                "supplier_rate_per_sqft, available_sqft, available_from, available_to, "
+                                "lot_size_acres, activity_tier. "
+                                "For topics NOT in this list (e.g. ev_charging, security, "
+                                "loading_capacity, hazmat, climate_control, access_hours, "
+                                "insurance, lease_terms), use a descriptive snake_case name."
+                            )
                         }
                     },
                     "required": ["option_number"]

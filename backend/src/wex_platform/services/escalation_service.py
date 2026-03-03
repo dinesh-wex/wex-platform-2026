@@ -86,10 +86,105 @@ class EscalationService:
         }
         state.pending_escalations = pending
 
-        # After thread creation, send email notification (fire-and-forget)
-        asyncio.ensure_future(self._send_escalation_email(thread, state))
+        # Send email notification — but defer voice calls to end-of-call
+        # so we can batch multiple questions into one email.
+        if source_type != "voice":
+            asyncio.ensure_future(self._send_escalation_email(thread, state))
 
         return {"escalated": True, "answer": None, "thread_id": thread.id}
+
+    async def send_pending_voice_emails(self, state) -> None:
+        """Send escalation emails for all pending voice threads (called at end-of-call).
+
+        For each pending thread:
+        1. Compose a clean question from the topic label + call transcript via LLM
+        2. Update the thread's question_text with the clean version
+        3. Send the escalation email
+        """
+        pending = state.pending_escalations or {}
+        if not pending:
+            return
+
+        # Get transcript for question composition context
+        transcript = getattr(state, "call_transcript", None) or []
+
+        for thread_id, _info in pending.items():
+            try:
+                result = await self.db.execute(
+                    select(EscalationThread).where(EscalationThread.id == thread_id)
+                )
+                thread = result.scalar_one_or_none()
+                if thread and thread.status == "pending":
+                    # Compose a clean question using LLM (topic label + transcript)
+                    clean_q = await self._compose_clean_question(
+                        topic_label=thread.question_text or "",
+                        field_key=thread.field_key,
+                        transcript=transcript,
+                    )
+                    if clean_q:
+                        thread.question_text = clean_q
+
+                    await self._send_escalation_email(thread, state)
+                    logger.info("Sent deferred voice escalation email for thread %s", thread_id)
+            except Exception:
+                logger.exception("Failed to send deferred email for thread %s", thread_id)
+
+    async def _compose_clean_question(
+        self, topic_label: str, field_key: str | None, transcript: list
+    ) -> str | None:
+        """Use LLM to compose a clear escalation question from topic + transcript.
+
+        Returns a clean question like "Does this warehouse have EV charging stations?"
+        or None if composition fails (caller should keep the original).
+        """
+        try:
+            from wex_platform.agents.base import BaseAgent
+
+            # Extract last user message from transcript for context
+            user_msg = ""
+            if isinstance(transcript, list):
+                for entry in reversed(transcript):
+                    if isinstance(entry, dict) and entry.get("role") == "user":
+                        user_msg = (entry.get("content") or entry.get("message") or "").strip()
+                        if user_msg:
+                            break
+
+            agent = BaseAgent(
+                agent_name="question_composer",
+                model_name="gemini-3-flash-preview",
+                temperature=0.2,
+            )
+            prompt = "A buyer called about a warehouse and asked a question.\n"
+            if user_msg:
+                prompt += (
+                    f"The buyer's actual words (speech-to-text): \"{user_msg}\"\n"
+                    f"Topic hint from AI: {topic_label} (may be wrong — trust the buyer's words)\n"
+                )
+            else:
+                prompt += f"The AI identified the topic as: {topic_label}\n"
+
+            prompt += (
+                f"\nCompose a clear, professional 1-sentence question to show the warehouse owner.\n"
+                f"IMPORTANT: Base the question on what the BUYER actually said, not just the topic hint.\n"
+                f"The topic hint may be a misclassification — the buyer's words are the ground truth.\n"
+                f"Examples:\n"
+                f"  - \"Does this warehouse have EV charging stations?\"\n"
+                f"  - \"What is the clear height of this warehouse?\"\n"
+                f"  - \"Is trailer parking available at this property?\"\n"
+                f"  - \"What type of construction is this warehouse?\"\n"
+                f"Output ONLY the question, nothing else."
+            )
+
+            result = await agent.generate(prompt=prompt)
+            if result.ok and result.data:
+                clean = result.data.strip().strip('"').strip("'")
+                if clean and len(clean) > 5:
+                    logger.info("Composed clean question: %s → %s", topic_label, clean)
+                    return clean
+        except Exception:
+            logger.exception("Failed to compose clean question for topic=%s", topic_label)
+
+        return None  # Fallback: keep original
 
     async def _send_escalation_email(self, thread, state) -> None:
         """Fire-and-forget email notification for new escalation."""
