@@ -134,10 +134,10 @@ class BaseAgent:
         """
         start_time = time.time()
         try:
-            from wex_platform.infra.gemini_client import get_model
+            from wex_platform.infra.gemini_client import get_client, build_generate_config
 
-            model = get_model(
-                model_name=self.model_name,
+            client = get_client()
+            config = build_generate_config(
                 temperature=self.temperature,
                 json_mode=json_mode,
                 response_schema=response_schema,
@@ -145,8 +145,12 @@ class BaseAgent:
             )
 
             response = await asyncio.wait_for(
-                model.generate_content_async(prompt),
-                timeout=120,  # 2 min hard limit — prevents indefinite hangs
+                client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=config,
+                ),
+                timeout=15,  # 15s limit — fall back to base scores quickly
             )
             latency_ms = int((time.time() - start_time) * 1000)
 
@@ -271,38 +275,37 @@ class BaseAgent:
         """
         start_time = time.time()
         try:
-            from wex_platform.infra.gemini_client import get_model
+            from wex_platform.infra.gemini_client import get_client, build_generate_config
 
             if not messages:
                 return AgentResult.failure("No messages provided for chat.")
 
-            model = get_model(
-                model_name=self.model_name,
+            client = get_client()
+            config = build_generate_config(
                 temperature=self.temperature,
                 system_instruction=system_instruction,
             )
 
-            # Split history and the latest user turn
-            history = messages[:-1]
-            last_message = messages[-1]
+            # Build contents list from messages for multi-turn
+            from google.genai import types as genai_types
+            contents = []
+            for msg in messages:
+                role = msg.get("role", "user")
+                parts = msg.get("parts", [])
+                text = "\n".join(str(p) for p in parts)
+                contents.append(genai_types.Content(
+                    role=role,
+                    parts=[genai_types.Part(text=text)],
+                ))
 
-            # Build history objects compatible with the SDK
-            chat_history = []
-            for msg in history:
-                chat_history.append(
-                    {
-                        "role": msg.get("role", "user"),
-                        "parts": msg.get("parts", []),
-                    }
-                )
-
-            chat_session = model.start_chat(history=chat_history)
-
-            # The latest message's parts joined as text
-            last_parts = last_message.get("parts", [])
-            user_text = "\n".join(str(p) for p in last_parts)
-
-            response = await chat_session.send_message_async(user_text)
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=contents,
+                    config=config,
+                ),
+                timeout=15,
+            )
             latency_ms = int((time.time() - start_time) * 1000)
 
             tokens_used = 0

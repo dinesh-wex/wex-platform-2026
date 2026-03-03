@@ -254,7 +254,7 @@ async def _run_ai_pipeline(db: AsyncSession, profile: PropertyProfile, raw_conte
     Step 2 (Gemini 2.5 Flash): Extract structured fields from summary → DB columns
     """
     try:
-        from wex_platform.infra.gemini_client import get_model
+        from wex_platform.infra.gemini_client import get_client, build_generate_config
 
         existing_summary = profile.ai_profile_summary or ""
 
@@ -280,19 +280,23 @@ async def _run_ai_pipeline(db: AsyncSession, profile: PropertyProfile, raw_conte
         else:
             step1_input = f"RAW PROPERTY DATA:\n{raw_context}"
 
-        model_step1 = get_model(
-            model_name="gemini-3-flash-preview",
+        client = get_client()
+        config_step1 = build_generate_config(
             temperature=0.3,
             system_instruction=step1_prompt,
         )
-        response1 = await asyncio.to_thread(model_step1.generate_content, step1_input)
+        response1 = await client.aio.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=step1_input,
+            config=config_step1,
+        )
         summary = response1.text.strip() if response1.text else ""
 
         if not summary:
             logger.warning("[Profile AI] Step 1 returned empty summary for session=%s", profile.session_id)
             return
 
-        # --- Step 2: Gemini 2.5 Flash — Extract structured fields ---
+        # --- Step 2: Gemini 3 Flash — Extract structured fields ---
         fields_list = ", ".join(EXTRACTABLE_FIELDS)
         step2_prompt = (
             "You are a data extraction tool. Given a property profile summary, "
@@ -309,13 +313,16 @@ async def _run_ai_pipeline(db: AsyncSession, profile: PropertyProfile, raw_conte
             "- Return ONLY valid JSON, no markdown fences\n"
         )
 
-        model_step2 = get_model(
-            model_name="gemini-3-flash-preview",
+        config_step2 = build_generate_config(
             temperature=0.1,
             json_mode=True,
             system_instruction=step2_prompt,
         )
-        response2 = await asyncio.to_thread(model_step2.generate_content, f"PROPERTY PROFILE:\n{summary}")
+        response2 = await client.aio.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=f"PROPERTY PROFILE:\n{summary}",
+            config=config_step2,
+        )
         raw_json = response2.text.strip() if response2.text else ""
 
         if not raw_json:

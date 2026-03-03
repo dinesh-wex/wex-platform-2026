@@ -1,8 +1,14 @@
-"""Gemini model factory for WEx agents."""
+"""Gemini model factory for WEx agents.
+
+Uses the ``google-genai`` SDK (``from google import genai``) which is the
+current client for Gemini 3-series models.
+"""
 
 import copy
+from typing import Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from wex_platform.app.config import get_settings
 
@@ -48,36 +54,46 @@ def _inline_defs(schema: dict) -> dict:
     return _resolve(schema)
 
 
-def get_model(
-    model_name: str = "gemini-3-flash-preview",
+# ---------------------------------------------------------------------------
+# Module-level client singleton
+# ---------------------------------------------------------------------------
+_client: Optional[genai.Client] = None
+
+
+def get_client() -> genai.Client:
+    """Return a singleton ``genai.Client`` configured with the API key."""
+    global _client
+    if _client is None:
+        settings = get_settings()
+        _client = genai.Client(api_key=settings.gemini_api_key)
+    return _client
+
+
+def build_generate_config(
     temperature: float = 0.7,
     json_mode: bool = False,
     response_schema: dict | None = None,
     system_instruction: str | None = None,
-):
-    """Return a configured Gemini GenerativeModel instance.
+) -> types.GenerateContentConfig:
+    """Build a ``GenerateContentConfig`` for ``client.models.generate_content``.
 
     Args:
-        model_name: Gemini model identifier.
         temperature: Generation temperature (0.0-2.0).
         json_mode: If True, constrain output to valid JSON.
         response_schema: Optional JSON Schema dict for structured output.
         system_instruction: Optional system-level instruction.
 
     Returns:
-        A ``google.generativeai.GenerativeModel`` ready for generation.
+        A ``types.GenerateContentConfig`` instance.
     """
-    settings = get_settings()
-    genai.configure(api_key=settings.gemini_api_key)
+    kwargs: dict = {"temperature": temperature}
 
-    generation_config = {"temperature": temperature}
     if json_mode:
-        generation_config["response_mime_type"] = "application/json"
+        kwargs["response_mime_type"] = "application/json"
         if response_schema:
-            generation_config["response_schema"] = _inline_defs(response_schema)
+            kwargs["response_schema"] = _inline_defs(response_schema)
 
-    return genai.GenerativeModel(
-        model_name=model_name,
-        generation_config=generation_config,
-        system_instruction=system_instruction,
-    )
+    if system_instruction:
+        kwargs["system_instruction"] = system_instruction
+
+    return types.GenerateContentConfig(**kwargs)
