@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # CORS / Frontend
     cors_origins: str = "http://localhost:3000"
     frontend_url: str = "https://warehouseexchange.com"
+    backend_url: str = ""  # Cloud Run backend URL for Vapi webhooks; falls back to frontend_url
 
     # Aircall
     aircall_number_id: str = ""

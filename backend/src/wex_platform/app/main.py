@@ -42,7 +42,8 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     if settings.vapi_api_key:
         try:
-            await register_vapi_phone_number(f"{settings.frontend_url}/api/voice/webhook")
+            base = settings.backend_url or settings.frontend_url
+            await register_vapi_phone_number(f"{base}/api/voice/webhook")
         except Exception as e:
             logger.warning("Failed to register Vapi phone number: %s", e)
 

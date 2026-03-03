@@ -89,7 +89,7 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
             },
             "firstMessage": first_message,
             "server": {
-                "url": f"{settings.frontend_url}/api/voice/webhook",
+                "url": f"{settings.backend_url or settings.frontend_url}/api/voice/webhook",
             },
             "endCallFunctionEnabled": True,
             "recordingEnabled": True,
