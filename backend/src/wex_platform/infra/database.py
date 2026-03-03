@@ -45,9 +45,30 @@ async def get_db():
 
 async def init_db():
     """Create all tables (for local dev). Use Alembic for production migrations."""
+    import asyncio
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     # Ensure SMS and voice models are registered with Base.metadata
     import wex_platform.domain.sms_models  # noqa: F401
     import wex_platform.domain.voice_models  # noqa: F401
+
+    if not _is_sqlite:
+        # Production (Cloud SQL): retry connection — proxy socket needs time
+        for attempt in range(1, 6):
+            try:
+                async with engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+                logger.info("Database initialized (attempt %d)", attempt)
+                break
+            except Exception as e:
+                logger.warning("DB init attempt %d failed: %s", attempt, e)
+                if attempt < 5:
+                    await asyncio.sleep(2 * attempt)
+                else:
+                    raise
+        return
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
