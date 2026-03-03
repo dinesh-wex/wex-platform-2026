@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 # Resolve .env from backend/ regardless of CWD
@@ -53,6 +54,19 @@ class Settings(BaseSettings):
     debug: bool = True
 
     model_config = {"env_file": str(_ENV_FILE), "env_file_encoding": "utf-8", "extra": "ignore"}
+
+    @model_validator(mode="after")
+    def _strip_strings(self) -> "Settings":
+        """Strip leading/trailing whitespace from all str fields.
+
+        GCP Secret Manager may inject trailing spaces or newlines when
+        secrets are created from the console or CLI on Windows.
+        """
+        for field_name in self.model_fields:
+            val = getattr(self, field_name)
+            if isinstance(val, str):
+                object.__setattr__(self, field_name, val.strip())
+        return self
 
     @property
     def cors_origins_list(self) -> list[str]:
