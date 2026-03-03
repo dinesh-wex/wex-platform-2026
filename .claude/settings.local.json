@@ -7,7 +7,32 @@
       "Bash(curl:*)",
       "Bash(pip show:*)",
       "Bash(python -m pip:*)",
-      "Bash(PYTHONPATH=src python:*)"
+      "Bash(PYTHONPATH=src python:*)",
+      "Bash(NODE_OPTIONS=\"--max-old-space-size=4096\" npx next build:*)",
+      "Bash(NODE_OPTIONS=\"--max-old-space-size=8192\" npx next build:*)",
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(wc:*)",
+      "Bash(for f in \"/c/Users/deser/Github/Warehouse Exchange/WEx Platform 2026/backend/src/wex_platform/agents\"/*.py)",
+      "Bash(do wc -l \"$f\")",
+      "Bash(done)",
+      "Bash(npm install:*)",
+      "Bash(conda run:*)",
+      "Bash(sqlite3:*)",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1MzE4M2U3ZS0wMjE0LTQ0MzEtOWU0NC04MzZiNGVmNTE4ZjQiLCJyb2xlIjoic3VwcGxpZXIiLCJleHAiOjE3NzE5ODczNTF9.1kdW5xpBKD_0vcc3gvTQpPy07Y_LS2gkQRpVz6jjyqw\")",
+      "Bash(python -m pytest:*)",
+      "Bash(xxd:*)",
+      "Bash(DB=\"c:/Users/deser/Github/Warehouse Exchange/WEx Platform 2026/backend/wex_platform.db\")",
+      "Bash(__NEW_LINE_ff6f5d7ed9c6c2d9__ sqlite3:*)",
+      "Bash(__NEW_LINE_ff6f5d7ed9c6c2d9__ echo \"Done with data migration\")",
+      "Bash(__NEW_LINE_f4db73670d6ce855__ echo \"=== COMPANIES ===\")",
+      "Bash(__NEW_LINE_f4db73670d6ce855__ echo \"\")",
+      "Bash(python scripts/backfill_coordinates.py:*)",
+      "Bash(netstat:*)",
+      "Bash(python:*)",
+      "Bash(pip:*)",
+      "Bash(# The API created users \\(alias_test, newbuyer_qc\\) aren''t in ANY of the 3 DBs # They must be in a completely different location # Let''s check the running server''s process and its working directory tasklist /FI \"\"IMAGENAME eq python.exe\"\" || ps aux)",
+      "Bash(# Search more broadly for the DB find \"\"/c/Users/deser\"\" -name \"\"wex_platform.db\"\" find \"\"/c/Users/deser\"\" -name \"\"*.db\"\" -newer \"\"/c/Users/deser/Github/Warehouse Exchange/WEx Platform 2026/backend/wex_platform.db\"\")",
+      "Bash(pkill:*)"
     ]
   }
 }

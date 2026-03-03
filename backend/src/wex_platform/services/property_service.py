@@ -2,7 +2,7 @@
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ async def create_warehouse_from_search(
     """Create Warehouse + TruthCore + ContextualMemory from search results."""
 
     warehouse_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Use geocoding data when available, fall back to raw address / Gemini data
     resolved_address = geocoding.formatted_address if geocoding.is_valid else raw_address

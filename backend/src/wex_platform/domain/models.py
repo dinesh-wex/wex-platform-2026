@@ -1,9 +1,9 @@
 """SQLAlchemy ORM models for the WEx Platform.
 
-All models use SQLite-compatible types:
+All models use cross-DB-compatible types:
 - String(36) for UUID primary keys
 - JSON for structured data (no JSONB)
-- DateTime for timestamps (no TIMESTAMPTZ)
+- DateTime(timezone=True) for timestamps (PostgreSQL + SQLite)
 """
 
 import uuid
@@ -47,8 +47,8 @@ class User(Base):
     role = Column(String(20), nullable=False, default="supplier")  # supplier, buyer, admin, broker
     is_active = Column(Boolean, default=True)
     email_verified = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=func.now())
-    last_login_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
     company_id = Column(String(36), ForeignKey("companies.id"), nullable=True)
     company_role = Column(String(20), nullable=True, default="admin")
 
@@ -69,7 +69,7 @@ class Company(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
     type = Column(String(20), nullable=False, default="individual")  # individual, business
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     users = relationship("User", back_populates="company_ref")
@@ -112,13 +112,13 @@ class Warehouse(Base):
     description = Column(Text, nullable=True)
     source_url = Column(String(500))
     supplier_status = Column(String(50), default="third_party", index=True)
-    earncheck_completed_at = Column(DateTime)
-    onboarded_at = Column(DateTime)
-    last_outreach_at = Column(DateTime)
+    earncheck_completed_at = Column(DateTime(timezone=True))
+    onboarded_at = Column(DateTime(timezone=True))
+    last_outreach_at = Column(DateTime(timezone=True))
     outreach_count = Column(Integer, default=0)
     last_response_time_hours = Column(Float)
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationships
     company_ref = relationship("Company", back_populates="warehouses")
@@ -141,8 +141,8 @@ class TruthCore(Base):
     warehouse_id = Column(
         String(36), ForeignKey("warehouses.id"), unique=True, nullable=False
     )
-    available_from = Column(DateTime)
-    available_to = Column(DateTime)
+    available_from = Column(DateTime(timezone=True))
+    available_to = Column(DateTime(timezone=True))
     min_term_months = Column(Integer, default=1)
     max_term_months = Column(Integer, default=12)
     min_sqft = Column(Integer, nullable=False)
@@ -153,7 +153,7 @@ class TruthCore(Base):
     supplier_rate_max = Column(Float)
     buyer_rate_per_sqft = Column(Float, nullable=True)
     activation_status = Column(String(10), default="off")
-    toggled_at = Column(DateTime)
+    toggled_at = Column(DateTime(timezone=True))
     toggle_reason = Column(Text)
     tour_readiness = Column(String(50), default="48_hours")
     dock_doors_receiving = Column(Integer, default=0)
@@ -165,8 +165,8 @@ class TruthCore(Base):
     has_sprinkler = Column(Boolean, default=False)
     power_supply = Column(String(100))
     trust_level = Column(Integer, default=0)
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationships
     warehouse = relationship("Warehouse", back_populates="truth_core")
@@ -191,7 +191,7 @@ class ContextualMemory(Base):
     source = Column(String(50))
     confidence = Column(Float, default=1.0)
     metadata_ = Column("metadata", JSON, default={})
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     warehouse = relationship("Warehouse", back_populates="memories")
@@ -211,9 +211,9 @@ class SupplierAgreement(Base):
     agreement_version = Column(String(20), default="1.0")
     status = Column(String(20), default="draft")
     terms_json = Column(JSON, nullable=False)
-    signed_at = Column(DateTime)
-    expires_at = Column(DateTime)
-    created_at = Column(DateTime, default=func.now())
+    signed_at = Column(DateTime(timezone=True))
+    expires_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     warehouse = relationship("Warehouse", back_populates="supplier_agreements")
@@ -231,10 +231,10 @@ class SupplierLedger(Base):
     entry_type = Column(String(50))
     amount = Column(Float, nullable=False)
     description = Column(Text)
-    period_start = Column(DateTime)
-    period_end = Column(DateTime)
+    period_start = Column(DateTime(timezone=True))
+    period_end = Column(DateTime(timezone=True))
     status = Column(String(20), default="pending")
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     warehouse = relationship("Warehouse", back_populates="supplier_ledger_entries")
@@ -255,7 +255,7 @@ class Buyer(Base):
     company = Column(String(255))
     email = Column(String(255))
     phone = Column(String(50))
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     needs = relationship("BuyerNeed", back_populates="buyer")
@@ -281,13 +281,13 @@ class BuyerNeed(Base):
     min_sqft = Column(Integer)
     max_sqft = Column(Integer)
     use_type = Column(String(50))
-    needed_from = Column(DateTime)
+    needed_from = Column(DateTime(timezone=True))
     duration_months = Column(Integer)
     max_budget_per_sqft = Column(Float)
     requirements = Column(JSON, default={})
     status = Column(String(20), default="active")
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationships
     buyer = relationship("Buyer", back_populates="needs")
@@ -305,8 +305,8 @@ class BuyerConversation(Base):
     buyer_need_id = Column(String(36), ForeignKey("buyer_needs.id"))
     messages = Column(JSON, default=[])
     status = Column(String(20), default="active")
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationships
     buyer = relationship("Buyer", back_populates="conversations")
@@ -327,8 +327,8 @@ class BuyerAgreement(Base):
     buyer_rate_per_sqft = Column(Float, nullable=True)
     terms_json = Column(JSON, nullable=True)
     status = Column(String(20), default="draft")
-    signed_at = Column(DateTime)
-    created_at = Column(DateTime, default=func.now())
+    signed_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     buyer = relationship("Buyer", back_populates="buyer_agreements")
@@ -345,10 +345,10 @@ class BuyerLedger(Base):
     entry_type = Column(String(50))
     amount = Column(Float, nullable=False)
     description = Column(Text)
-    period_start = Column(DateTime)
-    period_end = Column(DateTime)
+    period_start = Column(DateTime(timezone=True))
+    period_end = Column(DateTime(timezone=True))
     status = Column(String(20), default="pending")
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     buyer = relationship("Buyer", back_populates="buyer_ledger_entries")
@@ -374,8 +374,8 @@ class Match(Base):
     scoring_breakdown = Column(JSON)
     status = Column(String(20), default="pending")
     declined_reason = Column(Text)
-    presented_at = Column(DateTime)
-    created_at = Column(DateTime, default=func.now())
+    presented_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     buyer_need = relationship("BuyerNeed", back_populates="matches")
@@ -396,33 +396,33 @@ class Deal(Base):
     warehouse_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
     buyer_id = Column(String(36), ForeignKey("buyers.id"), nullable=True)  # NULL for anonymous buyers
     sqft_allocated = Column(Integer, nullable=False)
-    start_date = Column(DateTime, nullable=False)
-    end_date = Column(DateTime)
+    start_date = Column(DateTime(timezone=True), nullable=False)
+    end_date = Column(DateTime(timezone=True))
     term_months = Column(Integer)
     supplier_rate = Column(Float, nullable=False)
     buyer_rate = Column(Float, nullable=False)
     spread_pct = Column(Float)
     monthly_revenue = Column(Float)
-    tour_scheduled_at = Column(DateTime)
-    tour_completed_at = Column(DateTime)
+    tour_scheduled_at = Column(DateTime(timezone=True))
+    tour_completed_at = Column(DateTime(timezone=True))
     tour_outcome = Column(String(50))
     tour_pass_reason = Column(Text)
     # Anti-circumvention tour flow fields
-    guarantee_signed_at = Column(DateTime)
-    address_revealed_at = Column(DateTime)
+    guarantee_signed_at = Column(DateTime(timezone=True))
+    address_revealed_at = Column(DateTime(timezone=True))
     tour_status = Column(String(30))  # requested / confirmed / completed / cancelled / rescheduled
     tour_preferred_date = Column(String(20))
     tour_preferred_time = Column(String(20))
     tour_notes = Column(Text)
-    supplier_confirmed_at = Column(DateTime)
+    supplier_confirmed_at = Column(DateTime(timezone=True))
     supplier_proposed_date = Column(String(20))
     supplier_proposed_time = Column(String(20))
-    follow_up_sent_at = Column(DateTime)
+    follow_up_sent_at = Column(DateTime(timezone=True))
     follow_up_response = Column(Text)
     status = Column(String(30), default="terms_presented")
     deal_type = Column(String(20), default="standard")
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationships
     match = relationship("Match", back_populates="deals")
@@ -442,7 +442,7 @@ class DealEvent(Base):
     deal_id = Column(String(36), ForeignKey("deals.id"), nullable=False)
     event_type = Column(String(100), nullable=False)
     details = Column(JSON, default={})
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     deal = relationship("Deal", back_populates="events")
@@ -464,8 +464,8 @@ class ToggleHistory(Base):
     new_status = Column(String(10))
     reason = Column(Text)
     in_flight_matches = Column(Integer, default=0)
-    grace_period_until = Column(DateTime)
-    created_at = Column(DateTime, default=func.now())
+    grace_period_until = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     warehouse = relationship("Warehouse", back_populates="toggle_history")
@@ -485,7 +485,7 @@ class TruthCoreChange(Base):
     changed_by = Column(String(100))
     change_reason = Column(Text)
     toggle_was_on = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     truth_core = relationship("TruthCore", back_populates="truth_core_changes")
@@ -511,7 +511,7 @@ class InstantBookScore(Base):
     composite_score = Column(Float)
     instant_book_eligible = Column(Boolean)
     threshold_used = Column(Integer, default=75)
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     match = relationship("Match", back_populates="instant_book_score")
@@ -528,7 +528,7 @@ class InsuranceCoverage(Base):
     coverage_status = Column(String(20), default="active")
     coverage_amount = Column(Float)
     monthly_premium = Column(Float)
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     deal = relationship("Deal", back_populates="insurance_coverages")
@@ -547,8 +547,8 @@ class Deposit(Base):
     amount = Column(Float, nullable=False)
     status = Column(String(20), default="held")
     applied_reason = Column(Text)
-    created_at = Column(DateTime, default=func.now())
-    released_at = Column(DateTime)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    released_at = Column(DateTime(timezone=True))
 
     # Relationships
     deal = relationship("Deal", back_populates="deposits")
@@ -575,7 +575,7 @@ class AgentLog(Base):
     related_warehouse_id = Column(String(36))
     related_buyer_id = Column(String(36))
     related_deal_id = Column(String(36))
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
 
 class SmokeTestEvent(Base):
@@ -663,9 +663,9 @@ class DLAToken(Base):
     status = Column(
         String(30), default="pending"
     )  # pending, interested, rate_decided, confirmed, declined, expired
-    expires_at = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, default=func.now())
-    responded_at = Column(DateTime)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    responded_at = Column(DateTime(timezone=True))
     outreach_channel = Column(String(20), default="sms")  # sms, email
     agreement_ref = Column(String(255))  # signed agreement reference
     decline_reason = Column(Text)
@@ -765,8 +765,8 @@ class SearchSession(Base):
     buyer_need_id = Column(String(36), ForeignKey("buyer_needs.id"), nullable=True)
     buyer_id = Column(String(36), ForeignKey("buyers.id"), nullable=True)
     status = Column(String(20), default="active")      # active, promoted, expired
-    expires_at = Column(DateTime)
-    created_at = Column(DateTime, default=func.now())
+    expires_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     buyer_need = relationship("BuyerNeed")
 
@@ -787,7 +787,7 @@ class NearMiss(Base):
     match_score = Column(Float, nullable=True)
     outcome = Column(String(50))  # NearMissOutcome
     reasons = Column(JSON)  # array of {field, detail, fix}
-    evaluated_at = Column(DateTime)
+    evaluated_at = Column(DateTime(timezone=True))
 
     # Relationships
     warehouse = relationship("Warehouse", backref="near_misses")
@@ -805,14 +805,14 @@ class SupplierResponse(Base):
     deal_id = Column(String(36), ForeignKey("deals.id"), nullable=True)
     dla_token = Column(String(64), nullable=True)
     event_type = Column(String(50))  # SupplierResponseEventType
-    sent_at = Column(DateTime)
-    deadline_at = Column(DateTime)
-    responded_at = Column(DateTime, nullable=True)
+    sent_at = Column(DateTime(timezone=True))
+    deadline_at = Column(DateTime(timezone=True))
+    responded_at = Column(DateTime(timezone=True), nullable=True)
     response_time_hours = Column(Float, nullable=True)
     outcome = Column(String(50), nullable=True)  # SupplierResponseOutcome
     decline_reason = Column(String(255), nullable=True)
     counter_rate = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     warehouse = relationship("Warehouse", backref="supplier_responses")
@@ -828,13 +828,13 @@ class BuyerEngagement(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     property_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
     buyer_need_id = Column(String(36), ForeignKey("buyer_needs.id"), nullable=False)
-    shown_at = Column(DateTime)
+    shown_at = Column(DateTime(timezone=True))
     position_in_results = Column(Integer)
     tier = Column(String(20))  # ResultTier
     action_taken = Column(String(50), nullable=True)  # BuyerEngagementAction
-    action_at = Column(DateTime, nullable=True)
+    action_at = Column(DateTime(timezone=True), nullable=True)
     time_on_page_seconds = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     warehouse = relationship("Warehouse", backref="buyer_engagements")
@@ -848,8 +848,8 @@ class UploadToken(Base):
 
     token = Column(String(64), primary_key=True)
     property_id = Column(String(36), ForeignKey("warehouses.id"), nullable=False)
-    created_at = Column(DateTime, default=func.now())
-    expires_at = Column(DateTime)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    expires_at = Column(DateTime(timezone=True))
     is_used = Column(Boolean, default=False)
 
     # Relationships
@@ -892,9 +892,9 @@ class Engagement(Base):
     sqft = Column(Integer)
 
     # Deal ping
-    deal_ping_sent_at = Column(DateTime, nullable=True)
-    deal_ping_expires_at = Column(DateTime, nullable=True)
-    deal_ping_responded_at = Column(DateTime, nullable=True)
+    deal_ping_sent_at = Column(DateTime(timezone=True), nullable=True)
+    deal_ping_expires_at = Column(DateTime(timezone=True), nullable=True)
+    deal_ping_responded_at = Column(DateTime(timezone=True), nullable=True)
 
     # Supplier terms (Tier 2)
     supplier_terms_accepted = Column(Boolean, default=False)
@@ -904,20 +904,20 @@ class Engagement(Base):
     buyer_company_name = Column(String(255), nullable=True)
     # buyer_id is null from deal_ping_sent through buyer_accepted.
     # Populated at account_created when buyer creates verified account.
-    account_created_at = Column(DateTime, nullable=True)
+    account_created_at = Column(DateTime(timezone=True), nullable=True)
 
     # Guarantee
-    guarantee_signed_at = Column(DateTime, nullable=True)
+    guarantee_signed_at = Column(DateTime(timezone=True), nullable=True)
     guarantee_ip_address = Column(String(45), nullable=True)
     guarantee_terms_version = Column(String(100), nullable=True)
 
     # Tour
-    tour_requested_at = Column(DateTime, nullable=True)
+    tour_requested_at = Column(DateTime(timezone=True), nullable=True)
     tour_requested_date = Column(Date, nullable=True)
     tour_requested_time = Column(String(20), nullable=True)  # e.g. "10:00 AM"
-    tour_confirmed_at = Column(DateTime, nullable=True)
-    tour_scheduled_date = Column(DateTime, nullable=True)
-    tour_completed_at = Column(DateTime, nullable=True)
+    tour_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    tour_scheduled_date = Column(DateTime(timezone=True), nullable=True)
+    tour_completed_at = Column(DateTime(timezone=True), nullable=True)
     tour_reschedule_count = Column(Integer, default=0)
     tour_rescheduled_date = Column(Date, nullable=True)
     tour_rescheduled_time = Column(String(20), nullable=True)
@@ -925,23 +925,23 @@ class Engagement(Base):
     tour_outcome = Column(String(30), nullable=True)  # TourOutcome
 
     # Instant book
-    instant_book_requested_at = Column(DateTime, nullable=True)
-    instant_book_confirmed_at = Column(DateTime, nullable=True)
+    instant_book_requested_at = Column(DateTime(timezone=True), nullable=True)
+    instant_book_confirmed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Hold
-    hold_expires_at = Column(DateTime, nullable=True)
+    hold_expires_at = Column(DateTime(timezone=True), nullable=True)
     hold_extended = Column(Boolean, default=False)
-    hold_extended_at = Column(DateTime, nullable=True)
-    hold_extended_until = Column(DateTime, nullable=True)
+    hold_extended_at = Column(DateTime(timezone=True), nullable=True)
+    hold_extended_until = Column(DateTime(timezone=True), nullable=True)
     tour_notes = Column(Text, nullable=True)
 
     # Agreement
-    agreement_sent_at = Column(DateTime, nullable=True)
-    agreement_signed_at = Column(DateTime, nullable=True)
+    agreement_sent_at = Column(DateTime(timezone=True), nullable=True)
+    agreement_signed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Onboarding
-    onboarding_started_at = Column(DateTime, nullable=True)
-    onboarding_completed_at = Column(DateTime, nullable=True)
+    onboarding_started_at = Column(DateTime(timezone=True), nullable=True)
+    onboarding_completed_at = Column(DateTime(timezone=True), nullable=True)
     insurance_uploaded = Column(Boolean, default=False)
     company_docs_uploaded = Column(Boolean, default=False)
     payment_method_added = Column(Boolean, default=False)
@@ -954,12 +954,12 @@ class Engagement(Base):
     # Decline
     declined_by = Column(String(20), nullable=True)  # DeclineParty
     decline_reason = Column(String(500), nullable=True)
-    declined_at = Column(DateTime, nullable=True)
+    declined_at = Column(DateTime(timezone=True), nullable=True)
 
     # Cancellation
     cancelled_by = Column(String(20), nullable=True)  # CancelledBy
     cancel_reason = Column(String(500), nullable=True)
-    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
 
     # Admin
     admin_notes = Column(Text, nullable=True)
@@ -967,8 +967,8 @@ class Engagement(Base):
     admin_flag_reason = Column(String(500), nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationships
     events = relationship("EngagementEvent", back_populates="engagement")
@@ -991,7 +991,7 @@ class EngagementEvent(Base):
     from_status = Column(String(50), nullable=True)  # EngagementStatus
     to_status = Column(String(50), nullable=True)  # EngagementStatus
     data = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     engagement = relationship("Engagement", back_populates="events")
@@ -1015,14 +1015,14 @@ class EngagementAgreement(Base):
     monthly_supplier_payout = Column(Numeric(12, 2))
 
     # Signing timestamps
-    sent_at = Column(DateTime, nullable=False)
-    buyer_signed_at = Column(DateTime, nullable=True)
-    supplier_signed_at = Column(DateTime, nullable=True)
-    expires_at = Column(DateTime, nullable=False)
+    sent_at = Column(DateTime(timezone=True), nullable=False)
+    buyer_signed_at = Column(DateTime(timezone=True), nullable=True)
+    supplier_signed_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
 
     # Timestamps
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationships
     engagement = relationship("Engagement", backref="agreements")
@@ -1054,16 +1054,16 @@ class PropertyQuestion(Base):
     final_answer_source = Column(String(20), nullable=True)  # 'ai', 'supplier', 'admin'
 
     # Supplier deadline tracking
-    routed_to_supplier_at = Column(DateTime, nullable=True)
-    supplier_answered_at = Column(DateTime, nullable=True)
-    supplier_deadline_at = Column(DateTime, nullable=True)
+    routed_to_supplier_at = Column(DateTime(timezone=True), nullable=True)
+    supplier_answered_at = Column(DateTime(timezone=True), nullable=True)
+    supplier_deadline_at = Column(DateTime(timezone=True), nullable=True)
 
     # Timer pause (post-tour deadline pause while Q&A open)
-    timer_paused_at = Column(DateTime, nullable=True)
-    timer_resumed_at = Column(DateTime, nullable=True)
+    timer_paused_at = Column(DateTime(timezone=True), nullable=True)
+    timer_resumed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationships
     engagement = relationship("Engagement", backref="questions")
@@ -1083,8 +1083,8 @@ class PropertyKnowledgeEntry(Base):
     source = Column(String(20), nullable=False)  # 'ai', 'supplier', 'admin'
     source_question_id = Column(String(36), ForeignKey("property_questions.id"), nullable=True)
     confidence = Column(Float, nullable=False)
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationships
     warehouse = relationship("Warehouse", backref="knowledge_entries")
@@ -1111,14 +1111,14 @@ class PaymentRecord(Base):
     supplier_status = Column(String(20), nullable=False, default="upcoming")  # SupplierPaymentStatus
 
     # Payment timestamps
-    buyer_invoiced_at = Column(DateTime, nullable=True)
-    buyer_paid_at = Column(DateTime, nullable=True)
-    supplier_scheduled_at = Column(DateTime, nullable=True)
-    supplier_deposited_at = Column(DateTime, nullable=True)
+    buyer_invoiced_at = Column(DateTime(timezone=True), nullable=True)
+    buyer_paid_at = Column(DateTime(timezone=True), nullable=True)
+    supplier_scheduled_at = Column(DateTime(timezone=True), nullable=True)
+    supplier_deposited_at = Column(DateTime(timezone=True), nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationships
     engagement = relationship("Engagement", backref="payment_records")
@@ -1149,8 +1149,8 @@ class Property(Base):
     property_type = Column(String(50), nullable=True)
     primary_image_url = Column(String(500), nullable=True)
     image_urls = Column(JSON, default=[])
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationships
     knowledge = relationship("PropertyKnowledge", back_populates="property_ref", uselist=False)
@@ -1208,10 +1208,10 @@ class PropertyKnowledge(Base):
     ai_profile_summary = Column(Text, nullable=True)
     additional_notes = Column(Text, nullable=True)
     field_provenance = Column(JSON, default={})
-    last_enriched_at = Column(DateTime, nullable=True)
+    last_enriched_at = Column(DateTime(timezone=True), nullable=True)
     enrichment_source = Column(String(50), nullable=True)
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationship
     property_ref = relationship("Property", back_populates="knowledge")
@@ -1225,7 +1225,7 @@ class PropertyListing(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     property_id = Column(String(36), ForeignKey("properties.id"), unique=True, nullable=False)
     activation_status = Column(String(10), default="off")
-    activated_at = Column(DateTime, nullable=True)
+    activated_at = Column(DateTime(timezone=True), nullable=True)
     tour_readiness = Column(String(50), default="48_hours")
     tour_required = Column(Boolean, default=False)
     trust_level = Column(Integer, default=0)
@@ -1241,8 +1241,8 @@ class PropertyListing(Base):
     min_term_months = Column(Integer, default=1)
     max_term_months = Column(Integer, default=12)
     constraints = Column(JSON, default={})
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationship
     property_ref = relationship("Property", back_populates="listing")
@@ -1262,7 +1262,7 @@ class PropertyEvent(Base):
     event_type = Column(String(50), nullable=False)
     actor = Column(String(100), nullable=True)
     metadata_ = Column("metadata", JSON, default={})
-    created_at = Column(DateTime, default=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
 
     # Relationship
     property_ref = relationship("Property", back_populates="events")
@@ -1281,8 +1281,8 @@ class PropertyContact(Base):
     phone = Column(String(50), nullable=True)
     is_primary = Column(Boolean, default=True)
     company_id = Column(String(36), ForeignKey("companies.id"), nullable=True)
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     # Relationship
     property_ref = relationship("Property", back_populates="contacts")

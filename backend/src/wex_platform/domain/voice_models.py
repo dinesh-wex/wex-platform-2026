@@ -40,8 +40,8 @@ class VoiceCallState(Base):
     guarantee_link_token = Column(String(64), nullable=True)
 
     # Call metadata
-    call_started_at = Column(DateTime, nullable=True)
-    call_ended_at = Column(DateTime, nullable=True)
+    call_started_at = Column(DateTime(timezone=True), nullable=True)
+    call_ended_at = Column(DateTime(timezone=True), nullable=True)
     call_duration_seconds = Column(Integer, nullable=True)
     call_summary = Column(Text, nullable=True)
     call_transcript = Column(JSON, nullable=True)  # Full conversation transcript from Vapi
@@ -49,5 +49,5 @@ class VoiceCallState(Base):
     sms_sent = Column(Boolean, default=False)
     follow_up_preference = Column(String(20), default="text")
 
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())

@@ -380,7 +380,7 @@ class EscalationService:
             question_text=question_text,
             field_key=field_key,
             status="pending",
-            sla_deadline_at=datetime.utcnow() + timedelta(hours=ESCALATION_SLA_HOURS),
+            sla_deadline_at=datetime.now(timezone.utc) + timedelta(hours=ESCALATION_SLA_HOURS),
             source_type=source_type,
         )
         self.db.add(thread)

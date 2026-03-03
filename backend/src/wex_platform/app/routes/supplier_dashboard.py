@@ -955,7 +955,7 @@ async def create_upload_token(
         raise HTTPException(status_code=403, detail="Not your property")
 
     token = secrets.token_urlsafe(32)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     upload_token = UploadToken(
         token=token,
         property_id=property_id,
@@ -1279,7 +1279,7 @@ async def verify_upload_token(
     if not upload_token:
         raise HTTPException(status_code=404, detail="Invalid upload token")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if upload_token.is_used:
         raise HTTPException(status_code=410, detail="Token already used")
     if upload_token.expires_at and upload_token.expires_at < now:
@@ -1318,7 +1318,7 @@ async def upload_photos(
     if not upload_token:
         raise HTTPException(status_code=404, detail="Invalid upload token")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if upload_token.is_used:
         raise HTTPException(status_code=410, detail="Token already used")
     if upload_token.expires_at and upload_token.expires_at < now:

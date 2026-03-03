@@ -42,7 +42,7 @@ class SmsTokenService:
             engagement_id=engagement_id,
             prefilled_name=prefilled_name,
             prefilled_email=prefilled_email,
-            expires_at=datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRY_HOURS),
         )
         self.db.add(token)
         await self.db.flush()
@@ -65,11 +65,10 @@ class SmsTokenService:
             return None
 
         if token.expires_at:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             expires = token.expires_at
-            # Strip tzinfo for SQLite compatibility (stores naive datetimes)
-            if expires.tzinfo is not None:
-                expires = expires.replace(tzinfo=None)
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
             if expires < now:
                 logger.warning("Token %s... expired", token_str[:8])
                 return None
@@ -83,7 +82,7 @@ class SmsTokenService:
             return None
 
         token.used = True
-        token.used_at = datetime.utcnow()
+        token.used_at = datetime.now(timezone.utc)
         await self.db.flush()
 
         logger.info("Redeemed token %s...", token_str[:8])
