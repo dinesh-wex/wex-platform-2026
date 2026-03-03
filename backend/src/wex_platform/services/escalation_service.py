@@ -213,7 +213,7 @@ class EscalationService:
                     address = wh.address
 
             # Build reply tool URL
-            base_url = settings.frontend_url.rstrip("/")
+            base_url = (settings.backend_url or settings.frontend_url).rstrip("/")
             reply_tool_url = f"{base_url}/api/sms/internal/form/{thread.id}?token={settings.admin_password}"
 
             # Get recent messages — SMS uses messages/conversation_history,

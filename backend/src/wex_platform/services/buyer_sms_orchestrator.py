@@ -533,7 +533,8 @@ class BuyerSMSOrchestrator:
 
                     from wex_platform.app.config import get_settings
                     settings = get_settings()
-                    plan.response_hint = f"Send guarantee link: {settings.frontend_url}/sms/guarantee/{token.token}"
+                    base = settings.backend_url or settings.frontend_url
+                    plan.response_hint = f"Send guarantee link: {base}/sms/guarantee/{token.token}"
 
         # TOUR_SCHEDULING: extract date/time, request tour
         if plan.action == "schedule_tour" and state.engagement_id:

@@ -344,7 +344,8 @@ async def _handle_end_of_call(message: dict, db: AsyncSession) -> JSONResponse:
 
     if call_state.guarantee_link_token and not call_state.sms_sent:
         # Booking link SMS
-        link = f"{settings.frontend_url}/sms/guarantee/{call_state.guarantee_link_token}"
+        base = settings.backend_url or settings.frontend_url
+        link = f"{base}/sms/guarantee/{call_state.guarantee_link_token}"
         sms_text = f"{name_prefix}it's Jess from Warehouse Exchange. Here's the link to complete your warehouse booking: {link}"
         await _send_follow_up_sms(sms_phone, sms_text, call_state)
 
