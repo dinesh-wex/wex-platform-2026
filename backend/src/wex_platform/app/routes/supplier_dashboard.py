@@ -1332,26 +1332,36 @@ async def upload_photos(
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
 
-    # Determine upload directory (relative to backend root)
-    backend_root = Path(__file__).resolve().parents[4]  # up from routes -> app -> wex_platform -> src -> backend
-    upload_dir = backend_root / "uploads" / "properties" / property_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
-
     uploaded_urls: list[str] = []
+    use_gcs = os.environ.get("GCS_BUCKET")
 
     for file in files:
         # Sanitize filename and make unique to avoid collisions
         original_name = file.filename or "photo.jpg"
-        # Strip path separators from filename for safety
         safe_name = original_name.replace("/", "_").replace("\\", "_")
         unique_name = f"{uuid.uuid4().hex[:8]}_{safe_name}"
-
-        file_path = upload_dir / unique_name
         content = await file.read()
-        file_path.write_bytes(content)
 
-        url_path = f"/uploads/properties/{property_id}/{unique_name}"
-        uploaded_urls.append(url_path)
+        if use_gcs:
+            # Production: upload to Google Cloud Storage
+            from google.cloud import storage as gcs
+            client = gcs.Client()
+            bucket = client.bucket(os.environ["GCS_BUCKET"])
+            blob_path = f"properties/{property_id}/{unique_name}"
+            blob = bucket.blob(blob_path)
+            blob.upload_from_string(content, content_type=file.content_type or "image/jpeg")
+            # Generate signed URL (1-hour expiry) for immediate use;
+            # frontend should re-request URLs as needed
+            url = blob.generate_signed_url(expiration=3600)
+            uploaded_urls.append(url)
+        else:
+            # Dev: save to local filesystem
+            backend_root = Path(__file__).resolve().parents[4]
+            upload_dir = backend_root / "uploads" / "properties" / property_id
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = upload_dir / unique_name
+            file_path.write_bytes(content)
+            uploaded_urls.append(f"/uploads/properties/{property_id}/{unique_name}")
 
     # Append new URLs to the property's image_urls
     current_urls = list(prop.image_urls or [])

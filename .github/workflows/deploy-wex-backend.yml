@@ -1,0 +1,66 @@
+name: Deploy WEx Backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy-wex-backend.yml'
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: wex-platform-2026
+  REGION: us-west1
+  SERVICE: wex-backend
+  IMAGE: us-west1-docker.pkg.dev/wex-platform-2026/wex-images/wex-backend
+  SERVICE_ACCOUNT: wex-backend-sa@wex-platform-2026.iam.gserviceaccount.com
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # environment: production  # Enable after creating GitHub environment
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/449870075865/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-deploy-sa@wex-platform-2026.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker us-west1-docker.pkg.dev --quiet
+
+      - name: Build & Push
+        run: |
+          docker build -t ${{ env.IMAGE }}:${{ github.sha }} -t ${{ env.IMAGE }}:latest ./backend
+          docker push ${{ env.IMAGE }}:${{ github.sha }}
+          docker push ${{ env.IMAGE }}:latest
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE }} \
+            --image ${{ env.IMAGE }}:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.PROJECT_ID }} \
+            --service-account ${{ env.SERVICE_ACCOUNT }} \
+            --platform managed \
+            --port 8080 \
+            --memory 1Gi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 10 \
+            --timeout 300 \
+            --set-env-vars "CLOUD_SCHEDULER=true,DEBUG=false,GCS_BUCKET=wex-platform-2026-uploads" \
+            --set-secrets "DATABASE_URL=wex-database-url:latest,GEMINI_API_KEY=wex-gemini-api-key:latest,GOOGLE_MAPS_API_KEY=wex-google-maps-api-key:latest,JWT_SECRET_KEY=wex-jwt-secret:latest,SENDGRID_API_KEY=wex-sendgrid-api-key:latest,SUPPLY_ALERT_TO=wex-supply-alert-to:latest,SUPPLY_ALERT_FROM=wex-supply-alert-from:latest,ADMIN_PASSWORD=wex-admin-password:latest,FRONTEND_URL=wex-frontend-url:latest,CORS_ORIGINS=wex-cors-origins:latest,AIRCALL_API_ID=wex-aircall-api-id:latest,AIRCALL_API_TOKEN=wex-aircall-api-token:latest,AIRCALL_NUMBER_ID=wex-aircall-number-id:latest,AIRCALL_BUYER_NUMBER_ID=wex-aircall-buyer-number-id:latest,AIRCALL_WEBHOOK_TOKEN=wex-aircall-webhook-token:latest,VAPI_API_KEY=wex-vapi-api-key:latest,VAPI_SERVER_SECRET=wex-vapi-server-secret:latest,VAPI_PHONE_NUMBER_ID=wex-vapi-phone-number-id:latest,VAPI_VOICE_ID=wex-vapi-voice-id:latest,TWILIO_ACCOUNT_SID=wex-twilio-sid:latest,TWILIO_AUTH_TOKEN=wex-twilio-auth-token:latest,TWILIO_PHONE_NUMBER=wex-twilio-phone:latest" \
+            --add-cloudsql-instances wex-platform-2026:us-west1:wex-db \
+            --allow-unauthenticated

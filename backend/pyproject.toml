@@ -47,6 +47,9 @@ dependencies = [
     "httpx>=0.28.0",
     "sendgrid>=6.11.0",
 
+    # Cloud Storage (production photo uploads)
+    "google-cloud-storage>=2.18.0",
+
     # Utilities
     "python-multipart>=0.0.9",
     "python-dotenv>=1.0.1",

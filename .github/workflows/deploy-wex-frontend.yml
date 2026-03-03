@@ -1,0 +1,64 @@
+name: Deploy WEx Frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-wex-frontend.yml'
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: wex-platform-2026
+  REGION: us-west1
+  SERVICE: wex-frontend
+  IMAGE: us-west1-docker.pkg.dev/wex-platform-2026/wex-images/wex-frontend
+  SERVICE_ACCOUNT: wex-frontend-sa@wex-platform-2026.iam.gserviceaccount.com
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # environment: production  # Enable after creating GitHub environment
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/449870075865/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-deploy-sa@wex-platform-2026.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker us-west1-docker.pkg.dev --quiet
+
+      - name: Build & Push
+        run: |
+          docker build -t ${{ env.IMAGE }}:${{ github.sha }} -t ${{ env.IMAGE }}:latest ./frontend
+          docker push ${{ env.IMAGE }}:${{ github.sha }}
+          docker push ${{ env.IMAGE }}:latest
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE }} \
+            --image ${{ env.IMAGE }}:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.PROJECT_ID }} \
+            --service-account ${{ env.SERVICE_ACCOUNT }} \
+            --platform managed \
+            --port 8080 \
+            --memory 512Mi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 5 \
+            --timeout 60 \
+            --set-env-vars "NODE_ENV=production" \
+            --allow-unauthenticated

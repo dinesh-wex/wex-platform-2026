@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -45,7 +46,9 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Failed to register Vapi phone number: %s", e)
 
-    asyncio.create_task(hold_monitor_loop())
+    # In production, Cloud Scheduler handles hold monitoring.
+    if not os.environ.get("CLOUD_SCHEDULER"):
+        asyncio.create_task(hold_monitor_loop())
     yield
 
 
@@ -99,6 +102,7 @@ from wex_platform.app.routes.sms_guarantee import router as sms_guarantee_router
 from wex_platform.app.routes.sms_scheduler import router as sms_scheduler_router
 from wex_platform.app.routes.sms_optin import router as sms_optin_router
 from wex_platform.app.routes.vapi_webhook import router as vapi_webhook_router
+from wex_platform.app.routes.scheduler_jobs import router as scheduler_jobs_router
 
 app.include_router(auth_router)
 app.include_router(agreements_router)
@@ -129,11 +133,13 @@ app.include_router(sms_guarantee_router)
 app.include_router(sms_scheduler_router)
 app.include_router(sms_optin_router)
 app.include_router(vapi_webhook_router)
+app.include_router(scheduler_jobs_router)
 
-# Static file mount for uploaded photos
-_uploads_dir = Path(__file__).resolve().parents[3] / "uploads"
-_uploads_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(_uploads_dir)), name="uploads")
+# Static file mount for uploaded photos (dev only — production uses Cloud Storage)
+if os.environ.get("DEBUG", "true").lower() == "true":
+    _uploads_dir = Path(__file__).resolve().parents[3] / "uploads"
+    _uploads_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=str(_uploads_dir)), name="uploads")
 
 
 @app.get("/health", tags=["health"])
@@ -144,10 +150,11 @@ async def health_check():
 
 def run() -> None:
     """Run the application with uvicorn (used by project.scripts entry point)."""
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
         "wex_platform.app.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=port,
         reload=settings.debug,
     )
 
