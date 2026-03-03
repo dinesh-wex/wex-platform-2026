@@ -291,6 +291,10 @@ class BaseAgent:
             contents = []
             for msg in messages:
                 role = msg.get("role", "user")
+                # Gemini API expects "model" not "assistant" — the old SDK's
+                # start_chat() handled this internally; generate_content() does not.
+                if role in ("assistant", "bot"):
+                    role = "model"
                 parts = msg.get("parts", [])
                 text = "\n".join(str(p) for p in parts)
                 contents.append(genai_types.Content(
