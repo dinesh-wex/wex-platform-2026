@@ -39,6 +39,7 @@ from wex_platform.domain.models import (
     Match,
     InstantBookScore,
     DLAToken,
+    MarketRateCache,
     PropertyProfile,  # Keep for now — may be referenced in edge cases
 )
 
@@ -213,11 +214,26 @@ class ClearingEngine:
 
         property_dicts = self._format_properties(candidates)
 
+        # Batch-fetch market rates for all candidate zip codes (one query)
+        zip_codes = {p.get("zip") for p in property_dicts if p.get("zip")}
+        market_rates_by_zip: dict[str, float] = {}
+        if zip_codes:
+            mrc_result = await session.execute(
+                select(MarketRateCache.zipcode, MarketRateCache.nnn_low, MarketRateCache.nnn_high)
+                .where(MarketRateCache.zipcode.in_(zip_codes))
+            )
+            for row in mrc_result:
+                market_rates_by_zip[row.zipcode] = (row.nnn_low + row.nnn_high) / 2
+
+        # Inject generic_market_avg into each property's truth_core
+        for prop_dict in property_dicts:
+            prop_zip = prop_dict.get("zip")
+            prop_dict["truth_core"]["generic_market_avg"] = market_rates_by_zip.get(prop_zip)
+
         # Layer 1: Deterministic MCDA scoring
         from wex_platform.services.match_scorer import (
             compute_composite_score,
             recompute_with_feature_score,
-            apply_budget_context,
         )
 
         deterministic_scores = {}
@@ -316,7 +332,7 @@ class ClearingEngine:
                     "use_type_score": scores["use_type_score"],
                     "feature_score": scores["feature_score"],
                     "timing_score": scores["timing_score"],
-                    "budget_score": scores["budget_score"],
+                    "value_score": scores["value_score"],
                 },
                 status="pending",
             )
@@ -347,7 +363,7 @@ class ClearingEngine:
                     "use_type_score": scores["use_type_score"],
                     "feature_score": scores["feature_score"],
                     "timing_score": scores["timing_score"],
-                    "budget_score": scores["budget_score"],
+                    "value_score": scores["value_score"],
                 },
                 "reasoning": scores.get("reasoning", ""),
                 "instant_book_eligible": scores.get("instant_book_eligible", False),
@@ -356,12 +372,8 @@ class ClearingEngine:
                 "spread_pct": round(spread_pct, 1),  # Admin only
                 "confidence": scores["composite_score"],
                 "distance_miles": scores.get("distance_miles"),
-                "within_budget": scores.get("within_budget", True),
-                "budget_stretch_pct": scores.get("budget_stretch_pct", 0.0),
                 "use_type_callouts": scores.get("use_type_callouts", []),
             })
-
-        apply_budget_context(results, buyer_need.max_budget_per_sqft)
 
         return results
 

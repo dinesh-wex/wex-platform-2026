@@ -165,7 +165,7 @@ class ClearingAgent(BaseAgent):
                 f"  Parking: {tc.get('parking_spaces', 0)}, Power: {tc.get('power_supply', 'N/A')}\n"
                 f"  Constraints: {json.dumps(tc.get('constraints', {}))}\n"
                 f"  Pre-computed scores: location={wh_scores.get('location_score', '?')}, "
-                f"size={wh_scores.get('size_score', '?')}, budget={wh_scores.get('budget_score', '?')}\n"
+                f"size={wh_scores.get('size_score', '?')}, value={wh_scores.get('value_score', '?')}\n"
                 f"  Distance: {wh_scores.get('distance_miles', '?')} miles"
             )
             warehouse_details.append(detail)

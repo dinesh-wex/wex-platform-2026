@@ -7,8 +7,8 @@ Computes a composite match score from six weighted dimensions:
     - Size      (20%)  — satisfaction ratio against buyer target
     - Use Type  (20%)  — compatibility matrix (delegates to use_type_compat)
     - Feature   (15%)  — PLACEHOLDER (filled by LLM Layer 2)
-    - Timing    (10%)  — date-gap comparison
-    - Budget    (10%)  — linear decay above buyer ceiling
+    - Timing    (10%)  — continuous linear decay (-1 pt/day late)
+    - Value     (10%)  — market competitiveness (Index + Coefficient model)
 
 All inputs are plain dicts so the scorer can be called from the clearing
 engine, from tests, or from offline batch jobs without touching ORM objects.
@@ -30,7 +30,18 @@ W_SIZE = 0.20
 W_USE_TYPE = 0.20
 W_FEATURE = 0.15
 W_TIMING = 0.10
-W_BUDGET = 0.10
+W_VALUE = 0.10
+
+# Baseline multiplier coefficients for facility types relative to generic dry warehouse.
+# Used by _compute_value_score to adjust the generic zip-level NNN market rate
+# into a facility-type-specific "apples-to-apples" comparison.
+TIER_MULTIPLIERS = {
+    "storage_only":           1.0,   # Baseline
+    "storage_office":         1.15,  # 15% premium for office buildout
+    "storage_light_assembly": 1.3,   # 30% premium for power/ventilation
+    "food_grade":             1.8,   # 80% premium for sanitation/certifications
+    "cold_storage":           2.5,   # 150% premium for refrigeration/insulation
+}
 
 # KNN cap for warehouses beyond the buyer's stated radius
 KNN_MAX_CAP = 100
@@ -66,16 +77,10 @@ def _parse_date(value) -> Optional[date]:
 
 
 def _compute_timing_score(needed_from, available_from) -> float:
-    """Deterministic timing score (0-100).
+    """Continuous linear decay for timing gaps.
 
-    Rules
-    -----
-    * Warehouse available now or date unknown → 100
-    * Buyer has no target date               → 100
-    * Warehouse available on or before buyer  → 100
-    * Up to 30 days late                      → 70
-    * Up to 60 days late                      → 40
-    * More than 60 days late                  → 10
+    If available on or before the needed date: 100.
+    If late: -1 point per day late, floored at 10.
     """
     avail = _parse_date(available_from)
     if avail is None:
@@ -89,43 +94,46 @@ def _compute_timing_score(needed_from, available_from) -> float:
 
     if gap_days <= 0:
         return 100.0
-    if gap_days <= 30:
-        return 70.0
-    if gap_days <= 60:
-        return 40.0
-    return 10.0
+
+    # Continuous linear decay: -1 point per day, floored at 10
+    return float(max(10, 100 - gap_days))
 
 
-def _compute_budget_score(
-    buyer_max_budget: Optional[float],
-    supplier_rate: Optional[float],
-) -> tuple[float, bool, float]:
-    """Deterministic budget score with WEx pricing formula.
+def _compute_value_score(
+    supplier_rate: float | None,
+    generic_market_avg: float | None,
+    activity_tier: str | None,
+) -> float:
+    """Continuous linear scoring based on adjusted market competitiveness.
 
-    Returns
-    -------
-    (score, within_budget, budget_stretch_pct)
-        *score* is 0-100.
-        *within_budget* is True when the buyer rate fits the stated max.
-        *budget_stretch_pct* is how far over budget (0.0 when within).
+    Uses Index + Coefficient model: generic zip-level NNN market rate × tier
+    multiplier gives the 'apples-to-apples' adjusted market average for this
+    facility type.
+
+    IMPORTANT — Lease type alignment:
+    MarketRateCache stores NNN base rent (excludes taxes/insurance/maintenance).
+    supplier_rate_per_sqft is also the supplier's base rent (their net take).
+    We compare supplier_rate directly against the NNN avg — both are base rent.
+    We do NOT apply the WEx markup (×1.20×1.06) here because it's a constant
+    multiplier on all properties and doesn't affect relative competitiveness.
+
+    Anchor at 70 for exact market average. Drops 1pt per 1% above. Caps 0-100.
     """
-    if buyer_max_budget is None or buyer_max_budget <= 0:
-        return NEUTRAL, True, 0.0
+    if not supplier_rate or supplier_rate <= 0:
+        return 50.0  # NEUTRAL — no rate data
+    if not generic_market_avg or generic_market_avg <= 0:
+        return 50.0  # NEUTRAL — no market data for this zip
 
-    if supplier_rate is None or supplier_rate <= 0:
-        return NEUTRAL, True, 0.0
+    # 1. Adjust baseline to facility-type-specific market rate
+    tier_coefficient = TIER_MULTIPLIERS.get(activity_tier or "", 1.0)
+    adjusted_market_avg = generic_market_avg * tier_coefficient
 
-    # WEx pricing formula: supplier × 1.20 margin × 1.06 guarantee, rounded UP
-    buyer_rate = math.ceil(supplier_rate * 1.20 * 1.06 * 100) / 100
+    # 2. Compare supplier base rent vs NNN market avg (both are base rent)
+    #    No WEx markup applied — it's constant across all properties
+    pct_deviation = (supplier_rate - adjusted_market_avg) / adjusted_market_avg
+    raw_score = 70 - (pct_deviation * 100)
 
-    if buyer_rate <= buyer_max_budget:
-        return 100.0, True, 0.0
-
-    percent_over = ((buyer_rate - buyer_max_budget) / buyer_max_budget) * 100
-    score = max(0.0, 100.0 - percent_over * 3.33)
-    stretch_pct = round(percent_over, 2)
-
-    return score, False, stretch_pct
+    return max(0.0, min(100.0, round(raw_score, 1)))
 
 
 # ── Main scorer ──────────────────────────────────────────────────────────────
@@ -141,20 +149,19 @@ def compute_composite_score(
     ----------
     buyer_need_dict
         Keys: city, state, lat, lng, radius_miles, min_sqft, max_sqft,
-        use_type, needed_from, duration_months, max_budget_per_sqft,
-        requirements.
+        use_type, needed_from, duration_months, requirements.
     warehouse_dict
         Keys: id, address, city, state, lat, lng, building_size_sqft.
     tc_dict
         Keys: min_sqft, max_sqft, activity_tier, supplier_rate_per_sqft,
-        has_office_space, available_from, clear_height_ft,
-        dock_doors_receiving, etc.
+        generic_market_avg, has_office_space, available_from,
+        clear_height_ft, dock_doors_receiving, etc.
 
     Returns
     -------
     dict
         Full scoring breakdown including composite_score, per-dimension
-        scores, distance_miles, budget flags, and use-type callouts.
+        scores, distance_miles, and use-type callouts.
     """
 
     # ── 1. Location score (25 %) ─────────────────────────────────────────
@@ -227,10 +234,11 @@ def compute_composite_score(
         tc_dict.get("available_from"),
     )
 
-    # ── 5. Budget score (10 %) ───────────────────────────────────────────
-    budget_score, within_budget, budget_stretch_pct = _compute_budget_score(
-        buyer_need_dict.get("max_budget_per_sqft"),
+    # ── 5. Value score (10 %) — market competitiveness ───────────────────
+    value_score = _compute_value_score(
         tc_dict.get("supplier_rate_per_sqft"),
+        tc_dict.get("generic_market_avg"),
+        tc_dict.get("activity_tier"),
     )
 
     # ── 6. Feature score (15 %) — PLACEHOLDER ────────────────────────────
@@ -243,7 +251,7 @@ def compute_composite_score(
         + use_type_score * W_USE_TYPE
         + feature_score * W_FEATURE
         + timing_score * W_TIMING
-        + budget_score * W_BUDGET
+        + value_score * W_VALUE
     )
 
     return {
@@ -253,10 +261,8 @@ def compute_composite_score(
         "use_type_score": use_type_score,
         "feature_score": feature_score,
         "timing_score": round(timing_score, 1),
-        "budget_score": round(budget_score, 1),
+        "value_score": round(value_score, 1),
         "distance_miles": round(dist, 1) if dist is not None else None,
-        "within_budget": within_budget,
-        "budget_stretch_pct": budget_stretch_pct,
         "use_type_callouts": use_type_callouts,
     }
 
@@ -289,83 +295,7 @@ def recompute_with_feature_score(scores: dict, feature_score: int) -> dict:
         + updated["use_type_score"] * W_USE_TYPE
         + feature_score * W_FEATURE
         + updated["timing_score"] * W_TIMING
-        + updated["budget_score"] * W_BUDGET,
+        + updated["value_score"] * W_VALUE,
         1,
     )
     return updated
-
-
-# ── Budget context tagger ────────────────────────────────────────────────────
-
-def apply_budget_context(
-    results: list[dict],
-    buyer_max_budget: Optional[float],
-) -> list[dict]:
-    """Tag each match result with budget context flags.
-
-    For every result dict that contains a ``budget_score`` (or can be
-    computed from a ``supplier_rate_per_sqft``), this sets:
-
-    * ``within_budget`` — True when the WEx buyer rate fits
-    * ``budget_stretch_pct`` — percentage over budget (0.0 when within)
-    * ``budget_alternative_available`` — True on the first result ONLY
-      when *every* result exceeds budget (signals the UI to show an
-      "alternatives available" badge).
-
-    Parameters
-    ----------
-    results
-        List of match/scoring dicts.  Modified **in place** and returned.
-    buyer_max_budget
-        The buyer's stated max $/sqft.  When ``None``, all results are
-        treated as within budget.
-
-    Returns
-    -------
-    list[dict]
-        The same list, mutated with budget tags.
-    """
-    if not results:
-        return results
-
-    all_over_budget = True
-
-    for r in results:
-        if buyer_max_budget is None or buyer_max_budget <= 0:
-            r["within_budget"] = True
-            r["budget_stretch_pct"] = 0.0
-            all_over_budget = False
-            continue
-
-        # If the result already carries budget flags (from compute_composite_score),
-        # just propagate them.
-        if "within_budget" in r and "budget_stretch_pct" in r:
-            if r["within_budget"]:
-                all_over_budget = False
-            continue
-
-        # Otherwise compute from supplier rate if available
-        supplier_rate = r.get("supplier_rate_per_sqft") or r.get("supplier_rate")
-        if supplier_rate and supplier_rate > 0:
-            buyer_rate = math.ceil(supplier_rate * 1.20 * 1.06 * 100) / 100
-            if buyer_rate <= buyer_max_budget:
-                r["within_budget"] = True
-                r["budget_stretch_pct"] = 0.0
-            else:
-                percent_over = ((buyer_rate - buyer_max_budget) / buyer_max_budget) * 100
-                r["within_budget"] = False
-                r["budget_stretch_pct"] = round(percent_over, 2)
-        else:
-            r["within_budget"] = True
-            r["budget_stretch_pct"] = 0.0
-            all_over_budget = False
-            continue
-
-        if r["within_budget"]:
-            all_over_budget = False
-
-    # If every single result is over budget, flag the first one
-    if all_over_budget and results:
-        results[0]["budget_alternative_available"] = True
-
-    return results
