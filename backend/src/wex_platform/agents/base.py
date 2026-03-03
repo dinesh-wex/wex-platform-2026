@@ -150,7 +150,7 @@ class BaseAgent:
                     contents=prompt,
                     config=config,
                 ),
-                timeout=60,  # 60s — new SDK is stable; SMS pipeline has multiple sequential LLM calls
+                timeout=120,  # 2 min hard limit — prevents indefinite hangs
             )
             latency_ms = int((time.time() - start_time) * 1000)
 
@@ -308,7 +308,7 @@ class BaseAgent:
                     contents=contents,
                     config=config,
                 ),
-                timeout=60,
+                timeout=120,  # 2 min hard limit — prevents indefinite hangs
             )
             latency_ms = int((time.time() - start_time) * 1000)
 
