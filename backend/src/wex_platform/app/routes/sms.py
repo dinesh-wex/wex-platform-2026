@@ -88,6 +88,21 @@ async def aircall_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         logger.debug("Ignoring Aircall event type: %s", event_type)
         return {"ok": True}
 
+    # ── Filter by receiving Aircall number ────────────────────────────
+    # Account-level webhooks fire for ALL numbers. Only process messages
+    # sent to the supplier number.
+    if settings.aircall_number_id:
+        receiving_number_id = str(
+            (body.get("data", {}).get("number") or {}).get("id", "")
+            or (body.get("data", {}).get("message", {}).get("number") or {}).get("id", "")
+        )
+        if receiving_number_id and receiving_number_id != settings.aircall_number_id:
+            logger.debug(
+                "Ignoring SMS to Aircall number %s (not supplier number %s)",
+                receiving_number_id, settings.aircall_number_id,
+            )
+            return {"ok": True}
+
     # ── Extract message data ─────────────────────────────────────────
     message_payload = (
         body.get("data", {}).get("message")

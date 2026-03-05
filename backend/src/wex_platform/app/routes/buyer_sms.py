@@ -75,6 +75,21 @@ async def buyer_sms_webhook(request: Request, db: AsyncSession = Depends(get_db)
     if event_type and event_type != "message.received":
         return {"ok": True}
 
+    # ── 2b. Filter by receiving Aircall number ────────────────────────
+    # Account-level webhooks fire for ALL numbers. Only process messages
+    # sent to the buyer number.
+    if settings.aircall_buyer_number_id:
+        receiving_number_id = str(
+            (body.get("data", {}).get("number") or {}).get("id", "")
+            or (body.get("data", {}).get("message", {}).get("number") or {}).get("id", "")
+        )
+        if receiving_number_id and receiving_number_id != settings.aircall_buyer_number_id:
+            logger.debug(
+                "Ignoring SMS to Aircall number %s (not buyer number %s)",
+                receiving_number_id, settings.aircall_buyer_number_id,
+            )
+            return {"ok": True}
+
     # ── 3. Extract message data ───────────────────────────────────────
     message_payload = (
         body.get("data", {}).get("message")
