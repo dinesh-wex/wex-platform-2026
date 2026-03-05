@@ -203,10 +203,15 @@ class VoiceToolHandlers:
             # 7. Create SearchSession (same pattern as SMS orchestrator)
             token = secrets.token_urlsafe(32)
 
+            # Build buyer-safe results matching web format (must match search.py shape)
+            req_sqft = sqft or 0
+            req_term = buyer_need.duration_months or 6
             tier1_safe = []
             for m in tier1[:3]:
                 wh = m.get("warehouse", {})
                 tc = wh.get("truth_core", {}) if isinstance(wh, dict) else {}
+                rate = m.get("buyer_rate", 0)
+                alloc_sqft = req_sqft or tc.get("max_sqft", 0)
                 tier1_safe.append({
                     "match_id": m.get("match_id"),
                     "warehouse_id": m.get("warehouse_id"),
@@ -217,13 +222,22 @@ class VoiceToolHandlers:
                     "address": wh.get("address", ""),
                     "available_sqft": tc.get("max_sqft"),
                     "building_size_sqft": wh.get("building_size_sqft"),
-                    "buyer_rate": m.get("buyer_rate", 0),
+                    "buyer_rate": rate,
+                    "monthly_cost": round(rate * alloc_sqft, 2),
+                    "term_months": req_term,
+                    "total_value": round(rate * alloc_sqft * req_term, 2),
                     "primary_image_url": wh.get("primary_image_url"),
+                    "description": wh.get("description", ""),
                     "features": {
+                        "activity_tier": tc.get("activity_tier"),
                         "clear_height": tc.get("clear_height_ft"),
                         "dock_doors": tc.get("dock_doors_receiving"),
                         "has_office": tc.get("has_office_space"),
+                        "has_sprinkler": tc.get("has_sprinkler"),
+                        "parking": tc.get("parking_spaces"),
                     },
+                    "instant_book_eligible": m.get("instant_book_eligible", False),
+                    "distance_miles": m.get("distance_miles"),
                     "tier": 1,
                 })
 
