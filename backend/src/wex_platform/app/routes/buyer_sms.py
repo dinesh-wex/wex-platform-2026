@@ -56,13 +56,6 @@ async def buyer_sms_webhook(request: Request, db: AsyncSession = Depends(get_db)
     settings = get_settings()
     body = await request.json()
 
-    # ── DEBUG: log raw webhook payload keys ──────────────────────────
-    import json as _json
-    logger.warning("BUYER-WEBHOOK raw keys: %s", list(body.keys()))
-    logger.warning("BUYER-WEBHOOK event=%s token_present=%s", body.get("event"), bool(body.get("token")))
-    data = body.get("data", {})
-    logger.warning("BUYER-WEBHOOK data.keys=%s number=%s", list(data.keys()) if isinstance(data, dict) else "NOT_DICT", data.get("number") if isinstance(data, dict) else "N/A")
-
     # ── 1. Validate webhook token ─────────────────────────────────────
     token_from_header = request.headers.get("x-aircall-token", "")
     token_from_body = body.get("token", "")
@@ -71,7 +64,7 @@ async def buyer_sms_webhook(request: Request, db: AsyncSession = Depends(get_db)
     if settings.aircall_webhook_token and (
         not provided_token or provided_token != settings.aircall_webhook_token
     ):
-        logger.warning("Invalid Aircall webhook token on buyer endpoint — provided=%s expected=%s", provided_token[:8] if provided_token else "NONE", settings.aircall_webhook_token[:8])
+        logger.warning("Invalid Aircall webhook token on buyer endpoint")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid webhook token",
@@ -80,7 +73,6 @@ async def buyer_sms_webhook(request: Request, db: AsyncSession = Depends(get_db)
     # ── 2. Filter event type ──────────────────────────────────────────
     event_type = body.get("event")
     if event_type and event_type != "message.received":
-        logger.warning("BUYER-WEBHOOK skipping event_type=%s", event_type)
         return {"ok": True}
 
     # ── 2b. Filter by receiving Aircall number ────────────────────────
@@ -91,9 +83,8 @@ async def buyer_sms_webhook(request: Request, db: AsyncSession = Depends(get_db)
             (body.get("data", {}).get("number") or {}).get("id", "")
             or (body.get("data", {}).get("message", {}).get("number") or {}).get("id", "")
         )
-        logger.warning("BUYER-WEBHOOK number_filter: receiving=%s expected=%s", receiving_number_id, settings.aircall_buyer_number_id)
         if receiving_number_id and receiving_number_id != settings.aircall_buyer_number_id:
-            logger.warning(
+            logger.debug(
                 "Ignoring SMS to Aircall number %s (not buyer number %s)",
                 receiving_number_id, settings.aircall_buyer_number_id,
             )
