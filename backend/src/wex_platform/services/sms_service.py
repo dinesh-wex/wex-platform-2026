@@ -5,7 +5,7 @@ Messages are visible to human agents in the Aircall app and no per-number
 Public API configuration is required.
 
 Endpoints used:
-- POST /v1/numbers/{number_id}/messages/send-in-agent-conversation
+- POST /v1/numbers/{number_id}/messages/native/send — send SMS in agent conversation
 """
 
 import asyncio
@@ -55,7 +55,7 @@ class SMSService:
             logger.warning("Aircall SMS not configured — message not sent to %s", to_number)
             return {"ok": False, "error": "aircall_not_configured", "message": message}
 
-        url = f"{self.base_url}/numbers/{self.settings.aircall_number_id}/messages/send-in-agent-conversation"
+        url = f"{self.base_url}/numbers/{self.settings.aircall_number_id}/messages/native/send"
         return await self._send_httpx(url, to_number, message)
 
     async def send_buyer_sms(self, to_number: str, message: str) -> dict:
@@ -64,7 +64,7 @@ class SMSService:
             logger.warning("Aircall buyer SMS not configured — message not sent to %s", to_number)
             return {"ok": False, "error": "aircall_buyer_not_configured", "message": message}
 
-        url = f"{self.base_url}/numbers/{self.settings.aircall_buyer_number_id}/messages/send-in-agent-conversation"
+        url = f"{self.base_url}/numbers/{self.settings.aircall_buyer_number_id}/messages/native/send"
         return await self._send_httpx(url, to_number, message)
 
     async def _send_httpx(self, url: str, to_number: str, message: str) -> dict:
