@@ -292,8 +292,7 @@ class VoiceToolHandlers:
                         voice_summary["features"].append("office space")
                     if tc.get("clear_height_ft"):
                         voice_summary["features"].append(f"{tc['clear_height_ft']}ft clear height")
-                    if tc.get("has_sprinkler"):
-                        voice_summary["features"].append("sprinkler system")
+
 
                 voice_summaries.append(voice_summary)
 
@@ -499,6 +498,75 @@ class VoiceToolHandlers:
         except Exception as e:
             logger.error("lookup_property_details failed: %s", e, exc_info=True)
             return "I'm having trouble pulling up those details. I'll look into it and text you."
+
+    # ------------------------------------------------------------------
+    # lookup_by_address
+    # ------------------------------------------------------------------
+
+    async def lookup_by_address(self, address: str) -> str:
+        """Look up a specific property by street address.
+
+        Pipeline: address_lookup service -> tier check -> format for voice
+        """
+        try:
+            from wex_platform.services.address_lookup import lookup_by_address as _lookup
+
+            result = await _lookup(address_text=address, db=self.db, include_tier2=True)
+
+            if not result.found or not result.property_data:
+                return (
+                    "I couldn't find that specific address in our system. "
+                    "Want me to search for available space in that area instead?"
+                )
+
+            data = result.property_data
+            city = data.get("city", "the area")
+            state = data.get("state", "")
+            location_str = f"{city}, {state}" if state else city
+
+            if result.tier == 1:
+                # Tier 1: active property — present details and track
+                self.call_state.presented_match_ids = self.call_state.presented_match_ids or []
+                self.call_state.presented_match_ids.append(result.property_id)
+
+                rate = data.get("rate")
+                rate_str = f"at ${rate:.2f} per square foot" if rate else "with rate to be confirmed"
+                features_parts = []
+                feats = data.get("features", {})
+                if feats.get("dock_doors"):
+                    features_parts.append(f"{feats['dock_doors']} dock doors")
+                if feats.get("has_office"):
+                    features_parts.append("office space")
+                if feats.get("clear_height_ft"):
+                    features_parts.append(f"{feats['clear_height_ft']}ft clear height")
+                features_str = f", with {', '.join(features_parts)}" if features_parts else ""
+
+                text = (
+                    f"I found that property in {location_str} {rate_str}{features_str}. "
+                    "Would you like more details, or should I send you the info by text?"
+                )
+                return _gate_voice_output(text)
+
+            elif result.tier == 2:
+                # Tier 2: not yet active — offer to check with owner
+                return (
+                    f"I found that property in {location_str}, but we don't have it "
+                    "listed for instant availability yet. I can check with the owner "
+                    "to see if space is available — want me to do that?"
+                )
+
+            else:
+                return (
+                    "I found a property at that address, but I don't have availability "
+                    "info right now. Want me to search for other options in that area?"
+                )
+
+        except Exception as e:
+            logger.error("lookup_by_address failed: %s", e, exc_info=True)
+            return (
+                "I had trouble looking up that address. "
+                "Want me to search for available space in that area instead?"
+            )
 
     # ------------------------------------------------------------------
     # send_booking_link

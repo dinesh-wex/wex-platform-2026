@@ -22,13 +22,14 @@ class EngagementBridge:
         buyer_name: str | None = None,
         buyer_email: str | None = None,
         buyer_need_id: str | None = None,
+        source_channel: str = "sms",
     ) -> dict:
-        """Create an Engagement from SMS commitment.
+        """Create an Engagement from buyer commitment.
 
         Steps:
         1. Find or create User record (email dedup check!)
         2. Link to Buyer record
-        3. Create Engagement with source_channel='sms'
+        3. Create Engagement with the given source_channel
         4. Create EngagementEvent audit record
 
         Returns dict with engagement_id, user_id, is_new_user.
@@ -115,7 +116,7 @@ class EngagementBridge:
             supplier_id=supplier_id,  # nullable for SMS-originated engagements
             status="account_created",
             tier="tier_1",
-            source_channel="sms",
+            source_channel=source_channel,
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
             account_created_at=datetime.now(timezone.utc),
@@ -129,15 +130,15 @@ class EngagementBridge:
             engagement_id=engagement.id,
             event_type="account_created",
             actor="system",
-            data={"source": "sms", "phone": buyer_phone},
+            data={"source": source_channel, "phone": buyer_phone},
             created_at=datetime.now(timezone.utc),
         )
         self.db.add(event)
         await self.db.flush()
 
         logger.info(
-            "Created engagement %s for property %s via SMS (user=%s)",
-            engagement.id, property_id, user.id,
+            "Created engagement %s for property %s via %s (user=%s)",
+            engagement.id, property_id, source_channel, user.id,
         )
 
         return {

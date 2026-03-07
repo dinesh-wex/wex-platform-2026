@@ -410,6 +410,8 @@ class PropertyEventType(str, Enum):
     DECLINED = "declined"
     PRICE_CHANGED = "price_changed"
     DATA_ENRICHED = "data_enriched"
+    BUYER_INTEREST = "buyer_interest"
+    BUYER_QUALIFIED = "buyer_qualified"
 
 
 class ContactRole(str, Enum):

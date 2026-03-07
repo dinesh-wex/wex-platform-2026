@@ -9,16 +9,17 @@ import {
   MapPin,
   Warehouse as WarehouseIcon,
   X,
-  ChevronDown,
   Truck,
   Building2,
-  Thermometer,
   Zap,
   Clock,
   ParkingSquare,
   Loader2,
   ArrowRight,
   Menu,
+  RotateCcw,
+  Calendar,
+  Infinity,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -33,6 +34,7 @@ interface ListingFeature {
 
 interface Listing {
   id: string;
+  tier: 1 | 2;
   location: {
     city: string;
     state: string;
@@ -42,12 +44,12 @@ interface Listing {
     min: number;
     max: number;
     display: string;
-  };
+  } | null;
   rate_range: {
     min: number;
     max: number;
     display: string;
-  };
+  } | null;
   building_type: string;
   features: ListingFeature[];
   has_image: boolean;
@@ -72,35 +74,23 @@ interface LocationSuggestion {
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-const SIZE_OPTIONS = [
-  { label: "Any Size", value: "" },
-  { label: "Under 5,000 sqft", value: "0-5000" },
-  { label: "5,000 - 10,000 sqft", value: "5000-10000" },
-  { label: "10,000 - 25,000 sqft", value: "10000-25000" },
-  { label: "25,000 - 50,000 sqft", value: "25000-50000" },
-  { label: "50,000+ sqft", value: "50000-" },
-];
-
 const USE_TYPE_OPTIONS = [
-  { label: "Any Use", value: "any" },
   { label: "Storage", value: "storage" },
   { label: "Light Ops", value: "light_ops" },
   { label: "Distribution", value: "distribution" },
 ];
 
-const FEATURE_OPTIONS = [
+const MUST_HAVE_OPTIONS = [
+  { key: "office", label: "Office Space", icon: Building2 },
   { key: "dock", label: "Dock Doors", icon: Truck },
-  { key: "office", label: "Office", icon: Building2 },
-  { key: "climate", label: "Climate", icon: Thermometer },
-  { key: "power", label: "Power", icon: Zap },
-  { key: "24_7", label: "24/7", icon: Clock },
+  { key: "power", label: "High Power", icon: Zap },
+  { key: "24_7", label: "24/7 Access", icon: Clock },
   { key: "parking", label: "Parking", icon: ParkingSquare },
 ];
 
 const FEATURE_ICON_MAP: Record<string, typeof Truck> = {
   dock: Truck,
   office: Building2,
-  climate: Thermometer,
   power: Zap,
   "24_7": Clock,
   parking: ParkingSquare,
@@ -193,14 +183,23 @@ function BrowseNavbar() {
 
 interface FilterBarProps {
   location: string;
-  setLocation: (v: string) => void;
-  sizeRange: string;
-  setSizeRange: (v: string) => void;
+  sqft: string;
+  setSqft: (v: string) => void;
   useType: string;
   setUseType: (v: string) => void;
+  timing: string;
+  setTiming: (v: string) => void;
+  isImmediate: boolean;
+  setIsImmediate: (v: boolean) => void;
+  durationMonths: number;
+  setDurationMonths: (v: number) => void;
+  isFlexible: boolean;
+  setIsFlexible: (v: boolean) => void;
   selectedFeatures: string[];
   toggleFeature: (key: string) => void;
   onSearch: () => void;
+  onClear: () => void;
+  hasActiveFilters: boolean;
   locationSuggestions: LocationSuggestion[];
   showSuggestions: boolean;
   setShowSuggestions: (v: boolean) => void;
@@ -210,15 +209,23 @@ interface FilterBarProps {
 
 function FilterBar({
   location,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  setLocation,
-  sizeRange,
-  setSizeRange,
+  sqft,
+  setSqft,
   useType,
   setUseType,
+  timing,
+  setTiming,
+  isImmediate,
+  setIsImmediate,
+  durationMonths,
+  setDurationMonths,
+  isFlexible,
+  setIsFlexible,
   selectedFeatures,
   toggleFeature,
   onSearch,
+  onClear,
+  hasActiveFilters,
   locationSuggestions,
   showSuggestions,
   setShowSuggestions,
@@ -238,13 +245,13 @@ function FilterBar({
   }, [setShowSuggestions]);
 
   return (
-    <div className="rounded-xl border border-gray-800 bg-gray-900/80 backdrop-blur-sm p-4 md:p-6">
-      {/* Row 1: Location + Size + Use Type */}
-      <div className="grid gap-3 md:grid-cols-3">
+    <div className="rounded-xl border border-gray-800 bg-gray-900/80 backdrop-blur-sm p-4 md:p-6 space-y-5">
+      {/* Row 1: Location + Size (sqft) */}
+      <div className="grid gap-3 md:grid-cols-2">
         {/* Location with autocomplete */}
         <div className="relative" ref={locationRef}>
-          <label className="mb-1.5 block text-xs font-medium text-gray-400">
-            Location
+          <label className="mb-1.5 block text-xs font-bold text-gray-400 uppercase tracking-widest">
+            <MapPin className="inline h-3 w-3 mr-1 -mt-0.5" /> Location
           </label>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
@@ -261,12 +268,10 @@ function FilterBar({
                   onSearch();
                 }
               }}
-              placeholder="City or State..."
+              placeholder="e.g. Carson, CA"
               className="w-full rounded-lg border border-gray-700 bg-gray-800 py-2.5 pl-10 pr-3 text-sm text-white placeholder-gray-500 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
             />
           </div>
-
-          {/* Autocomplete dropdown */}
           <AnimatePresence>
             {showSuggestions && locationSuggestions.length > 0 && (
               <motion.div
@@ -290,68 +295,174 @@ function FilterBar({
           </AnimatePresence>
         </div>
 
-        {/* Size range */}
+        {/* Size (sqft number input) */}
         <div>
-          <label className="mb-1.5 block text-xs font-medium text-gray-400">
-            Size
+          <label className="mb-1.5 block text-xs font-bold text-gray-400 uppercase tracking-widest">
+            <WarehouseIcon className="inline h-3 w-3 mr-1 -mt-0.5" /> Size (sqft)
           </label>
-          <div className="relative">
-            <select
-              value={sizeRange}
-              onChange={(e) => setSizeRange(e.target.value)}
-              className="w-full appearance-none rounded-lg border border-gray-700 bg-gray-800 py-2.5 pl-3 pr-10 text-sm text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
-            >
-              {SIZE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
-          </div>
-        </div>
-
-        {/* Use type */}
-        <div>
-          <label className="mb-1.5 block text-xs font-medium text-gray-400">
-            Use Type
-          </label>
-          <div className="relative">
-            <select
-              value={useType}
-              onChange={(e) => setUseType(e.target.value)}
-              className="w-full appearance-none rounded-lg border border-gray-700 bg-gray-800 py-2.5 pl-3 pr-10 text-sm text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
-            >
-              {USE_TYPE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
-          </div>
+          <input
+            type="number"
+            value={sqft}
+            onChange={(e) => setSqft(e.target.value)}
+            min={500}
+            step={500}
+            placeholder="e.g. 5000"
+            className="w-full rounded-lg border border-gray-700 bg-gray-800 py-2.5 px-3 text-sm text-white placeholder-gray-500 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+          />
         </div>
       </div>
 
-      {/* Row 2: Feature pills */}
-      <div className="mt-4 flex flex-wrap gap-2">
-        {FEATURE_OPTIONS.map(({ key, label, icon: Icon }) => {
-          const active = selectedFeatures.includes(key);
-          return (
+      {/* Row 2: Use Type (3 button tabs) */}
+      <div>
+        <label className="mb-1.5 block text-xs font-bold text-gray-400 uppercase tracking-widest">
+          Use Type
+        </label>
+        <div className="flex gap-2">
+          {USE_TYPE_OPTIONS.map((opt) => (
             <button
-              key={key}
-              onClick={() => toggleFeature(key)}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${
-                active
-                  ? "bg-blue-600 text-white border border-blue-500"
-                  : "bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600 hover:text-gray-300"
+              key={opt.value}
+              onClick={() => setUseType(useType === opt.value ? "any" : opt.value)}
+              className={`flex-1 rounded-lg border-2 py-2 text-sm font-bold transition-all ${
+                useType === opt.value
+                  ? "border-blue-500 bg-blue-950/50 text-blue-400"
+                  : "border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600"
               }`}
             >
-              <Icon className="h-3.5 w-3.5" />
-              {label}
+              {opt.label}
             </button>
-          );
-        })}
+          ))}
+        </div>
+      </div>
+
+      {/* Row 3: Move-in Date + Term Length */}
+      <div className="grid gap-3 md:grid-cols-2">
+        {/* Move-in Date */}
+        <div>
+          <label className="mb-1.5 block text-xs font-bold text-gray-400 uppercase tracking-widest">
+            <Calendar className="inline h-3 w-3 mr-1 -mt-0.5" /> Move-in Date
+          </label>
+          <div className="space-y-2">
+            <button
+              onClick={() => {
+                setIsImmediate(true);
+                setTiming("Immediately");
+              }}
+              className={`w-full flex items-center justify-between p-2.5 rounded-lg border-2 transition-all text-sm ${
+                isImmediate
+                  ? "border-blue-500 bg-blue-950/50 text-blue-400"
+                  : "border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600"
+              }`}
+            >
+              <span className="font-bold flex items-center gap-2">
+                <Zap size={14} /> Immediately
+              </span>
+              {isImmediate && <div className="w-2 h-2 bg-blue-500 rounded-full" />}
+            </button>
+            <div className={`relative p-2.5 rounded-lg border-2 transition-all ${
+              !isImmediate && timing
+                ? "border-blue-500 bg-gray-800"
+                : "border-gray-700 bg-gray-800"
+            }`}>
+              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">
+                Or select a date
+              </label>
+              <input
+                type="date"
+                value={!isImmediate ? timing : ""}
+                min={new Date().toISOString().split("T")[0]}
+                onChange={(e) => {
+                  setIsImmediate(false);
+                  setTiming(e.target.value);
+                }}
+                className="w-full bg-transparent font-bold text-sm text-white outline-none cursor-pointer"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Term Length */}
+        <div>
+          <label className="mb-1.5 block text-xs font-bold text-gray-400 uppercase tracking-widest">
+            <Clock className="inline h-3 w-3 mr-1 -mt-0.5" /> Term Length
+          </label>
+          <div className={`bg-gray-800 rounded-lg border-2 p-4 text-center transition-all ${
+            isFlexible ? "border-gray-700 opacity-60" : "border-blue-500"
+          }`}>
+            <div className="text-2xl font-bold text-white mb-2">
+              {isFlexible ? (
+                <span className="text-gray-500">Flexible</span>
+              ) : (
+                <>
+                  {durationMonths}{" "}
+                  <span className="text-sm text-gray-400 font-medium">
+                    {durationMonths === 1 ? "Month" : "Months"}
+                  </span>
+                </>
+              )}
+            </div>
+            <input
+              type="range"
+              min="1"
+              max="36"
+              value={durationMonths}
+              onChange={(e) => {
+                setDurationMonths(parseInt(e.target.value));
+                setIsFlexible(false);
+              }}
+              disabled={isFlexible}
+              className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+            />
+            <div className="flex justify-between text-[10px] text-gray-500 font-bold mt-1">
+              <span>1</span><span>12</span><span>24</span><span>36</span>
+            </div>
+          </div>
+          <button
+            onClick={() => setIsFlexible(!isFlexible)}
+            className={`mt-2 w-full flex items-center justify-center gap-2 p-2 rounded-lg border-2 font-bold text-xs transition-all ${
+              isFlexible
+                ? "bg-gray-700 text-white border-gray-600"
+                : "bg-gray-800 text-gray-500 border-gray-700 hover:border-gray-600"
+            }`}
+          >
+            <Infinity size={14} /> I&apos;m Flexible
+          </button>
+        </div>
+      </div>
+
+      {/* Row 4: Must-Haves + Clear All */}
+      <div>
+        <label className="mb-2 block text-xs font-bold text-gray-400 uppercase tracking-widest">
+          Must-Haves
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          {MUST_HAVE_OPTIONS.map(({ key, label, icon: Icon }) => {
+            const active = selectedFeatures.includes(key);
+            return (
+              <button
+                key={key}
+                onClick={() => toggleFeature(key)}
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${
+                  active
+                    ? "bg-blue-600 text-white border border-blue-500"
+                    : "bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600 hover:text-gray-300"
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+              </button>
+            );
+          })}
+
+          {hasActiveFilters && (
+            <button
+              onClick={onClear}
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-red-400 border border-red-800/50 bg-red-950/30 hover:bg-red-900/40 hover:text-red-300 transition-all ml-auto"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Clear All
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -368,13 +479,19 @@ interface ListingCardProps {
 }
 
 function ListingCard({ listing, index, onClick }: ListingCardProps) {
+  const isTier2 = listing.tier === 2;
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: Math.min(index * 0.05, 0.3) }}
       onClick={onClick}
-      className="group cursor-pointer overflow-hidden rounded-xl border border-gray-800 bg-gray-900 transition-all hover:border-gray-700 hover:shadow-lg hover:shadow-blue-900/10"
+      className={`group cursor-pointer overflow-hidden rounded-xl border bg-gray-900 transition-all hover:shadow-lg ${
+        isTier2
+          ? "border-gray-800/60 opacity-85 hover:opacity-100 hover:border-gray-700 hover:shadow-amber-900/10"
+          : "border-gray-800 hover:border-gray-700 hover:shadow-blue-900/10"
+      }`}
     >
       {/* Property image or gradient placeholder */}
       <div className="relative h-40 bg-gradient-to-br from-gray-800 to-gray-700 flex items-center justify-center overflow-hidden">
@@ -391,6 +508,12 @@ function ListingCard({ listing, index, onClick }: ListingCardProps) {
         <span className="absolute top-3 right-3 rounded-full bg-gray-900/80 backdrop-blur-sm px-2.5 py-1 text-xs font-medium text-gray-300 border border-gray-700">
           {listing.building_type}
         </span>
+        {/* Tier 2: Check Availability badge */}
+        {isTier2 && (
+          <span className="absolute top-3 left-3 rounded-full bg-amber-600/90 px-2.5 py-1 text-xs font-medium text-white">
+            Check Availability
+          </span>
+        )}
       </div>
 
       <div className="p-5">
@@ -404,8 +527,14 @@ function ListingCard({ listing, index, onClick }: ListingCardProps) {
 
         {/* Sqft range + Rate range */}
         <div className="mt-3 space-y-1.5 text-sm">
-          <p className="text-gray-400">{listing.sqft_range.display}</p>
-          <p className="text-emerald-400 font-medium">{listing.rate_range.display}</p>
+          {listing.sqft_range ? (
+            <p className="text-gray-400">{listing.sqft_range.display}</p>
+          ) : null}
+          {isTier2 ? (
+            <p className="text-gray-500 italic">Rate available on request</p>
+          ) : listing.rate_range ? (
+            <p className="text-emerald-400 font-medium">{listing.rate_range.display}</p>
+          ) : null}
         </div>
 
         {/* Feature pills */}
@@ -484,13 +613,19 @@ function InterestModal({ listing, onClose, hasExistingSearch }: InterestModalPro
 
         {/* Space details */}
         <div className="mt-4 rounded-lg border border-gray-800 bg-gray-800/50 p-4 space-y-2">
-          <div className="flex justify-between text-sm">
-            <span className="text-gray-400">Available Space</span>
-            <span className="text-white font-medium">{listing.sqft_range.display}</span>
-          </div>
+          {listing.sqft_range && (
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-400">Available Space</span>
+              <span className="text-white font-medium">{listing.sqft_range.display}</span>
+            </div>
+          )}
           <div className="flex justify-between text-sm">
             <span className="text-gray-400">Rate</span>
-            <span className="text-emerald-400 font-medium">{listing.rate_range.display}</span>
+            {listing.rate_range ? (
+              <span className="text-emerald-400 font-medium">{listing.rate_range.display}</span>
+            ) : (
+              <span className="text-gray-500 italic">On request</span>
+            )}
           </div>
           <div className="flex justify-between text-sm">
             <span className="text-gray-400">Type</span>
@@ -526,10 +661,190 @@ function InterestModal({ listing, onClose, hasExistingSearch }: InterestModalPro
 }
 
 /* ------------------------------------------------------------------ */
+/*  Tier 2 Interest Modal                                              */
+/* ------------------------------------------------------------------ */
+
+interface Tier2InterestModalProps {
+  listing: Listing;
+  onClose: () => void;
+}
+
+function Tier2InterestModal({ listing, onClose }: Tier2InterestModalProps) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async () => {
+    if (!name.trim() || !email.trim() || !phone.trim()) {
+      setError("Please fill in all required fields.");
+      return;
+    }
+    setError("");
+    setSubmitting(true);
+    try {
+      await api.browseListingInterest(listing.id, {
+        name: name.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        note: note.trim() || undefined,
+      });
+      setSubmitted(true);
+    } catch (err) {
+      console.error("Failed to submit interest:", err);
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+      />
+
+      {/* Modal */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        transition={{ duration: 0.2 }}
+        className="relative w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6 shadow-2xl"
+      >
+        <button
+          onClick={onClose}
+          className="absolute right-4 top-4 text-gray-500 hover:text-gray-300 transition-colors"
+        >
+          <X className="h-5 w-5" />
+        </button>
+
+        {/* Location badge */}
+        <div className="mb-4 flex items-center gap-2 text-amber-400">
+          <MapPin className="h-5 w-5" />
+          <span className="font-medium">{listing.location.display}</span>
+        </div>
+
+        {submitted ? (
+          <div className="py-6 text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-900/50 border border-emerald-700">
+              <ArrowRight className="h-6 w-6 text-emerald-400" />
+            </div>
+            <h2 className="text-xl font-bold text-white">Request Sent</h2>
+            <p className="mt-2 text-sm text-gray-400">
+              We&apos;ll check availability and get back to you shortly.
+            </p>
+            <button
+              onClick={onClose}
+              className="mt-6 inline-flex items-center justify-center rounded-lg bg-gray-800 px-6 py-2.5 text-sm font-medium text-gray-300 transition-all hover:bg-gray-700 hover:text-white"
+            >
+              Close
+            </button>
+          </div>
+        ) : (
+          <>
+            <h2 className="text-xl font-bold text-white">
+              Check Availability
+            </h2>
+            <p className="mt-2 text-sm text-gray-400">
+              Leave your details and we&apos;ll confirm availability and pricing for this space.
+            </p>
+
+            {/* Form */}
+            <div className="mt-5 space-y-3">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-400">
+                  Name <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Your full name"
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-white placeholder-gray-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-400">
+                  Email <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@company.com"
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-white placeholder-gray-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-400">
+                  Phone <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="(555) 123-4567"
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-white placeholder-gray-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-400">
+                  Note <span className="text-gray-600">(optional)</span>
+                </label>
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Any details about your needs..."
+                  rows={3}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2.5 text-sm text-white placeholder-gray-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-colors resize-none"
+                />
+              </div>
+            </div>
+
+            {error && (
+              <p className="mt-3 text-sm text-red-400">{error}</p>
+            )}
+
+            {/* Submit */}
+            <button
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-3 text-sm font-semibold text-white transition-all hover:bg-amber-500 active:scale-[0.98] disabled:opacity-50"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Submitting...
+                </>
+              ) : (
+                <>
+                  Check Availability
+                  <ArrowRight className="h-4 w-4" />
+                </>
+              )}
+            </button>
+          </>
+        )}
+      </motion.div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main Page                                                          */
 /* ------------------------------------------------------------------ */
 
 export default function BrowsePage() {
+  const router = useRouter();
   const [listings, setListings] = useState<Listing[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -538,9 +853,26 @@ export default function BrowsePage() {
 
   // Filters
   const [location, setLocation] = useState("");
-  const [sizeRange, setSizeRange] = useState("");
+  const [sqft, setSqft] = useState("");
   const [useType, setUseType] = useState("any");
+  const [timing, setTiming] = useState("");
+  const [isImmediate, setIsImmediate] = useState(false);
+  const [durationMonths, setDurationMonths] = useState(6);
+  const [isFlexible, setIsFlexible] = useState(true);
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
+
+  const hasActiveFilters = !!(location || sqft || useType !== "any" || timing || isImmediate || !isFlexible || selectedFeatures.length > 0);
+
+  const clearAllFilters = useCallback(() => {
+    setLocation("");
+    setSqft("");
+    setUseType("any");
+    setTiming("");
+    setIsImmediate(false);
+    setDurationMonths(6);
+    setIsFlexible(true);
+    setSelectedFeatures([]);
+  }, []);
 
   // Location autocomplete
   const [locationSuggestions, setLocationSuggestions] = useState<LocationSuggestion[]>([]);
@@ -565,15 +897,14 @@ export default function BrowsePage() {
   const buildParams = useCallback(() => {
     const params: Record<string, string | number> = {};
     if (location) params.city = location;
-    if (sizeRange) {
-      const [min, max] = sizeRange.split("-");
-      if (min) params.min_sqft = parseInt(min);
-      if (max) params.max_sqft = parseInt(max);
+    if (sqft) {
+      const val = parseInt(sqft);
+      if (val > 0) params.min_sqft = val;
     }
     if (useType && useType !== "any") params.use_type = useType;
     if (selectedFeatures.length > 0) params.features = selectedFeatures.join(",");
     return params;
-  }, [location, sizeRange, useType, selectedFeatures]);
+  }, [location, sqft, useType, selectedFeatures]);
 
   // Fetch listings
   const fetchListings = useCallback(
@@ -626,7 +957,7 @@ export default function BrowsePage() {
       fetchListings(1);
     }, 300);
     return () => clearTimeout(timer);
-  }, [sizeRange, useType, selectedFeatures]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sqft, useType, timing, isImmediate, durationMonths, isFlexible, selectedFeatures]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Location autocomplete
   const handleLocationInput = useCallback(
@@ -695,14 +1026,23 @@ export default function BrowsePage() {
         <div className="mx-auto max-w-7xl">
           <FilterBar
             location={location}
-            setLocation={setLocation}
-            sizeRange={sizeRange}
-            setSizeRange={setSizeRange}
+            sqft={sqft}
+            setSqft={setSqft}
             useType={useType}
             setUseType={setUseType}
+            timing={timing}
+            setTiming={setTiming}
+            isImmediate={isImmediate}
+            setIsImmediate={setIsImmediate}
+            durationMonths={durationMonths}
+            setDurationMonths={setDurationMonths}
+            isFlexible={isFlexible}
+            setIsFlexible={setIsFlexible}
             selectedFeatures={selectedFeatures}
             toggleFeature={toggleFeature}
             onSearch={handleSearch}
+            onClear={clearAllFilters}
+            hasActiveFilters={hasActiveFilters}
             locationSuggestions={locationSuggestions}
             showSuggestions={showSuggestions}
             setShowSuggestions={setShowSuggestions}
@@ -744,7 +1084,15 @@ export default function BrowsePage() {
                     key={listing.id}
                     listing={listing}
                     index={i}
-                    onClick={() => setSelectedListing(listing)}
+                    onClick={() => {
+                      const params = new URLSearchParams();
+                      if (sqft) params.set("sqft", sqft);
+                      if (isImmediate) params.set("timing", "asap");
+                      else if (timing) params.set("timing", timing);
+                      if (!isFlexible) params.set("duration", String(durationMonths));
+                      const qs = params.toString();
+                      router.push(`/browse/${listing.id}${qs ? `?${qs}` : ""}`);
+                    }}
                   />
                 ))}
               </div>

@@ -263,6 +263,10 @@ async def _handle_tool_calls(message: dict, db: AsyncSession) -> JSONResponse:
                     option_number=int(args.get("option_number", 0)),
                     topics=args.get("topics"),
                 )
+            elif tool_name == "lookup_by_address":
+                result_text = await handlers.lookup_by_address(
+                    address=args.get("address", ""),
+                )
             elif tool_name == "send_booking_link":
                 result_text = await handlers.send_booking_link(
                     option_number=int(args.get("option_number", 0)),

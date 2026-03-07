@@ -348,6 +348,48 @@ class BuyerSMSOrchestrator:
                 f"Ask the remaining questions naturally in one message."
             )
 
+        elif plan.action == "address_lookup":
+            address_text = interpretation.address_text if hasattr(interpretation, 'address_text') else None
+            if address_text:
+                from wex_platform.services.address_lookup import lookup_by_address as do_address_lookup
+
+                addr_result = await do_address_lookup(address_text, self.db)
+
+                if addr_result.found and addr_result.property_id:
+                    # Present as focused property
+                    state.focused_match_id = addr_result.property_id
+                    presented = list(state.presented_match_ids or [])
+                    if addr_result.property_id not in presented:
+                        presented.append(addr_result.property_id)
+                        state.presented_match_ids = presented
+                    state.phase = "PROPERTY_FOCUSED"
+                    phase = "PROPERTY_FOCUSED"
+
+                    if addr_result.tier == 2:
+                        plan.response_hint = (
+                            f"Found the property in {addr_result.city}. "
+                            f"It's not currently in our active network. "
+                            f"Offer to check availability with the owner."
+                        )
+                    else:
+                        plan.response_hint = (
+                            f"Found the property in {addr_result.city}. "
+                            f"Share basic details and ask if they'd like to learn more or schedule a tour."
+                        )
+
+                    # Populate property_data so the response agent has context
+                    property_data = addr_result.property_data or {
+                        "id": addr_result.property_id,
+                        "city": addr_result.city,
+                        "address": addr_result.address,
+                        "source": "address_lookup",
+                    }
+                else:
+                    plan.response_hint = (
+                        f"Couldn't find a property at that address. "
+                        f"Ask if they meant a different address or want to search by city instead."
+                    )
+
         elif plan.action == "lookup" and resolved_property_id:
             # Real detail fetcher (Phase 3)
             from wex_platform.services.sms_detail_fetcher import DetailFetcher

@@ -36,6 +36,7 @@ Choose exactly one:
 - "commitment" — wants to book/commit ("I want that one", "book it", "let's go with this one")
 - "provide_info" — providing name/email during collection phase
 - "greeting" — just saying hi or thanks
+- "address_lookup" — buyer provided a specific street address to look up
 - "unknown" — can't determine intent
 
 ## TOUR REQUEST DETECTION
@@ -49,6 +50,12 @@ These phrases mean intent = "tour_request":
 - "set up a viewing", "arrange a visit"
 If user references a specific property AND uses tour language -> intent = "tour_request", action = "schedule_tour".
 
+## ADDRESS LOOKUP
+If the buyer mentions a specific street address (e.g., "1234 Main St" or "the warehouse at 500 Industrial Blvd"),
+set intent to "address_lookup" and action to "address_lookup".
+The address_text from the interpreter contains the extracted address.
+Do NOT treat a street address as a city name for location criteria.
+
 ## ACTION DECISION
 Choose one or null:
 - "search" — search for facilities by criteria (location + sqft + use_type given)
@@ -56,6 +63,7 @@ Choose one or null:
 - "schedule_tour" — proceed with tour booking
 - "commitment_handoff" — proceed with commitment flow
 - "collect_info" — buyer is providing name/email
+- "address_lookup" — look up a specific property by street address
 - null — just respond (greeting, thanks, or missing criteria)
 
 ## MATCHING USER REFERENCES TO PROPERTIES
@@ -114,8 +122,8 @@ If the user provides their name anywhere in the message, extract it:
 
 ## REQUIRED JSON SCHEMA
 {{
-  "intent": "new_search|refine_search|facility_info|tour_request|commitment|provide_info|greeting|unknown",
-  "action": "search|lookup|schedule_tour|commitment_handoff|collect_info" or null,
+  "intent": "new_search|refine_search|facility_info|tour_request|commitment|provide_info|greeting|address_lookup|unknown",
+  "action": "search|lookup|schedule_tour|commitment_handoff|collect_info|address_lookup" or null,
   "criteria": {{
     "location": "city or area name" or null,
     "sqft": number or null,
@@ -208,6 +216,7 @@ class CriteriaAgent(BaseAgent):
             "action_keywords": interpretation.action_keywords,
             "emails": interpretation.emails,
             "names": interpretation.names,
+            "address_text": interpretation.address_text,
         })
 
         existing_ctx = f"\nExisting criteria: {json.dumps(existing_criteria)}" if existing_criteria else ""

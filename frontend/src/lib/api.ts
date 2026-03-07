@@ -276,6 +276,25 @@ export const api = {
   },
   browseLocations: (q?: string) =>
     fetchAPI(`/api/browse/locations${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  browseListingDetail: (id: string) =>
+    fetchAPI(`/api/browse/listings/${id}`),
+  browseListingInterest: (propertyId: string, data: { name: string; email: string; phone: string; note?: string }) =>
+    fetchAPI(`/api/browse/listings/${propertyId}/interest`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  browseQualify: (propertyId: string, data: {
+    sqft_needed: number;
+    timing: string;
+    name: string;
+    phone: string;
+    email?: string;
+    action: string;
+  }) =>
+    fetchAPI(`/api/browse/listings/${propertyId}/qualify`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // DLA (Demand-Led Activation)
   resolveDLAToken: (token: string) =>

@@ -128,6 +128,8 @@ CONVERSATION FLOW:
 
    CRITICAL PACING RULE: Each beat is a separate turn. Ask beat 1, WAIT for the answer. Then ask beat 2, WAIT for the answer. Then ask beat 3, WAIT for the answer. NEVER combine beats 2 and 3 into one response.
 
+   If the caller asks about a specific property by address, use the lookup_by_address tool to find it before proceeding with criteria-based search.
+
    Once you have at least location + size + use type, call search_properties.
 
 4. SEARCH: Once you have enough criteria, call the search_properties tool. Then describe ALL options returned (up to 3), including:
@@ -355,6 +357,23 @@ def _build_tool_definitions() -> list[dict]:
                         }
                     },
                     "required": ["option_number", "buyer_name"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_by_address",
+                "description": "Look up a specific property by its street address. Use when the caller mentions a specific address like '1234 Main Street' or 'the warehouse on Industrial Blvd'.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "address": {
+                            "type": "string",
+                            "description": "The street address mentioned by the caller, e.g. '860 Sandhill Ave, Carson'"
+                        }
+                    },
+                    "required": ["address"]
                 }
             }
         }
