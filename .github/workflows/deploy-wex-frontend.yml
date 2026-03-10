@@ -44,6 +44,7 @@ jobs:
         run: |
           docker build \
             --build-arg NEXT_PUBLIC_API_URL=https://wex-backend-4tjtpxax5a-uw.a.run.app \
+            --build-arg NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=AIzaSyBJzwqv4gJDlABSlqA_lkdhP0pqOwi0Jlw \
             -t ${{ env.IMAGE }}:${{ github.sha }} \
             -t ${{ env.IMAGE }}:latest \
             ./frontend
