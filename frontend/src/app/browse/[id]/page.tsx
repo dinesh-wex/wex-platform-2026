@@ -528,15 +528,13 @@ function PricingCard({
               Book Tour
             </button>
 
-            {property.instant_book_eligible && (
-              <button
-                onClick={onInstantBook}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-600 px-4 py-3 text-sm font-semibold text-emerald-600 transition-all hover:bg-emerald-600/10 active:scale-[0.98]"
-              >
-                <Bolt className="h-4 w-4" />
-                Instant Book
-              </button>
-            )}
+            <button
+              onClick={onInstantBook}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-600 px-4 py-3 text-sm font-semibold text-emerald-600 transition-all hover:bg-emerald-600/10 active:scale-[0.98]"
+            >
+              <Bolt className="h-4 w-4" />
+              Instant Book
+            </button>
           </div>
         </>
       ) : (
