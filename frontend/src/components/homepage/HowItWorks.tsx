@@ -79,8 +79,8 @@ function StepCard({
         <step.icon className="h-6 w-6 text-white" />
       </div>
       <div>
-        <h4 className="text-lg font-semibold text-white">{step.title}</h4>
-        <p className="mt-1 text-sm text-gray-400">{step.description}</p>
+        <h4 className="text-lg font-semibold text-slate-900">{step.title}</h4>
+        <p className="mt-1 text-sm text-slate-600">{step.description}</p>
       </div>
     </motion.div>
   );
@@ -88,14 +88,14 @@ function StepCard({
 
 export default function HowItWorks() {
   return (
-    <section className="bg-gray-950 py-24">
+    <section className="bg-slate-50 py-24">
       <div className="mx-auto max-w-6xl px-6">
         <motion.h2
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.5 }}
-          className="text-center text-3xl font-bold text-white sm:text-4xl"
+          className="text-center text-3xl font-bold text-slate-900 sm:text-4xl"
         >
           How It Works
         </motion.h2>
@@ -107,13 +107,13 @@ export default function HowItWorks() {
               initial={{ opacity: 0 }}
               whileInView={{ opacity: 1 }}
               viewport={{ once: true }}
-              className="mb-8 text-center text-xl font-semibold text-blue-400"
+              className="mb-8 text-center text-xl font-semibold text-emerald-600"
             >
               Looking for Space
             </motion.h3>
             <div className="space-y-8">
               {buyerSteps.map((step, i) => (
-                <StepCard key={step.title} step={step} index={i} color="bg-blue-600" />
+                <StepCard key={step.title} step={step} index={i} color="bg-emerald-600" />
               ))}
             </div>
           </div>
@@ -124,7 +124,7 @@ export default function HowItWorks() {
               initial={{ opacity: 0 }}
               whileInView={{ opacity: 1 }}
               viewport={{ once: true }}
-              className="mb-8 text-center text-xl font-semibold text-emerald-400"
+              className="mb-8 text-center text-xl font-semibold text-emerald-600"
             >
               Have Space to Offer
             </motion.h3>

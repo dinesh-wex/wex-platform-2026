@@ -416,22 +416,23 @@ export default function BuyerEditorialFlow() {
           W<span className="text-emerald-600">Ex</span>
         </div>
 
-        <button
-          onClick={() => setViewMode(viewMode === "agent" ? "grid" : "agent")}
-          className="pointer-events-auto bg-white/80 backdrop-blur-md border border-slate-200 text-slate-900 px-5 py-2.5 rounded-full flex items-center gap-2 hover:bg-white transition-all text-sm font-bold shadow-sm"
-        >
-          {viewMode === "agent" ? (
-            <>
-              <Grid size={16} />
-              Browse Collection
-            </>
-          ) : (
-            <>
-              <MessageSquare size={16} />
-              Back to Agent
-            </>
-          )}
-        </button>
+        {viewMode === "grid" ? (
+          <button
+            onClick={() => setViewMode("agent")}
+            className="pointer-events-auto bg-white/80 backdrop-blur-md border border-slate-200 text-slate-900 px-5 py-2.5 rounded-full flex items-center gap-2 hover:bg-white transition-all text-sm font-bold shadow-sm"
+          >
+            <MessageSquare size={16} />
+            Back to Agent
+          </button>
+        ) : (
+          <Link
+            href="/browse"
+            className="pointer-events-auto bg-white/80 backdrop-blur-md border border-slate-200 text-slate-900 px-5 py-2.5 rounded-full flex items-center gap-2 hover:bg-white transition-all text-sm font-bold shadow-sm"
+          >
+            <Grid size={16} />
+            Browse Spaces
+          </Link>
+        )}
       </div>
 
       {/* ═══════════════════════════════════════════════

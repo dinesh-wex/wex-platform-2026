@@ -7,8 +7,10 @@ All responses apply STRICT visibility controls:
   - No owner info, no supplier name, no exact values
 """
 
+import hashlib
 import logging
 import math
+import random as _random
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -19,6 +21,7 @@ from sqlalchemy import case, select, and_, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
+from wex_platform.app.config import get_settings
 from wex_platform.domain.models import (
     Buyer,
     BuyerConversation,
@@ -104,6 +107,74 @@ def _build_specs(pk) -> dict:
     if pk.has_sprinkler is not None:
         specs["has_sprinkler"] = pk.has_sprinkler
     return specs
+
+
+def _obfuscated_coords(real_lat: float, real_lng: float, property_id: str, radius_meters: float = 800) -> dict:
+    """Deterministic offset so the same property always shows the same approximate circle."""
+    seed = int(hashlib.sha256(property_id.encode()).hexdigest()[:16], 16)
+    rng = _random.Random(seed)
+    distance = rng.uniform(200, radius_meters)
+    angle = rng.uniform(0, 2 * math.pi)
+    earth_radius = 6378137.0
+    offset_lat = distance * math.cos(angle) / earth_radius
+    offset_lng = distance * math.sin(angle) / (earth_radius * math.cos(math.pi * real_lat / 180))
+    return {
+        "lat": round(real_lat + (offset_lat * 180 / math.pi), 6),
+        "lng": round(real_lng + (offset_lng * 180 / math.pi), 6),
+    }
+
+
+def _filter_property_images(image_urls: list | None) -> list[str]:
+    """Strip only Google Maps roadmap images (they reveal exact location via red pin marker).
+    Keep satellite and street view images — they show the building itself."""
+    if not image_urls:
+        return []
+    return [
+        url for url in image_urls
+        if isinstance(url, str) and not (
+            "maps.googleapis.com" in url and "maptype=roadmap" in url
+        )
+    ]
+
+
+def _circle_path(lat: float, lng: float, radius_km: float = 0.8, num_points: int = 24) -> str:
+    """Generate polygon points approximating a circle for the Static Maps API path param."""
+    points = []
+    for i in range(num_points + 1):
+        angle = 2 * math.pi * i / num_points
+        d_lat = (radius_km / 111) * math.cos(angle)
+        d_lng = (radius_km / (111 * math.cos(math.radians(lat)))) * math.sin(angle)
+        points.append(f"{lat + d_lat:.6f},{lng + d_lng:.6f}")
+    return "|".join(points)
+
+
+def _approximate_area_map_url(lat: float, lng: float, api_key: str) -> str:
+    """Silver-styled static map with an emerald circle — used as card thumbnail fallback."""
+    circle = _circle_path(lat, lng)
+    styles = (
+        "&style=feature:poi|visibility:off"
+        "&style=element:geometry|color:0xf5f5f5"
+        "&style=element:labels.text.fill|color:0x616161"
+        "&style=element:labels.text.stroke|color:0xf5f5f5"
+        "&style=feature:road|element:geometry|color:0xffffff"
+        "&style=feature:road.highway|element:geometry.fill|color:0xe8e8e8"
+        "&style=feature:water|element:geometry|color:0xd4e6f1"
+    )
+    return (
+        f"https://maps.googleapis.com/maps/api/staticmap?"
+        f"center={lat},{lng}&zoom=13&size=800x400&scale=2&maptype=roadmap"
+        f"{styles}"
+        f"&path=color:0x05966680|weight:2|fillcolor:0x10b98126|{circle}"
+        f"&key={api_key}"
+    )
+
+
+def _fallback_map_image(prop, api_key: str | None) -> list[str]:
+    """Generate an approximate-area static map as fallback when no real photos exist."""
+    if not api_key or not prop.lat or not prop.lng:
+        return []
+    coords = _obfuscated_coords(prop.lat, prop.lng, str(prop.id))
+    return [_approximate_area_map_url(coords["lat"], coords["lng"], api_key)]
 
 
 def _extract_features(pk: PropertyKnowledge) -> list[dict]:
@@ -309,8 +380,12 @@ async def get_listings(
             "rate_range": rate,
             "building_type": _building_type_label(prop.property_type),
             "features": _extract_features(pk),
-            "has_image": bool(prop.primary_image_url),
-            "image_url": prop.primary_image_url or None,
+            "has_image": True,
+            "image_url": (
+                _filter_property_images(prop.image_urls)
+                or _fallback_map_image(prop, get_settings().google_maps_api_key)
+                or [None]
+            )[0],
         }
         listings.append(listing)
 
@@ -373,14 +448,22 @@ async def get_listing_detail(
     if is_tier1 and pl and pl.supplier_rate_per_sqft:
         rate = _rate_range(pl.supplier_rate_per_sqft)
 
+    # Strip Google Maps screenshots — the approximate map component handles location visuals
+    filtered_images = _filter_property_images(prop.image_urls)
+
+    # Fallback: branded static map at approximate coords when no real photos
+    if not filtered_images:
+        filtered_images = _fallback_map_image(prop, get_settings().google_maps_api_key)
+
     return {
         "id": prop.id,
         "tier": 1 if is_tier1 else 2,
         "location": {
             "city": prop.city or "Unknown",
             "state": prop.state or "",
-            "display": f"{prop.city or 'Unknown'}, {prop.state or ''}".strip(", "),
+            "display": f"{prop.city or 'Unknown'}, {prop.state or ''} Area".strip(", "),
         },
+        "approximate_location": _obfuscated_coords(prop.lat, prop.lng, str(prop.id)) if (prop.lat and prop.lng) else None,
         "building_type": _building_type_label(prop.property_type),
         "features": _extract_features(pk) if pk else [],
         "specs": _build_specs(pk) if pk else {},
@@ -388,9 +471,9 @@ async def get_listing_detail(
         "rate_range": rate,
         "instant_book_eligible": pl.instant_book_eligible if (pl and is_tier1) else False,
         "tour_required": pl.tour_required if (pl and is_tier1) else True,
-        "has_image": bool(prop.primary_image_url),
-        "image_url": prop.primary_image_url or None,
-        "image_urls": prop.image_urls if prop.image_urls else [],
+        "has_image": bool(filtered_images),
+        "image_url": filtered_images[0] if filtered_images else None,
+        "image_urls": filtered_images,
     }
 
 

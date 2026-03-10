@@ -147,11 +147,25 @@ pip install -e ".[dev]"
 Install Node.js from https://nodejs.org/ (LTS version).
 
 ### Database issues / want to start fresh
-Delete the database file and restart the backend:
+- For local SQLite data, delete the database file and restart the backend:
 ```powershell
 del backend\wex_platform.db
 ```
 It will be recreated on next startup.
+
+- For Cloud SQL SMS/voice test data, use the combined cleanup script from `backend/`:
+```powershell
+python clear_test_data_cloud.py
+```
+
+Useful variants:
+```powershell
+python clear_test_data_cloud.py --phone "+14157661133"
+python clear_test_data_cloud.py --sms-only
+python clear_test_data_cloud.py --voice-only
+```
+
+This script clears SMS and voice test data in one command and avoids the Windows event-loop shutdown errors from the older separate scripts.
 
 ### Port already in use
 Kill the process using the port:

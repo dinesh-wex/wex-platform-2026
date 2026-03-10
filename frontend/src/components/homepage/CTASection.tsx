@@ -18,8 +18,8 @@ export default function CTASection() {
   }
 
   return (
-    <section className="relative overflow-hidden bg-gradient-to-br from-gray-950 via-blue-950/40 to-gray-950 py-24">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,_rgba(59,130,246,0.1),_transparent_60%)]" />
+    <section className="relative overflow-hidden bg-gradient-to-br from-slate-50 via-emerald-50 to-slate-50 py-24">
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,_rgba(59,130,246,0.06),_transparent_60%)]" />
 
       <div className="relative z-10 mx-auto max-w-3xl px-6 text-center">
         <motion.h2
@@ -27,7 +27,7 @@ export default function CTASection() {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.5 }}
-          className="text-3xl font-bold text-white sm:text-4xl"
+          className="text-3xl font-bold text-slate-900 sm:text-4xl"
         >
           What could your space earn?
         </motion.h2>
@@ -45,11 +45,11 @@ export default function CTASection() {
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             placeholder="Enter your warehouse address..."
-            className="flex-1 rounded-lg border border-gray-700 bg-gray-800/60 px-5 py-3.5 text-white placeholder-gray-500 outline-none transition-colors focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            className="flex-1 rounded-lg border border-slate-300 bg-white px-5 py-3.5 text-slate-900 placeholder-slate-400 outline-none transition-colors focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
           />
           <button
             type="submit"
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-6 py-3.5 font-semibold text-white shadow-lg shadow-blue-600/25 transition-all hover:bg-blue-500 hover:shadow-blue-500/30 active:scale-[0.98]"
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-6 py-3.5 font-semibold text-white shadow-lg shadow-emerald-600/25 transition-all hover:bg-emerald-500 hover:shadow-emerald-500/30 active:scale-[0.98]"
           >
             Get Estimate
             <ArrowRight className="h-4 w-4" />
@@ -61,12 +61,12 @@ export default function CTASection() {
           whileInView={{ opacity: 1 }}
           viewport={{ once: true }}
           transition={{ delay: 0.4 }}
-          className="mt-6 text-sm text-gray-400"
+          className="mt-6 text-sm text-slate-500"
         >
           Already know you want to list?{" "}
           <Link
             href="/supplier/onboard"
-            className="text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors"
+            className="text-emerald-600 hover:text-emerald-500 underline underline-offset-2 transition-colors"
           >
             Skip straight to onboarding
           </Link>

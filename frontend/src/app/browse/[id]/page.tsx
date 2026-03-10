@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import {
@@ -21,8 +22,12 @@ import {
   Info,
   CheckCircle,
   AlertTriangle,
+  Camera,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import ApproximateLocationMap from "@/components/maps/ApproximateLocationMap";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -42,6 +47,7 @@ interface PropertyDetail {
   has_image: boolean;
   image_url?: string | null;
   image_urls: string[];
+  approximate_location: { lat: number; lng: number } | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -106,32 +112,32 @@ function BrowseNavbar() {
     <nav
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
         scrolled
-          ? "bg-gray-950/90 backdrop-blur-md border-b border-gray-800/50 shadow-lg shadow-black/10"
-          : "bg-gray-950 border-b border-gray-800/30"
+          ? "bg-white/90 backdrop-blur-md border-b border-slate-200 shadow-lg shadow-slate-900/5"
+          : "bg-white border-b border-slate-100"
       }`}
     >
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
         <Link href="/" className="flex items-center gap-2">
-          <WarehouseIcon className="h-6 w-6 text-blue-400" />
-          <span className="text-lg font-bold text-white">WEx</span>
+          <WarehouseIcon className="h-6 w-6 text-emerald-600" />
+          <span className="text-lg font-bold text-slate-900">WEx</span>
         </Link>
 
         <div className="hidden items-center gap-8 md:flex">
           <Link
             href="/browse"
-            className="text-sm font-medium text-white"
+            className="text-sm font-medium text-slate-900"
           >
             Browse Spaces
           </Link>
           <Link
             href="/supplier/earncheck?intent=onboard"
-            className="text-sm text-gray-300 hover:text-white transition-colors"
+            className="text-sm text-slate-600 hover:text-slate-900 transition-colors"
           >
             List Your Space
           </Link>
           <Link
             href="/buyer"
-            className="inline-flex h-9 items-center justify-center rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white transition-all hover:bg-blue-500 active:scale-[0.98]"
+            className="inline-flex h-9 items-center justify-center rounded-lg bg-emerald-600 px-5 text-sm font-semibold text-white transition-all hover:bg-emerald-500 active:scale-[0.98]"
           >
             Find Space
           </Link>
@@ -140,22 +146,22 @@ function BrowseNavbar() {
         <button
           type="button"
           onClick={() => setMobileOpen(!mobileOpen)}
-          className="text-gray-300 hover:text-white md:hidden"
+          className="text-slate-600 hover:text-slate-900 md:hidden"
         >
           {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
         </button>
       </div>
 
       {mobileOpen && (
-        <div className="border-t border-gray-800 bg-gray-950/95 backdrop-blur-md px-6 py-6 md:hidden">
+        <div className="border-t border-slate-200 bg-white/95 backdrop-blur-md px-6 py-6 md:hidden">
           <div className="flex flex-col gap-4">
-            <Link href="/browse" onClick={() => setMobileOpen(false)} className="text-sm font-medium text-white">
+            <Link href="/browse" onClick={() => setMobileOpen(false)} className="text-sm font-medium text-slate-900">
               Browse Spaces
             </Link>
-            <Link href="/supplier/earncheck?intent=onboard" onClick={() => setMobileOpen(false)} className="text-sm text-gray-300 hover:text-white transition-colors">
+            <Link href="/supplier/earncheck?intent=onboard" onClick={() => setMobileOpen(false)} className="text-sm text-slate-600 hover:text-slate-900 transition-colors">
               List Your Space
             </Link>
-            <Link href="/buyer" onClick={() => setMobileOpen(false)} className="inline-flex h-10 items-center justify-center rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white transition-all hover:bg-blue-500">
+            <Link href="/buyer" onClick={() => setMobileOpen(false)} className="inline-flex h-10 items-center justify-center rounded-lg bg-emerald-600 px-5 text-sm font-semibold text-white transition-all hover:bg-emerald-500">
               Find Space
             </Link>
           </div>
@@ -166,38 +172,226 @@ function BrowseNavbar() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Hero Image / Gradient                                              */
+/*  SafeImage — Frosted Contain (prevents awkward cropping)            */
 /* ------------------------------------------------------------------ */
 
-function HeroSection({ property }: { property: PropertyDetail }) {
-  const hasImages = property.image_urls && property.image_urls.length > 0;
-  const heroImage = hasImages ? property.image_urls[0] : property.image_url;
+function SafeImage({ src, alt, onClick }: { src: string; alt: string; onClick?: () => void }) {
+  return (
+    <div
+      className={`relative w-full h-full bg-slate-900 overflow-hidden group${onClick ? " cursor-pointer" : ""}`}
+      onClick={onClick}
+    >
+      {/* Blurred background fill */}
+      <img
+        src={src}
+        alt=""
+        className="absolute inset-0 w-full h-full object-cover opacity-40 blur-xl scale-110"
+      />
+      {/* Uncropped foreground */}
+      <img
+        src={src}
+        alt={alt}
+        className="relative z-10 w-full h-full object-contain drop-shadow-2xl transition-transform duration-500 group-hover:scale-[1.02]"
+      />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Hero Gallery                                                       */
+/* ------------------------------------------------------------------ */
+
+function HeroSection({ property, onImageClick }: { property: PropertyDetail; onImageClick: (index: number) => void }) {
+  const images =
+    property.image_urls?.length > 0
+      ? property.image_urls
+      : property.image_url
+      ? [property.image_url]
+      : [];
+
+  const tierBadge = property.tier === 2 ? (
+    <span className="absolute top-4 left-4 z-20 inline-flex items-center gap-1 rounded-full bg-amber-600/90 backdrop-blur-sm px-3 py-1.5 text-xs font-medium text-white">
+      &#9203; Check Availability
+    </span>
+  ) : (
+    <span className="absolute top-4 left-4 z-20 inline-flex items-center gap-1 rounded-full bg-emerald-600/90 backdrop-blur-sm px-3 py-1.5 text-xs font-medium text-white">
+      &#9889; Instant Book
+    </span>
+  );
+
+  if (images.length === 0) {
+    return (
+      <div className="mx-auto max-w-7xl px-6 pt-2">
+        <div className="relative h-64 md:h-80 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center">
+          <span className="text-slate-400 font-medium flex items-center gap-2">
+            <Camera className="h-5 w-5" /> No images available
+          </span>
+          {tierBadge}
+        </div>
+      </div>
+    );
+  }
+
+  if (images.length === 1) {
+    return (
+      <div className="mx-auto max-w-7xl px-6 pt-2">
+        <div className="relative h-64 md:h-96 rounded-2xl overflow-hidden shadow-sm">
+          <SafeImage src={images[0]} alt={property.location.display} onClick={() => onImageClick(0)} />
+          {tierBadge}
+        </div>
+      </div>
+    );
+  }
+
+  if (images.length === 2) {
+    return (
+      <div className="mx-auto max-w-7xl px-6 pt-2">
+        <div className="relative h-64 md:h-96 rounded-2xl overflow-hidden shadow-sm flex gap-2">
+          <div className="w-1/2 h-full relative">
+            <SafeImage src={images[0]} alt="View 1" onClick={() => onImageClick(0)} />
+            {tierBadge}
+          </div>
+          <div className="w-1/2 h-full">
+            <SafeImage src={images[1]} alt="View 2" onClick={() => onImageClick(1)} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 3+ images: Bento grid
+  return (
+    <div className="mx-auto max-w-7xl px-6 pt-2">
+      <div className="relative h-72 md:h-[450px] rounded-2xl overflow-hidden shadow-sm flex gap-2">
+        {/* Left: Hero image */}
+        <div className="w-2/3 h-full relative">
+          <SafeImage src={images[0]} alt={property.location.display} onClick={() => onImageClick(0)} />
+          {tierBadge}
+        </div>
+
+        {/* Right: Stacked thumbnails */}
+        <div className="w-1/3 h-full flex flex-col gap-2">
+          <div className="w-full h-1/2">
+            <SafeImage src={images[1]} alt="Secondary View" onClick={() => onImageClick(1)} />
+          </div>
+          <div className="relative w-full h-1/2 cursor-pointer group" onClick={() => onImageClick(2)}>
+            <SafeImage src={images[2]} alt="Tertiary View" />
+            {images.length > 3 && (
+              <div className="absolute inset-0 z-20 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center transition-all group-hover:bg-slate-900/50">
+                <span className="text-white font-bold text-lg md:text-xl flex items-center gap-2">
+                  <Camera className="h-6 w-6" /> +{images.length - 3} Photos
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Premium Lightbox (Immersive Viewing Experience)                     */
+/* ------------------------------------------------------------------ */
+
+interface LightboxProps {
+  images: string[];
+  initialIndex?: number;
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+function PremiumLightbox({ images, initialIndex = 0, isOpen, onClose }: LightboxProps) {
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
+
+  useEffect(() => {
+    setCurrentIndex(initialIndex);
+  }, [initialIndex]);
+
+  const handleNext = useCallback(() => {
+    setCurrentIndex((prev) => (prev + 1) % images.length);
+  }, [images.length]);
+
+  const handlePrev = useCallback(() => {
+    setCurrentIndex((prev) => (prev - 1 + images.length) % images.length);
+  }, [images.length]);
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowRight") handleNext();
+      if (e.key === "ArrowLeft") handlePrev();
+    },
+    [onClose, handleNext, handlePrev]
+  );
+
+  useEffect(() => {
+    if (isOpen) {
+      document.body.style.overflow = "hidden";
+      window.addEventListener("keydown", handleKeyDown);
+    }
+    return () => {
+      document.body.style.overflow = "auto";
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, handleKeyDown]);
+
+  if (!isOpen || !images || images.length === 0) return null;
 
   return (
-    <div className="relative h-64 md:h-80 w-full overflow-hidden bg-gradient-to-br from-gray-800 via-gray-800 to-gray-700">
-      {heroImage ? (
-        <img
-          src={heroImage}
-          alt={property.location.display}
-          className="absolute inset-0 h-full w-full object-cover"
-        />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center">
-          <WarehouseIcon className="h-16 w-16 text-gray-600" />
+    <div className="fixed inset-0 z-[100] flex flex-col bg-slate-950/95 backdrop-blur-2xl">
+      {/* Header: Counter + Close */}
+      <div className="flex justify-between items-center p-6 text-white absolute top-0 left-0 right-0 z-50">
+        <div className="text-sm font-bold tracking-widest text-slate-300">
+          {currentIndex + 1} / {images.length}
         </div>
-      )}
-      {/* Gradient overlay at the bottom */}
-      <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-gray-950 to-transparent" />
-      {/* Building type badge */}
-      <span className="absolute top-4 right-4 rounded-full bg-gray-900/80 backdrop-blur-sm px-3 py-1.5 text-xs font-medium text-gray-300 border border-gray-700">
-        {property.building_type}
-      </span>
-      {/* Tier badge */}
-      {property.tier === 2 && (
-        <span className="absolute top-4 left-4 rounded-full bg-amber-600/90 px-3 py-1.5 text-xs font-medium text-white">
-          Check Availability
-        </span>
-      )}
+        <button
+          onClick={onClose}
+          className="p-3 bg-white/10 hover:bg-white/20 rounded-full backdrop-blur-md transition-colors"
+        >
+          <X className="h-6 w-6 text-white" />
+        </button>
+      </div>
+
+      {/* Main stage */}
+      <div className="flex-1 relative flex items-center justify-center p-4 md:p-12">
+        <img
+          src={images[currentIndex]}
+          alt={`Warehouse view ${currentIndex + 1}`}
+          className="w-full h-full object-contain drop-shadow-2xl"
+        />
+
+        {/* Nav arrows (desktop) */}
+        <button
+          onClick={handlePrev}
+          className="hidden md:flex absolute left-8 top-1/2 -translate-y-1/2 p-4 bg-white/5 hover:bg-white/20 border border-white/10 rounded-full text-white backdrop-blur-md transition-all hover:scale-110"
+        >
+          <ChevronLeft className="h-8 w-8" />
+        </button>
+        <button
+          onClick={handleNext}
+          className="hidden md:flex absolute right-8 top-1/2 -translate-y-1/2 p-4 bg-white/5 hover:bg-white/20 border border-white/10 rounded-full text-white backdrop-blur-md transition-all hover:scale-110"
+        >
+          <ChevronRight className="h-8 w-8" />
+        </button>
+      </div>
+
+      {/* Filmstrip thumbnails */}
+      <div className="h-24 md:h-32 w-full px-4 pb-6 flex items-center justify-center gap-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+        {images.map((img, idx) => (
+          <button
+            key={idx}
+            onClick={() => setCurrentIndex(idx)}
+            className={`relative h-16 w-24 md:h-20 md:w-32 flex-shrink-0 rounded-lg overflow-hidden transition-all duration-300 ${
+              currentIndex === idx
+                ? "ring-2 ring-white opacity-100 scale-105"
+                : "opacity-40 hover:opacity-70 grayscale hover:grayscale-0"
+            }`}
+          >
+            <img src={img} alt={`Thumbnail ${idx + 1}`} className="w-full h-full object-cover" />
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -211,7 +405,7 @@ function FeaturesSection({ features }: { features: { key: string; label: string 
 
   return (
     <div>
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-500 mb-3">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">
         Features
       </h2>
       <div className="flex flex-wrap gap-2">
@@ -220,7 +414,7 @@ function FeaturesSection({ features }: { features: { key: string; label: string 
           return (
             <span
               key={feat.key}
-              className="inline-flex items-center gap-1.5 rounded-full bg-gray-800 px-3 py-1.5 text-sm text-gray-300"
+              className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-sm text-slate-700"
             >
               <Icon className="h-3.5 w-3.5" />
               {feat.label}
@@ -252,14 +446,14 @@ function SpecsSection({ specs }: { specs: Record<string, any> }) {
 
   return (
     <div>
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-500 mb-3">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">
         Building Specs
       </h2>
       <div className="grid grid-cols-2 gap-x-6 gap-y-3">
         {entries.map((entry) => (
           <div key={entry.label}>
-            <dt className="text-xs text-gray-500">{entry.label}</dt>
-            <dd className="mt-0.5 text-sm font-medium text-gray-200">{entry.value}</dd>
+            <dt className="text-xs text-slate-400">{entry.label}</dt>
+            <dd className="mt-0.5 text-sm font-medium text-slate-800">{entry.value}</dd>
           </div>
         ))}
       </div>
@@ -281,17 +475,8 @@ interface QualifyFormState {
 
 interface PricingCardProps {
   property: PropertyDetail;
-  showQualifyForm: boolean;
-  qualifyAction: "book_tour" | "instant_book";
-  qualifyForm: QualifyFormState;
-  qualifying: boolean;
-  qualifyResult: any;
-  qualifyError: string;
   onBookTour: () => void;
   onInstantBook: () => void;
-  onFormChange: (field: keyof QualifyFormState, value: string) => void;
-  onSubmit: () => void;
-  onReset: () => void;
 }
 
 const TIMING_OPTIONS = [
@@ -303,27 +488,18 @@ const TIMING_OPTIONS = [
 
 function PricingCard({
   property,
-  showQualifyForm,
-  qualifyAction,
-  qualifyForm,
-  qualifying,
-  qualifyResult,
-  qualifyError,
   onBookTour,
   onInstantBook,
-  onFormChange,
-  onSubmit,
-  onReset,
 }: PricingCardProps) {
   const isTier1 = property.tier === 1;
 
   return (
-    <div className="sticky top-24 rounded-xl border border-gray-800 bg-gray-900 p-6 shadow-xl">
+    <div className="sticky top-24 rounded-xl border border-slate-200 bg-white p-6 shadow-lg shadow-slate-200/50">
       {isTier1 ? (
         <>
           {/* Tier 1 Pricing */}
           <div className="mb-5">
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-900/40 border border-emerald-800/50 px-2.5 py-1 text-xs font-medium text-emerald-400">
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-xs font-medium text-emerald-600">
               <Bolt className="h-3 w-3" />
               Tier 1 Listing
             </span>
@@ -331,15 +507,15 @@ function PricingCard({
 
           {property.sqft_range && (
             <div className="mb-3">
-              <p className="text-xs text-gray-500">Available Space</p>
-              <p className="text-lg font-semibold text-white">{property.sqft_range.display}</p>
+              <p className="text-xs text-slate-400">Available Space</p>
+              <p className="text-lg font-semibold text-slate-900">{property.sqft_range.display}</p>
             </div>
           )}
 
           {property.rate_range && (
             <div className="mb-6">
-              <p className="text-xs text-gray-500">Rate</p>
-              <p className="text-lg font-semibold text-emerald-400">{property.rate_range.display}</p>
+              <p className="text-xs text-slate-400">Rate</p>
+              <p className="text-lg font-semibold text-emerald-600">{property.rate_range.display}</p>
             </div>
           )}
 
@@ -355,179 +531,11 @@ function PricingCard({
             {property.instant_book_eligible && (
               <button
                 onClick={onInstantBook}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-600 px-4 py-3 text-sm font-semibold text-emerald-400 transition-all hover:bg-emerald-600/10 active:scale-[0.98]"
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-600 px-4 py-3 text-sm font-semibold text-emerald-600 transition-all hover:bg-emerald-600/10 active:scale-[0.98]"
               >
                 <Bolt className="h-4 w-4" />
                 Instant Book
               </button>
-            )}
-          </div>
-
-          {/* Inline Qualify Form */}
-          <div
-            className={`overflow-hidden transition-all duration-300 ease-in-out ${
-              showQualifyForm && !qualifyResult
-                ? "max-h-[600px] opacity-100 mt-5"
-                : showQualifyForm && qualifyResult
-                ? "max-h-[300px] opacity-100 mt-5"
-                : "max-h-0 opacity-0"
-            }`}
-          >
-            {qualifyResult ? (
-              /* ---------- Result display ---------- */
-              <div>
-                {qualifyResult.status === "match" ? (
-                  <div className="rounded-lg border border-emerald-800/50 bg-emerald-900/20 p-4">
-                    <div className="flex items-start gap-3">
-                      <CheckCircle className="h-5 w-5 text-emerald-400 mt-0.5 shrink-0" />
-                      <div>
-                        <p className="text-sm font-semibold text-emerald-400 mb-1">Great match!</p>
-                        <p className="text-sm text-gray-300">
-                          We&apos;re setting up your {qualifyAction === "book_tour" ? "tour" : "booking"}.
-                          {qualifyResult.message && (
-                            <span className="block mt-1 text-gray-400">{qualifyResult.message}</span>
-                          )}
-                        </p>
-                        {qualifyResult.engagement_id && (
-                          <a
-                            href={`/buyer/engagement/${qualifyResult.engagement_id}`}
-                            className="inline-flex items-center gap-1.5 mt-3 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-emerald-500 active:scale-[0.98]"
-                          >
-                            Continue
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-lg border border-amber-800/50 bg-amber-900/20 p-4">
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
-                      <div>
-                        <p className="text-sm font-semibold text-amber-400 mb-1">
-                          This space might not be the best fit
-                        </p>
-                        <p className="text-sm text-gray-300">
-                          {qualifyResult.reasons?.[0] || "Your requirements don't quite match this listing."}
-                          {qualifyResult.alternatives_count > 0 && (
-                            <span className="block mt-1 text-gray-400">
-                              We found {qualifyResult.alternatives_count} other option{qualifyResult.alternatives_count !== 1 ? "s" : ""} that might work better.
-                            </span>
-                          )}
-                        </p>
-                        <div className="flex gap-2 mt-3">
-                          <a
-                            href="/buyer/options"
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-amber-500 active:scale-[0.98]"
-                          >
-                            View Alternatives
-                          </a>
-                          <button
-                            onClick={onReset}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-700 px-4 py-2 text-sm font-medium text-gray-300 transition-all hover:bg-gray-800 active:scale-[0.98]"
-                          >
-                            Try Again
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              /* ---------- Qualify Form ---------- */
-              <div className="border-t border-gray-800 pt-5">
-                <p className="text-sm font-semibold text-white mb-4">
-                  {qualifyAction === "book_tour" ? "Book a Tour" : "Instant Book"}
-                </p>
-
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      How much space do you need? <span className="text-red-400">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      placeholder="e.g. 5000"
-                      value={qualifyForm.sqft_needed}
-                      onChange={(e) => onFormChange("sqft_needed", e.target.value)}
-                      className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 text-sm placeholder-gray-500 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-none"
-                    />
-                    <p className="text-[11px] text-gray-500 mt-0.5">sqft</p>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">When do you need it?</label>
-                    <select
-                      value={qualifyForm.timing}
-                      onChange={(e) => onFormChange("timing", e.target.value)}
-                      className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 text-sm focus:ring-emerald-500 focus:border-emerald-500 focus:outline-none"
-                    >
-                      {TIMING_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Your name <span className="text-red-400">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Full name"
-                      value={qualifyForm.name}
-                      onChange={(e) => onFormChange("name", e.target.value)}
-                      className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 text-sm placeholder-gray-500 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Phone number <span className="text-red-400">*</span>
-                    </label>
-                    <input
-                      type="tel"
-                      placeholder="(555) 123-4567"
-                      value={qualifyForm.phone}
-                      onChange={(e) => onFormChange("phone", e.target.value)}
-                      className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 text-sm placeholder-gray-500 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Email</label>
-                    <input
-                      type="email"
-                      placeholder="you@company.com"
-                      value={qualifyForm.email}
-                      onChange={(e) => onFormChange("email", e.target.value)}
-                      className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 text-sm placeholder-gray-500 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-none"
-                    />
-                  </div>
-
-                  {qualifyError && (
-                    <p className="text-sm text-red-400">{qualifyError}</p>
-                  )}
-
-                  <button
-                    onClick={onSubmit}
-                    disabled={qualifying}
-                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition-all hover:bg-emerald-500 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed mt-2"
-                  >
-                    {qualifying ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Checking...
-                      </>
-                    ) : (
-                      "Confirm & Continue"
-                    )}
-                  </button>
-                </div>
-              </div>
             )}
           </div>
         </>
@@ -535,21 +543,21 @@ function PricingCard({
         <>
           {/* Tier 2 Pricing */}
           <div className="mb-5">
-            <span className="inline-flex items-center gap-1 rounded-full bg-amber-900/40 border border-amber-800/50 px-2.5 py-1 text-xs font-medium text-amber-400">
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2.5 py-1 text-xs font-medium text-amber-600">
               Tier 2 Listing
             </span>
           </div>
 
           {property.sqft_range && (
             <div className="mb-3">
-              <p className="text-xs text-gray-500">Available Space</p>
-              <p className="text-lg font-semibold text-white">{property.sqft_range.display}</p>
+              <p className="text-xs text-slate-400">Available Space</p>
+              <p className="text-lg font-semibold text-slate-900">{property.sqft_range.display}</p>
             </div>
           )}
 
           <div className="mb-6">
-            <p className="text-xs text-gray-500">Rate</p>
-            <p className="text-sm text-gray-500 italic">Available on request</p>
+            <p className="text-xs text-slate-400">Rate</p>
+            <p className="text-sm text-slate-400 italic">Available on request</p>
           </div>
 
           <button
@@ -564,36 +572,300 @@ function PricingCard({
 }
 
 /* ------------------------------------------------------------------ */
+/*  Booking Drawer (slide-out panel)                                   */
+/* ------------------------------------------------------------------ */
+
+interface BookingDrawerProps {
+  isOpen: boolean;
+  onClose: () => void;
+  property: PropertyDetail;
+  qualifyAction: "book_tour" | "instant_book";
+  qualifyForm: QualifyFormState;
+  qualifying: boolean;
+  qualifyResult: any;
+  qualifyError: string;
+  onFormChange: (field: keyof QualifyFormState, value: string) => void;
+  onSubmit: () => void;
+  onReset: () => void;
+}
+
+function BookingDrawer({
+  isOpen,
+  onClose,
+  property,
+  qualifyAction,
+  qualifyForm,
+  qualifying,
+  qualifyResult,
+  qualifyError,
+  onFormChange,
+  onSubmit,
+  onReset,
+}: BookingDrawerProps) {
+  // Lock body scroll when drawer is open
+  React.useEffect(() => {
+    if (isOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [isOpen]);
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          {/* Backdrop */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-slate-900/20 backdrop-blur-sm"
+            onClick={onClose}
+          />
+
+          {/* Panel */}
+          <motion.div
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ type: "spring", damping: 30, stiffness: 300 }}
+            className="relative w-full max-w-md bg-white h-full shadow-2xl flex flex-col"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-slate-100">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">
+                  {qualifyAction === "book_tour" ? "Book a Tour" : "Instant Book"}
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">
+                  {property.location.display}
+                </p>
+              </div>
+              <button
+                onClick={onClose}
+                className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Scrollable body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {qualifyResult ? (
+                /* ---------- Result display ---------- */
+                <div>
+                  {qualifyResult.status === "match" ? (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+                      <div className="flex items-start gap-3">
+                        <CheckCircle className="h-5 w-5 text-emerald-500 mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-sm font-semibold text-emerald-700 mb-1">Great match!</p>
+                          <p className="text-sm text-slate-700">
+                            We&apos;re setting up your {qualifyAction === "book_tour" ? "tour" : "booking"}.
+                            {qualifyResult.message && (
+                              <span className="block mt-1 text-slate-500">{qualifyResult.message}</span>
+                            )}
+                          </p>
+                          {qualifyResult.engagement_id && (
+                            <a
+                              href={`/buyer/engagement/${qualifyResult.engagement_id}`}
+                              className="inline-flex items-center gap-1.5 mt-4 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-emerald-500 active:scale-[0.98]"
+                            >
+                              Continue
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-5">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-sm font-semibold text-amber-700 mb-1">
+                            This space might not be the best fit
+                          </p>
+                          <p className="text-sm text-slate-700">
+                            {qualifyResult.reasons?.[0] || "Your requirements don't quite match this listing."}
+                            {qualifyResult.alternatives_count > 0 && (
+                              <span className="block mt-1 text-slate-500">
+                                We found {qualifyResult.alternatives_count} other option{qualifyResult.alternatives_count !== 1 ? "s" : ""} that might work better.
+                              </span>
+                            )}
+                          </p>
+                          <div className="flex gap-2 mt-4">
+                            <a
+                              href="/buyer/options"
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-amber-500 active:scale-[0.98]"
+                            >
+                              View Alternatives
+                            </a>
+                            <button
+                              onClick={onReset}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:bg-slate-100 active:scale-[0.98]"
+                            >
+                              Try Again
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* ---------- Qualify Form ---------- */
+                <div className="space-y-5">
+                  {/* Property summary so defaults feel contextual */}
+                  <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 space-y-1">
+                    <p className="text-sm font-semibold text-slate-900">{property.location.display}</p>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                      {property.sqft_range && <span>{property.sqft_range.display} available</span>}
+                      {property.rate_range && <span>{property.rate_range.display}</span>}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      How much space do you need? <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="e.g. 5000"
+                      value={qualifyForm.sqft_needed}
+                      onChange={(e) => onFormChange("sqft_needed", e.target.value)}
+                      className="w-full bg-white border border-slate-300 text-slate-900 rounded-xl px-4 py-3 text-sm placeholder-slate-400 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-none"
+                    />
+                    {property.sqft_range ? (
+                      <p className="text-xs text-slate-400 mt-1">
+                        sqft &middot; {property.sqft_range.display} available at this location
+                      </p>
+                    ) : (
+                      <p className="text-xs text-slate-400 mt-1">sqft</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">When do you need it?</label>
+                    <select
+                      value={qualifyForm.timing}
+                      onChange={(e) => onFormChange("timing", e.target.value)}
+                      className="w-full bg-white border border-slate-300 text-slate-900 rounded-xl px-4 py-3 text-sm focus:ring-emerald-500 focus:border-emerald-500 focus:outline-none"
+                    >
+                      {TIMING_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      Your name <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Full name"
+                      value={qualifyForm.name}
+                      onChange={(e) => onFormChange("name", e.target.value)}
+                      className="w-full bg-white border border-slate-300 text-slate-900 rounded-xl px-4 py-3 text-sm placeholder-slate-400 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      Phone number <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="(555) 123-4567"
+                      value={qualifyForm.phone}
+                      onChange={(e) => onFormChange("phone", e.target.value)}
+                      className="w-full bg-white border border-slate-300 text-slate-900 rounded-xl px-4 py-3 text-sm placeholder-slate-400 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      Email <span className="text-slate-400">(optional)</span>
+                    </label>
+                    <input
+                      type="email"
+                      placeholder="you@company.com"
+                      value={qualifyForm.email}
+                      onChange={(e) => onFormChange("email", e.target.value)}
+                      className="w-full bg-white border border-slate-300 text-slate-900 rounded-xl px-4 py-3 text-sm placeholder-slate-400 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-none"
+                    />
+                  </div>
+
+                  {qualifyError && (
+                    <p className="text-sm text-red-500">{qualifyError}</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Sticky footer */}
+            {!qualifyResult && (
+              <div className="p-6 border-t border-slate-100 bg-white">
+                <button
+                  onClick={onSubmit}
+                  disabled={qualifying}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-4 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 transition-all hover:bg-emerald-500 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {qualifying ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Checking...
+                    </>
+                  ) : (
+                    "Confirm & Continue"
+                  )}
+                </button>
+              </div>
+            )}
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Loading Skeleton                                                   */
 /* ------------------------------------------------------------------ */
 
 function LoadingSkeleton() {
   return (
-    <main className="min-h-screen bg-gray-950">
+    <main className="min-h-screen bg-slate-50">
       <BrowseNavbar />
       <div className="pt-16">
         {/* Hero skeleton */}
-        <div className="h-64 md:h-80 w-full bg-gray-800 animate-pulse" />
+        <div className="h-64 md:h-80 w-full bg-slate-200 animate-pulse" />
 
         <div className="mx-auto max-w-7xl px-6 py-8">
           {/* Back link skeleton */}
-          <div className="h-4 w-32 bg-gray-800 rounded animate-pulse mb-8" />
+          <div className="h-4 w-32 bg-slate-200 rounded animate-pulse mb-8" />
 
           <div className="grid gap-8 lg:grid-cols-3">
             {/* Left column */}
             <div className="lg:col-span-2 space-y-6">
-              <div className="h-8 w-48 bg-gray-800 rounded animate-pulse" />
-              <div className="h-5 w-32 bg-gray-800 rounded animate-pulse" />
+              <div className="h-8 w-48 bg-slate-200 rounded animate-pulse" />
+              <div className="h-5 w-32 bg-slate-200 rounded animate-pulse" />
               <div className="flex gap-2">
                 {[1, 2, 3].map((i) => (
-                  <div key={i} className="h-8 w-20 bg-gray-800 rounded-full animate-pulse" />
+                  <div key={i} className="h-8 w-20 bg-slate-200 rounded-full animate-pulse" />
                 ))}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 {[1, 2, 3, 4, 5, 6].map((i) => (
                   <div key={i}>
-                    <div className="h-3 w-16 bg-gray-800 rounded animate-pulse mb-1" />
-                    <div className="h-5 w-24 bg-gray-800 rounded animate-pulse" />
+                    <div className="h-3 w-16 bg-slate-200 rounded animate-pulse mb-1" />
+                    <div className="h-5 w-24 bg-slate-200 rounded animate-pulse" />
                   </div>
                 ))}
               </div>
@@ -601,11 +873,11 @@ function LoadingSkeleton() {
 
             {/* Right column */}
             <div>
-              <div className="rounded-xl border border-gray-800 bg-gray-900 p-6 space-y-4">
-                <div className="h-6 w-24 bg-gray-800 rounded-full animate-pulse" />
-                <div className="h-5 w-36 bg-gray-800 rounded animate-pulse" />
-                <div className="h-5 w-28 bg-gray-800 rounded animate-pulse" />
-                <div className="h-12 w-full bg-gray-800 rounded-lg animate-pulse" />
+              <div className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
+                <div className="h-6 w-24 bg-slate-200 rounded-full animate-pulse" />
+                <div className="h-5 w-36 bg-slate-200 rounded animate-pulse" />
+                <div className="h-5 w-28 bg-slate-200 rounded animate-pulse" />
+                <div className="h-12 w-full bg-slate-200 rounded-lg animate-pulse" />
               </div>
             </div>
           </div>
@@ -621,17 +893,17 @@ function LoadingSkeleton() {
 
 function NotFoundState() {
   return (
-    <main className="min-h-screen bg-gray-950">
+    <main className="min-h-screen bg-slate-50">
       <BrowseNavbar />
       <div className="flex flex-col items-center justify-center pt-32 px-6">
-        <WarehouseIcon className="h-16 w-16 text-gray-700 mb-6" />
-        <h1 className="text-2xl font-bold text-white mb-2">Listing Not Found</h1>
-        <p className="text-gray-400 text-sm mb-8 text-center max-w-md">
+        <WarehouseIcon className="h-16 w-16 text-slate-300 mb-6" />
+        <h1 className="text-2xl font-bold text-slate-900 mb-2">Listing Not Found</h1>
+        <p className="text-slate-500 text-sm mb-8 text-center max-w-md">
           This listing may have been removed or is no longer available. Try browsing other spaces.
         </p>
         <Link
           href="/browse"
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition-all hover:bg-blue-500 active:scale-[0.98]"
+          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition-all hover:bg-emerald-500 active:scale-[0.98]"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Browse
@@ -658,8 +930,17 @@ export default function PropertyDetailPage() {
   const prefillSqft = searchParams.get("sqft") || "";
   const prefillTiming = searchParams.get("timing") || "asap";
 
+  // Lightbox state
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+
+  function handleImageClick(index: number) {
+    setLightboxIndex(index);
+    setLightboxOpen(true);
+  }
+
   // Qualify form state
-  const [showQualifyForm, setShowQualifyForm] = useState(false);
+  const [showBookingDrawer, setShowBookingDrawer] = useState(false);
   const [qualifyAction, setQualifyAction] = useState<"book_tour" | "instant_book">("book_tour");
   const [qualifyForm, setQualifyForm] = useState<QualifyFormState>({
     sqft_needed: prefillSqft,
@@ -672,20 +953,30 @@ export default function PropertyDetailPage() {
   const [qualifyResult, setQualifyResult] = useState<any>(null);
   const [qualifyError, setQualifyError] = useState("");
 
+  // Smart-default sqft from the property's min when no filter was provided
+  useEffect(() => {
+    if (property && !prefillSqft && property.sqft_range) {
+      setQualifyForm((prev) => ({
+        ...prev,
+        sqft_needed: prev.sqft_needed || String(property.sqft_range!.min),
+      }));
+    }
+  }, [property, prefillSqft]);
+
   function handleFormChange(field: keyof QualifyFormState, value: string) {
     setQualifyForm((prev) => ({ ...prev, [field]: value }));
   }
 
   function handleBookTour() {
     setQualifyAction("book_tour");
-    setShowQualifyForm(true);
+    setShowBookingDrawer(true);
     setQualifyResult(null);
     setQualifyError("");
   }
 
   function handleInstantBook() {
     setQualifyAction("instant_book");
-    setShowQualifyForm(true);
+    setShowBookingDrawer(true);
     setQualifyResult(null);
     setQualifyError("");
   }
@@ -760,24 +1051,27 @@ export default function PropertyDetailPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-950">
+    <main className="min-h-screen bg-slate-50">
       <BrowseNavbar />
 
       {/* Spacer for fixed navbar */}
       <div className="pt-16">
+        {/* Back bar */}
+        <div className="mx-auto max-w-7xl px-6 pt-6 pb-2">
+          <Link
+            href="/browse"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Browse Spaces
+          </Link>
+        </div>
+
         {/* Hero */}
-        <HeroSection property={property} />
+        <HeroSection property={property} onImageClick={handleImageClick} />
 
         {/* Content */}
         <div className="mx-auto max-w-7xl px-6 py-8">
-          {/* Back link */}
-          <Link
-            href="/browse"
-            className="inline-flex items-center gap-1.5 text-sm text-gray-400 hover:text-white transition-colors mb-8"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Browse
-          </Link>
 
           <div className="grid gap-8 lg:grid-cols-3">
             {/* Left Column (2/3) */}
@@ -785,12 +1079,12 @@ export default function PropertyDetailPage() {
               {/* Location + Type */}
               <div>
                 <div className="flex items-center gap-2 mb-1">
-                  <MapPin className="h-5 w-5 text-blue-400 shrink-0" />
-                  <h1 className="text-2xl font-bold text-white md:text-3xl">
+                  <MapPin className="h-5 w-5 text-emerald-500 shrink-0" />
+                  <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">
                     {property.location.display}
                   </h1>
                 </div>
-                <p className="text-gray-400 text-sm ml-7">
+                <p className="text-slate-500 text-base ml-7">
                   {property.building_type}
                 </p>
               </div>
@@ -800,27 +1094,59 @@ export default function PropertyDetailPage() {
 
               {/* Specs */}
               <SpecsSection specs={property.specs} />
+
+              {/* Approximate Location Map */}
+              {property.approximate_location && (
+                <ApproximateLocationMap
+                  lat={property.approximate_location.lat}
+                  lng={property.approximate_location.lng}
+                  label={property.location.display}
+                />
+              )}
             </div>
 
             {/* Right Column (1/3) */}
             <div>
               <PricingCard
                 property={property}
-                showQualifyForm={showQualifyForm}
-                qualifyAction={qualifyAction}
-                qualifyForm={qualifyForm}
-                qualifying={qualifying}
-                qualifyResult={qualifyResult}
-                qualifyError={qualifyError}
                 onBookTour={handleBookTour}
                 onInstantBook={handleInstantBook}
-                onFormChange={handleFormChange}
-                onSubmit={handleQualify}
-                onReset={handleQualifyReset}
               />
             </div>
           </div>
         </div>
+
+        <BookingDrawer
+          isOpen={showBookingDrawer}
+          onClose={() => {
+            setShowBookingDrawer(false);
+            setQualifyResult(null);
+            setQualifyError("");
+          }}
+          property={property}
+          qualifyAction={qualifyAction}
+          qualifyForm={qualifyForm}
+          qualifying={qualifying}
+          qualifyResult={qualifyResult}
+          qualifyError={qualifyError}
+          onFormChange={handleFormChange}
+          onSubmit={handleQualify}
+          onReset={handleQualifyReset}
+        />
+
+        {/* Lightbox */}
+        <PremiumLightbox
+          images={
+            property.image_urls?.length > 0
+              ? property.image_urls
+              : property.image_url
+              ? [property.image_url]
+              : []
+          }
+          initialIndex={lightboxIndex}
+          isOpen={lightboxOpen}
+          onClose={() => setLightboxOpen(false)}
+        />
       </div>
     </main>
   );

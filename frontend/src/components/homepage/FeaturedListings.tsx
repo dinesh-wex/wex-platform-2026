@@ -11,7 +11,7 @@ const mockListings = [
     sqftRange: "10,000 - 25,000 sqft",
     rateRange: "$4.50 - $6.00 /sqft/yr",
     features: ["Climate Controlled", "Dock High"],
-    gradient: "from-blue-900/40 to-gray-800/60",
+    gradient: "from-blue-100 to-slate-100",
   },
   {
     id: "2",
@@ -19,7 +19,7 @@ const mockListings = [
     sqftRange: "5,000 - 15,000 sqft",
     rateRange: "$5.00 - $7.50 /sqft/yr",
     features: ["Cross-Dock", "24/7 Access"],
-    gradient: "from-indigo-900/40 to-gray-800/60",
+    gradient: "from-indigo-100 to-slate-100",
   },
   {
     id: "3",
@@ -27,7 +27,7 @@ const mockListings = [
     sqftRange: "20,000 - 50,000 sqft",
     rateRange: "$3.75 - $5.25 /sqft/yr",
     features: ["Rail Access", "Dock High"],
-    gradient: "from-slate-800/60 to-gray-900/60",
+    gradient: "from-slate-100 to-slate-200",
   },
   {
     id: "4",
@@ -35,7 +35,7 @@ const mockListings = [
     sqftRange: "8,000 - 20,000 sqft",
     rateRange: "$3.50 - $5.00 /sqft/yr",
     features: ["Climate Controlled", "Yard Space"],
-    gradient: "from-cyan-900/40 to-gray-800/60",
+    gradient: "from-cyan-100 to-slate-100",
   },
   {
     id: "5",
@@ -43,7 +43,7 @@ const mockListings = [
     sqftRange: "15,000 - 40,000 sqft",
     rateRange: "$3.00 - $4.50 /sqft/yr",
     features: ["Rail Access", "Cross-Dock"],
-    gradient: "from-purple-900/30 to-gray-800/60",
+    gradient: "from-purple-100 to-slate-100",
   },
   {
     id: "6",
@@ -51,7 +51,7 @@ const mockListings = [
     sqftRange: "5,000 - 12,000 sqft",
     rateRange: "$8.00 - $12.00 /sqft/yr",
     features: ["Climate Controlled", "24/7 Access"],
-    gradient: "from-rose-900/30 to-gray-800/60",
+    gradient: "from-rose-100 to-slate-100",
   },
 ];
 
@@ -75,14 +75,14 @@ const fadeInUp = {
 
 export default function FeaturedListings() {
   return (
-    <section className="bg-gray-900 py-24">
+    <section className="bg-white py-24">
       <div className="mx-auto max-w-7xl px-6">
         <motion.h2
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.5 }}
-          className="text-center text-3xl font-bold text-white sm:text-4xl"
+          className="text-center text-3xl font-bold text-slate-900 sm:text-4xl"
         >
           Available Spaces
         </motion.h2>
@@ -96,26 +96,26 @@ export default function FeaturedListings() {
               whileInView="visible"
               viewport={{ once: true, margin: "-30px" }}
               variants={fadeInUp}
-              className="group overflow-hidden rounded-xl border border-gray-800 bg-gray-850 transition-all hover:border-gray-700 hover:shadow-lg hover:shadow-blue-900/10"
+              className="group overflow-hidden rounded-xl border border-slate-200 bg-white transition-all hover:border-slate-300 hover:shadow-lg hover:shadow-slate-300/30"
             >
               {/* Placeholder satellite image */}
               <div
                 className={`h-40 bg-gradient-to-br ${listing.gradient} flex items-center justify-center`}
               >
-                <MapPin className="h-10 w-10 text-gray-600" />
+                <MapPin className="h-10 w-10 text-slate-400" />
               </div>
 
               <div className="p-5">
                 <div className="flex items-center gap-2">
-                  <MapPin className="h-4 w-4 text-blue-400" />
-                  <h3 className="text-lg font-semibold text-white">
+                  <MapPin className="h-4 w-4 text-emerald-500" />
+                  <h3 className="text-lg font-semibold text-slate-900">
                     {listing.city}
                   </h3>
                 </div>
 
-                <div className="mt-3 space-y-1.5 text-sm text-gray-400">
+                <div className="mt-3 space-y-1.5 text-sm text-slate-600">
                   <p>{listing.sqftRange}</p>
-                  <p className="text-emerald-400 font-medium">{listing.rateRange}</p>
+                  <p className="text-emerald-600 font-medium">{listing.rateRange}</p>
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -124,7 +124,7 @@ export default function FeaturedListings() {
                     return (
                       <span
                         key={feature}
-                        className="inline-flex items-center gap-1 rounded-full bg-gray-800 px-2.5 py-1 text-xs text-gray-300"
+                        className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700"
                       >
                         <Icon className="h-3 w-3" />
                         {feature}
@@ -146,7 +146,7 @@ export default function FeaturedListings() {
         >
           <Link
             href="/browse"
-            className="inline-flex items-center gap-2 text-blue-400 font-medium hover:text-blue-300 transition-colors"
+            className="inline-flex items-center gap-2 text-emerald-600 font-medium hover:text-emerald-500 transition-colors"
           >
             Browse All Spaces
             <ArrowRight className="h-4 w-4" />

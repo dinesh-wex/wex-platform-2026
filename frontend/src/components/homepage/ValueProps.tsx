@@ -57,8 +57,8 @@ function BenefitItem({
         <benefit.icon className="h-5 w-5 text-white" />
       </div>
       <div>
-        <h4 className="font-semibold text-white">{benefit.title}</h4>
-        <p className="mt-1 text-sm text-gray-400">{benefit.description}</p>
+        <h4 className="font-semibold text-slate-900">{benefit.title}</h4>
+        <p className="mt-1 text-sm text-slate-600">{benefit.description}</p>
       </div>
     </motion.div>
   );
@@ -66,7 +66,7 @@ function BenefitItem({
 
 export default function ValueProps() {
   return (
-    <section className="bg-gray-950 py-24">
+    <section className="bg-slate-50 py-24">
       <div className="mx-auto max-w-6xl px-6">
         <div className="grid gap-16 md:grid-cols-2 md:gap-12">
           {/* Supplier column */}
@@ -76,7 +76,7 @@ export default function ValueProps() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ duration: 0.4 }}
-              className="mb-8 text-2xl font-bold text-white"
+              className="mb-8 text-2xl font-bold text-slate-900"
             >
               For Suppliers
             </motion.h3>
@@ -94,13 +94,13 @@ export default function ValueProps() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ duration: 0.4 }}
-              className="mb-8 text-2xl font-bold text-white"
+              className="mb-8 text-2xl font-bold text-slate-900"
             >
               For Buyers
             </motion.h3>
             <div className="space-y-6">
               {buyerBenefits.map((b, i) => (
-                <BenefitItem key={b.title} benefit={b} index={i} accentColor="bg-blue-600" />
+                <BenefitItem key={b.title} benefit={b} index={i} accentColor="bg-emerald-600" />
               ))}
             </div>
           </div>

@@ -18,16 +18,16 @@ const legalLinks = [
 
 export default function Footer() {
   return (
-    <footer className="border-t border-gray-800 bg-gray-950 py-16">
+    <footer className="border-t border-slate-200 bg-white py-16">
       <div className="mx-auto max-w-6xl px-6">
         <div className="grid gap-12 sm:grid-cols-2 lg:grid-cols-3">
           {/* Company */}
           <div>
             <Link href="/" className="inline-flex items-center gap-2">
-              <Warehouse className="h-6 w-6 text-blue-400" />
-              <span className="text-lg font-bold text-white">Warehouse Exchange</span>
+              <Warehouse className="h-6 w-6 text-emerald-600" />
+              <span className="text-lg font-bold text-slate-900">Warehouse Exchange</span>
             </Link>
-            <p className="mt-4 max-w-xs text-sm text-gray-400">
+            <p className="mt-4 max-w-xs text-sm text-slate-500">
               The marketplace connecting businesses with flexible warehouse space.
               Find or list space in hours, not months.
             </p>
@@ -35,7 +35,7 @@ export default function Footer() {
 
           {/* Navigation */}
           <div>
-            <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+            <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
               Navigation
             </h4>
             <ul className="mt-4 space-y-3">
@@ -43,7 +43,7 @@ export default function Footer() {
                 <li key={link.href}>
                   <Link
                     href={link.href}
-                    className="text-sm text-gray-400 hover:text-white transition-colors"
+                    className="text-sm text-slate-500 hover:text-slate-900 transition-colors"
                   >
                     {link.label}
                   </Link>
@@ -54,7 +54,7 @@ export default function Footer() {
 
           {/* Legal */}
           <div>
-            <h4 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+            <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
               Legal
             </h4>
             <ul className="mt-4 space-y-3">
@@ -62,7 +62,7 @@ export default function Footer() {
                 <li key={link.href}>
                   <Link
                     href={link.href}
-                    className="text-sm text-gray-400 hover:text-white transition-colors"
+                    className="text-sm text-slate-500 hover:text-slate-900 transition-colors"
                   >
                     {link.label}
                   </Link>
@@ -72,7 +72,7 @@ export default function Footer() {
           </div>
         </div>
 
-        <div className="mt-12 border-t border-gray-800 pt-8 text-center text-sm text-gray-500">
+        <div className="mt-12 border-t border-slate-200 pt-8 text-center text-sm text-slate-400">
           &copy; {new Date().getFullYear()} Warehouse Exchange. All rights reserved.
         </div>
       </div>

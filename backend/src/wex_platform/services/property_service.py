@@ -53,8 +53,23 @@ async def create_warehouse_from_search(
         updated_at=now,
     )
 
-    # Generate map images from geocoding + merge extracted images
-    image_urls = []
+    # Build image list: real CRE photos first, then maps fallbacks
+    real_photos = []
+    maps_images = []
+
+    # Extract CRE listing photos from Gemini
+    extracted_images = property_data.get("image_urls", [])
+    logger.info(
+        "[PropertyService] CRE images from Gemini: %s (type=%s)",
+        len(extracted_images) if isinstance(extracted_images, list) else repr(extracted_images),
+        type(extracted_images).__name__,
+    )
+    if extracted_images and isinstance(extracted_images, list):
+        for url in extracted_images[:7]:
+            if isinstance(url, str) and url.startswith("http"):
+                real_photos.append(url)
+
+    # Generate Google Maps fallback images (satellite, street view, roadmap)
     if geocoding.lat and geocoding.lng:
         from wex_platform.app.config import get_settings
         settings = get_settings()
@@ -63,12 +78,10 @@ async def create_warehouse_from_search(
             base = "https://maps.googleapis.com/maps/api/staticmap"
             sv = "https://maps.googleapis.com/maps/api/streetview"
             lat, lng = geocoding.lat, geocoding.lng
-            # 1. Satellite view — close-up aerial (zoom 18)
-            image_urls.append(
+            maps_images.append(
                 f"{base}?center={lat},{lng}"
                 f"&zoom=18&size=600x400&maptype=satellite&key={maps_key}"
             )
-            # 2. Street View — only include if imagery exists at this location
             try:
                 import httpx
                 sv_meta = httpx.get(
@@ -76,33 +89,19 @@ async def create_warehouse_from_search(
                     timeout=5,
                 )
                 if sv_meta.status_code == 200 and sv_meta.json().get("status") == "OK":
-                    image_urls.append(
+                    maps_images.append(
                         f"{sv}?size=600x400&location={lat},{lng}&key={maps_key}"
                     )
             except Exception:
-                pass  # skip street view if metadata check fails
-            # 3. Roadmap view — contextual location with pin
-            image_urls.append(
+                pass
+            maps_images.append(
                 f"{base}?center={lat},{lng}"
                 f"&zoom=15&size=600x400&maptype=roadmap"
                 f"&markers=color:red%7C{lat},{lng}&key={maps_key}"
             )
 
-    # Merge property photos extracted from CRE listings (up to 7)
-    extracted_images = property_data.get("image_urls", [])
-    logger.info(
-        "[PropertyService] CRE images from Gemini: %s (type=%s), Google Maps images: %d",
-        len(extracted_images) if isinstance(extracted_images, list) else repr(extracted_images),
-        type(extracted_images).__name__,
-        len(image_urls),
-    )
-    if extracted_images and isinstance(extracted_images, list):
-        for url in extracted_images[:7]:
-            if isinstance(url, str) and url.startswith("http") and url not in image_urls:
-                image_urls.append(url)
-
-    # Cap at 10 images total
-    image_urls = image_urls[:10]
+    # Real photos first, maps fallbacks after — capped at 10
+    image_urls = (real_photos + maps_images)[:10]
 
     warehouse.image_urls = image_urls
     warehouse.primary_image_url = image_urls[0] if image_urls else None
