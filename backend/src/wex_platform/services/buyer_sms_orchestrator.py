@@ -33,6 +33,7 @@ class OrchestratorResult:
     criteria: dict | None = None
     phase: str = "INTAKE"
     error: str | None = None
+    photo_urls: list[str] | None = None
 
 
 # Facility requirement keywords — used to validate that the "requirements" field
@@ -114,6 +115,29 @@ class BuyerSMSOrchestrator:
 
         # == 1. Message Interpreter (deterministic) ==
         interpretation = interpret_message(message)
+
+        # == Supplier content soft gate ==
+        if interpretation.is_supplier_content:
+            has_buyer_signals = (
+                interpretation.cities or interpretation.sqft
+                or interpretation.features or interpretation.action_keywords
+            )
+            if not has_buyer_signals:
+                # Pure supplier message — early exit, skip LLM
+                from wex_platform.services.email_service import send_supplier_redirect_email
+                try:
+                    await send_supplier_redirect_email({
+                        "phone": phone,
+                        "message": message,
+                        "buyer_name": f"{state.renter_first_name or ''} {state.renter_last_name or ''}".strip() or None,
+                    })
+                except Exception:
+                    logger.exception("Failed to send supplier redirect email")
+                return OrchestratorResult(
+                    response=get_fallback("supplier_inquiry"),
+                    intent="supplier_inquiry",
+                    phase=state.phase or "INTAKE",
+                )
 
         # == 2. Property Reference Resolution ==
         resolved_property_id = None
@@ -234,6 +258,34 @@ class BuyerSMSOrchestrator:
         merged_criteria = {**(existing_criteria or {}), **(plan.criteria or {})}
         # Remove None values
         merged_criteria = {k: v for k, v in merged_criteria.items() if v is not None}
+
+        # == Budget-to-sqft conversion ==
+        budget = merged_criteria.get("budget_monthly")
+        if not budget and interpretation.budget_monthly and not merged_criteria.get("sqft"):
+            budget = interpretation.budget_monthly
+        if budget and merged_criteria.get("location") and not merged_criteria.get("sqft"):
+            try:
+                from wex_platform.agents.market_rate_agent import MarketRateAgent
+                rate_agent = MarketRateAgent()
+                city = merged_criteria["location"].split(",")[0].strip()
+                rates = await rate_agent.get_nnn_rates(city)
+                if rates and rates.get("nnn_low") and rates.get("nnn_high"):
+                    avg_rate = (rates["nnn_low"] + rates["nnn_high"]) / 2
+                    estimated_sqft = int(budget / avg_rate)
+                    merged_criteria["sqft"] = estimated_sqft
+                    plan.response_hint = (
+                        f"Based on rates in {city}, ${budget:,}/mo gets roughly "
+                        f"{estimated_sqft:,} sqft. "
+                        + (plan.response_hint or "")
+                    )
+                    logger.info("Budget conversion: $%d/mo -> %d sqft (rate=%.2f)", budget, estimated_sqft, avg_rate)
+                else:
+                    plan.response_hint = (
+                        "I don't have rate data for that area yet, can you give me an approximate size instead?"
+                    )
+                    logger.info("Budget conversion: no rate data for %s", city)
+            except Exception:
+                logger.exception("Budget-to-sqft conversion failed")
 
         # Deterministic: if buyer says "no" to deal-breakers, mark requirements as answered
         msg_lower = message.strip().lower().rstrip(".!?")
@@ -500,6 +552,16 @@ class BuyerSMSOrchestrator:
 
         elif plan.intent == "greeting":
             pass  # Stay in current phase
+
+        elif plan.intent == "faq":
+            pass  # Stay in current phase, response agent handles it
+
+        elif plan.intent == "engagement_status":
+            status_msg = await self._check_engagement_status(state, phone)
+            if status_msg:
+                plan.response_hint = status_msg
+            else:
+                plan.response_hint = "I don't see an active booking for your number. Want to start a new search?"
 
         elif plan.intent in ("new_search", "refine_search") and readiness < 0.6:
             phase = "QUALIFYING"
@@ -778,6 +840,13 @@ class BuyerSMSOrchestrator:
             buyer_sqft = criteria.get("sqft") if criteria else None
             summaries = build_match_summaries(tier1, buyer_sqft=buyer_sqft)
 
+            # Extract top match photo URL for inline sharing
+            top_photo = None
+            if summaries:
+                top_photo = summaries[0].get("primary_image_url")
+            if top_photo:
+                state.top_match_photo_url = top_photo
+
             # Store presented IDs
             state.presented_match_ids = [s["id"] for s in summaries if s.get("id")]
 
@@ -845,6 +914,64 @@ class BuyerSMSOrchestrator:
         except Exception as e:
             logger.error("Search failed: %s", e, exc_info=True)
             return None
+
+    async def _check_engagement_status(self, state, phone: str) -> str | None:
+        """Look up the buyer's most recent engagement and return a status message."""
+        from wex_platform.agents.sms.status_messages import (
+            STATUS_MESSAGES, DEFAULT_STATUS_MESSAGE, TOUR_CONFIRMED_NO_DATE, TERMINAL_STATUSES,
+        )
+        from wex_platform.domain.models import Engagement, Buyer
+        from sqlalchemy import select
+        from datetime import datetime, timezone, timedelta
+
+        try:
+            engagement = None
+
+            # Try by engagement_id on state first
+            if state.engagement_id:
+                result = await self.db.execute(
+                    select(Engagement).where(Engagement.id == state.engagement_id)
+                )
+                engagement = result.scalar_one_or_none()
+
+            # Fall back to phone lookup — last 30 days, non-terminal
+            if not engagement:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+                result = await self.db.execute(
+                    select(Engagement)
+                    .join(Buyer, Engagement.buyer_id == Buyer.id)
+                    .where(
+                        Buyer.phone == phone,
+                        Engagement.created_at >= cutoff,
+                        Engagement.status.notin_(TERMINAL_STATUSES),
+                    )
+                    .order_by(Engagement.updated_at.desc())
+                )
+                engagement = result.scalar_one_or_none()
+
+            if not engagement:
+                return None
+
+            status = engagement.status
+            template = STATUS_MESSAGES.get(status)
+
+            if not template:
+                logger.warning("Unmapped engagement status: %s", status)
+                return DEFAULT_STATUS_MESSAGE
+
+            # Handle tour_confirmed date placeholder
+            if status == "tour_confirmed":
+                if engagement.tour_scheduled_date:
+                    date_str = engagement.tour_scheduled_date.strftime("%A %B %d at %I:%M %p")
+                    return template.format(date=date_str)
+                else:
+                    return TOUR_CONFIRMED_NO_DATE
+
+            return template
+
+        except Exception:
+            logger.exception("Failed to check engagement status for %s", phone)
+            return DEFAULT_STATUS_MESSAGE
 
     def _stub_lookup(
         self, property_id: str, match_summaries: list[dict] | None

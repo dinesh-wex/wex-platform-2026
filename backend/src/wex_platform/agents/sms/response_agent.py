@@ -6,6 +6,7 @@ like a helpful colleague texting — not a chatbot or template.
 
 import logging
 from wex_platform.agents.base import BaseAgent
+from .faq_knowledge import get_faq_block_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,13 @@ class ResponseAgent(BaseAgent):
             f"- No bulk property lists\n"
             f"- Say \"sqft\" not \"square feet\" or \"square footage\"\n\n"
 
+            # --- PHOTO SHARING ---
+            f"## PHOTO SHARING\n"
+            f"- If a photo URL is in the response_hint, weave it into your message naturally\n"
+            f"- Example: 'Here's a look at the top match: {{url}}'\n"
+            f"- Do NOT say 'Sending you a photo' as a separate statement\n"
+            f"- If the buyer asks for more photos, say you'll check what else is available\n\n"
+
             # --- PRESENTING MATCHES ---
             f"## PRESENTING MATCHES (<=800 chars)\n"
             f"When presenting ClearingEngine matches:\n"
@@ -193,7 +201,13 @@ class ResponseAgent(BaseAgent):
             f"- tour_request: Acknowledge interest, ask for 2-3 preferred days/times\n"
             f"- commitment: Acknowledge interest, share the link from response hint\n"
             f"- provide_info: Confirm receipt naturally. If response hint has a link, share it\n"
+            f"- faq: Answer from FAQ knowledge below. Match the specific question (pricing → mention fee, "
+            f"identity → mention marketplace). Then naturally transition back: 'What city are you looking in?'\n"
+            f"- engagement_status: Report status naturally. If declined, offer alternatives.\n"
             f"- unknown/other: Ask what kind of space they need (city, size, use)\n\n"
+
+            # --- FAQ KNOWLEDGE ---
+            f"## {get_faq_block_for_prompt()}\n\n"
 
             f"IMPORTANT: Do NOT proactively push for tours, bookings, or commitments. "
             f"Let the buyer browse options and decide on their own.\n\n"

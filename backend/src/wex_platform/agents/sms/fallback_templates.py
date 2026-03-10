@@ -77,6 +77,18 @@ TEMPLATES = {
         "Sorry, hit a snag on my end. Try again in a moment "
         "or email support@warehouseexchange.com."
     ),
+    "faq": (
+        "We're a marketplace that connects you with verified warehouse space. "
+        "No long-term commitment required. What city are you looking in?"
+    ),
+    "faq_pricing": (
+        "There's a 6% service fee. The value is flexible, short-term leases. "
+        "What city are you looking in?"
+    ),
+    "supplier_inquiry": (
+        "Got it, it sounds like you have space available. "
+        "I'll have our team reach out to you. Is this the best number?"
+    ),
 }
 
 

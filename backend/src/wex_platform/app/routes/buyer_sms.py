@@ -315,6 +315,15 @@ async def _process_buyer_message(
                 except Exception as e:
                     logger.error("Failed to send buyer SMS to %s: %s", from_number, e)
 
+            # Send additional photo follow-ups if orchestrator returned extra photos
+            if orchestrator_result.photo_urls:
+                try:
+                    sms_service = SMSService()
+                    for photo_url in orchestrator_result.photo_urls[:2]:
+                        await sms_service.send_buyer_sms(from_number, f"Here's another look: {photo_url}")
+                except Exception as e:
+                    logger.error("Failed to send photo follow-up to %s: %s", from_number, e)
+
             await db.commit()
 
             logger.info(

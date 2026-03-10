@@ -179,7 +179,41 @@ TERMINOLOGY:
 
 ESCALATION:
 - When you can't answer a question, tell the caller: "I'll check with the warehouse owner and text you back with the answer"
-- Default follow-up is by text. If they prefer a callback, note that."""
+- Default follow-up is by text. If they prefer a callback, note that.
+
+FAQ HANDLING:
+If the caller asks about Warehouse Exchange itself (pricing, how it works, who you are, legitimacy), answer directly and then steer back to their search.
+"""
+    # Append FAQ knowledge from single source of truth
+    from wex_platform.agents.sms.faq_knowledge import get_faq_block_for_prompt
+    base_prompt += "\n" + get_faq_block_for_prompt() + "\n"
+
+    # Budget guidance
+    base_prompt += """
+BUDGET CONVERSION:
+If the caller gives a monthly budget instead of square footage (e.g. "$5k a month", "budget of eight thousand"), pass it as budget_monthly in search_properties. You still need the location. Ask for the city if not provided.
+"""
+
+    # Photo sharing guidance (voice)
+    base_prompt += """
+PHOTOS:
+If the caller asks to see photos or what the property looks like, tell them you'll include photos in the text message after the call.
+"""
+
+    # Booking status guidance
+    base_prompt += """
+BOOKING STATUS:
+If the caller asks about their booking status, lease, tour confirmation, or any update on a previous engagement, use the check_booking_status tool. Examples: "what happened with my booking", "did the owner accept", "any update", "is my tour confirmed".
+"""
+
+    # Supplier detection guidance
+    base_prompt += """
+SUPPLIER DETECTION:
+If the caller says they own a warehouse, want to list space, or are looking for tenants, acknowledge them warmly:
+"That's great, I'll have our supplier team reach out to you. Is this the best number to reach you at?"
+Note the preference in the call summary.
+"""
+
     sms_section = _build_sms_context_section(sms_context) if sms_context else ""
     return base_prompt + sms_section
 
@@ -295,9 +329,13 @@ def _build_tool_definitions() -> list[dict]:
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Required features: dock_doors, office, climate_control, sprinkler, parking, 24_7_access, fenced_yard"
+                        },
+                        "budget_monthly": {
+                            "type": "integer",
+                            "description": "Monthly budget in dollars if the caller gives a budget instead of sqft, e.g. 5000 for '$5k/month'"
                         }
                     },
-                    "required": ["location", "sqft"]
+                    "required": ["location"]
                 }
             }
         },
@@ -376,7 +414,19 @@ def _build_tool_definitions() -> list[dict]:
                     "required": ["address"]
                 }
             }
-        }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "check_booking_status",
+                "description": "Check the status of the caller's most recent booking or engagement. Use when they ask about their booking, lease, tour status, or any update.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        },
     ]
 
 

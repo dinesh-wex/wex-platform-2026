@@ -39,11 +39,12 @@ class VoiceToolHandlers:
     async def search_properties(
         self,
         location: str,
-        sqft: int,
+        sqft: int | None = None,
         use_type: str | None = None,
         timing: str | None = None,
         duration: str | None = None,
         features: list[str] | None = None,
+        budget_monthly: int | None = None,
     ) -> str:
         """Search for matching warehouse properties.
 
@@ -89,6 +90,25 @@ class VoiceToolHandlers:
 
             # 2. Parse location into city/state
             city, state = _parse_location(location)
+
+            # 2b. Budget-to-sqft conversion
+            if budget_monthly and not sqft:
+                try:
+                    from wex_platform.agents.market_rate_agent import MarketRateAgent
+                    rate_agent = MarketRateAgent()
+                    rates = await rate_agent.get_nnn_rates(city)
+                    if rates and rates.get("nnn_low") and rates.get("nnn_high"):
+                        avg_rate = (rates["nnn_low"] + rates["nnn_high"]) / 2
+                        sqft = int(budget_monthly / avg_rate)
+                        logger.info("Voice budget conversion: $%d/mo -> %d sqft", budget_monthly, sqft)
+                except Exception:
+                    logger.exception("Voice budget-to-sqft conversion failed")
+
+            if not sqft:
+                return (
+                    "I need to know how much space you're looking for. "
+                    "Can you give me a rough square footage or a monthly budget?"
+                )
 
             # 3. Get or reuse BuyerNeed — reuse if seeded from SMS and criteria still match
             parsed_features = features or []
@@ -643,6 +663,67 @@ class VoiceToolHandlers:
                 "I ran into a technical issue. Let me note your interest and "
                 "someone will follow up with you shortly."
             )
+
+    # ------------------------------------------------------------------
+    # check_booking_status
+    # ------------------------------------------------------------------
+
+    async def check_booking_status(self) -> str:
+        """Check the caller's most recent engagement status."""
+        try:
+            from wex_platform.agents.sms.status_messages import (
+                STATUS_MESSAGES, DEFAULT_STATUS_MESSAGE, TOUR_CONFIRMED_NO_DATE, TERMINAL_STATUSES,
+            )
+            from wex_platform.domain.models import Engagement, Buyer
+            from datetime import datetime, timezone, timedelta
+
+            engagement = None
+
+            # Try by engagement_id on call state first
+            if self.call_state.engagement_id:
+                result = await self.db.execute(
+                    select(Engagement).where(Engagement.id == self.call_state.engagement_id)
+                )
+                engagement = result.scalar_one_or_none()
+
+            # Fall back to phone lookup
+            if not engagement:
+                phone = self.call_state.caller_phone
+                cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+                result = await self.db.execute(
+                    select(Engagement)
+                    .join(Buyer, Engagement.buyer_id == Buyer.id)
+                    .where(
+                        Buyer.phone == phone,
+                        Engagement.created_at >= cutoff,
+                        Engagement.status.notin_(TERMINAL_STATUSES),
+                    )
+                    .order_by(Engagement.updated_at.desc())
+                )
+                engagement = result.scalar_one_or_none()
+
+            if not engagement:
+                return "I don't see an active booking for your number. Want to start a new search?"
+
+            status = engagement.status
+            template = STATUS_MESSAGES.get(status)
+
+            if not template:
+                logger.warning("Unmapped engagement status (voice): %s", status)
+                return DEFAULT_STATUS_MESSAGE
+
+            if status == "tour_confirmed":
+                if engagement.tour_scheduled_date:
+                    date_str = engagement.tour_scheduled_date.strftime("%A %B %d at %I:%M %p")
+                    return template.format(date=date_str)
+                else:
+                    return TOUR_CONFIRMED_NO_DATE
+
+            return template
+
+        except Exception as e:
+            logger.error("check_booking_status failed: %s", e, exc_info=True)
+            return "I'm having trouble looking that up right now. I'll check and text you the update."
 
 
 # ======================================================================

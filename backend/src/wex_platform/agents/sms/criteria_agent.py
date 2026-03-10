@@ -4,6 +4,7 @@ import json
 import logging
 from wex_platform.agents.base import BaseAgent
 from .contracts import CriteriaPlan, MessageInterpretation
+from .faq_knowledge import get_faq_block_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,8 @@ Choose exactly one:
 - "provide_info" — providing name/email during collection phase
 - "greeting" — just saying hi or thanks
 - "address_lookup" — buyer provided a specific street address to look up
+- "faq" — asking about WEx itself (pricing, how it works, who we are, privacy, legitimacy)
+- "engagement_status" — asking about their booking/lease status ("what happened with my booking", "did the owner accept", "any update", "where's my lease", "is my tour confirmed")
 - "unknown" — can't determine intent
 
 ## TOUR REQUEST DETECTION
@@ -49,6 +52,16 @@ These phrases mean intent = "tour_request":
 - "let me take a look", "I want to walk it", "when is it available to view"
 - "set up a viewing", "arrange a visit"
 If user references a specific property AND uses tour language -> intent = "tour_request", action = "schedule_tour".
+
+## FAQ DETECTION
+If buyer asks about WEx itself (not about a property), set intent = "faq", action = null.
+Examples: "is this free?", "how does this work?", "are you a broker?", "what is warehouse exchange?",
+"is there a fee?", "how much does your service cost?", "is this legit?", "are you real?", "what do you guys do?"
+{faq_block}
+
+## SUPPLIER CONTENT
+If is_supplier_content=True but message also contains buyer criteria (city, sqft, use type), treat as buyer.
+Only classify as supplier if message is purely about listing/owning space with no buyer signals.
 
 ## ADDRESS LOOKUP
 If the buyer mentions a specific street address (e.g., "1234 Main St" or "the warehouse at 500 Industrial Blvd"),
@@ -122,7 +135,7 @@ If the user provides their name anywhere in the message, extract it:
 
 ## REQUIRED JSON SCHEMA
 {{
-  "intent": "new_search|refine_search|facility_info|tour_request|commitment|provide_info|greeting|address_lookup|unknown",
+  "intent": "new_search|refine_search|facility_info|tour_request|commitment|provide_info|greeting|address_lookup|faq|engagement_status|unknown",
   "action": "search|lookup|schedule_tour|commitment_handoff|collect_info|address_lookup" or null,
   "criteria": {{
     "location": "city or area name" or null,
@@ -132,7 +145,8 @@ If the user provides their name anywhere in the message, extract it:
     "duration": "month_to_month|3_months|6_months|1_year|2_years|flexible" or null,
     "goods_type": "general|food_grade|hazmat|electronics|apparel|raw_materials" or null,
     "features": ["dock_doors", "cold_storage", "office_space", ...] or [],
-    "requirements": "physical facility deal-breakers ONLY (office, dock doors, parking, etc.)" or null
+    "requirements": "physical facility deal-breakers ONLY (office, dock doors, parking, etc.)" or null,
+    "budget_monthly": number or null
   }},
   "resolved_property_id": "uuid" or null,
   "extracted_name": {{ "first_name": "...", "last_name": "..." }} or null,
@@ -141,6 +155,11 @@ If the user provides their name anywhere in the message, extract it:
   "response_hint": "suggested response phrasing for the response agent",
   "confidence": 0.0 to 1.0
 }}
+
+## BUDGET CONVERSION
+If buyer provides a monthly budget instead of sqft (e.g. "$5k/month", "budget of 8 grand", "5000 a month"),
+set criteria.budget_monthly to the dollar amount as integer. Do NOT guess sqft from budget.
+The system converts it using local market rates automatically.
 
 ## CRITERIA FIELDS
 - location: city/area name
@@ -151,6 +170,7 @@ If the user provides their name anywhere in the message, extract it:
 - goods_type: what they'll store (general, food_grade, hazmat, electronics, apparel, raw_materials)
 - features: array of feature tags like dock_doors, cold_storage, office_space
 - requirements: ONLY physical facility deal-breakers (office, dock doors, parking, climate control, clear height, sprinkler, 24/7 access, high power, etc.). NEVER put timing/duration/dates here
+- budget_monthly: monthly budget in dollars (integer) — only set if buyer gave a budget instead of sqft
 
 ## RULES
 - Merge new criteria with existing — new values override
@@ -217,6 +237,8 @@ class CriteriaAgent(BaseAgent):
             "emails": interpretation.emails,
             "names": interpretation.names,
             "address_text": interpretation.address_text,
+            "is_supplier_content": interpretation.is_supplier_content,
+            "budget_monthly": interpretation.budget_monthly,
         })
 
         existing_ctx = f"\nExisting criteria: {json.dumps(existing_criteria)}" if existing_criteria else ""
@@ -242,6 +264,7 @@ class CriteriaAgent(BaseAgent):
             existing_ctx=existing_ctx,
             property_ctx=property_ctx,
             matches_ctx=matches_ctx,
+            faq_block=get_faq_block_for_prompt(),
         )
 
         # -- Call LLM --------------------------------------------------------

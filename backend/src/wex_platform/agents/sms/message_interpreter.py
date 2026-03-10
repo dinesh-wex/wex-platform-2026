@@ -103,11 +103,31 @@ FEATURE_KEYWORDS = {
     "sprinkler": re.compile(r'\bsprinkler\b', re.IGNORECASE),
     "parking": re.compile(r'\bparking\b', re.IGNORECASE),
     "forklift": re.compile(r'\bforklift\b', re.IGNORECASE),
+    "photo": re.compile(r'\b(?:photo|picture|image|pic|what does it look like|see it|show me)\b', re.IGNORECASE),
 }
 
 # Name pattern (very simple -- "I'm John Smith", "my name is Jane Doe")
 NAME_PATTERN = re.compile(
     r"(?:(?:i'?m|my name is|this is|name:?)\s+)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+    re.IGNORECASE
+)
+
+# Supplier content detection
+SUPPLIER_PATTERN = re.compile(
+    r'\b(?:list\s+my|i\s+(?:have|own)\s+(?:a\s+)?(?:warehouse|space|building|property)'
+    r'|want\s+to\s+list|looking\s+for\s+tenants|rent\s+(?:it\s+)?out|lease\s+(?:it\s+)?out'
+    r'|i\s+am\s+(?:a\s+)?(?:warehouse\s+)?owner|i\'?m\s+(?:a\s+)?(?:warehouse\s+)?owner)\b',
+    re.IGNORECASE
+)
+
+# Budget patterns — matches "$5k/month", "$8,000/mo", "$5000 per month", "$10k a month"
+BUDGET_PATTERN = re.compile(
+    r'\$\s*(\d{1,3}(?:,\d{3})*|\d+)\s*k?\s*(?:/?\s*(?:mo|month|per\s*month|monthly|a\s*month))',
+    re.IGNORECASE
+)
+# Secondary pattern: "budget of $X" or "budget is $X" (no time qualifier needed)
+BUDGET_CONTEXT_PATTERN = re.compile(
+    r'budget\s+(?:of|is|around|about)?\s*\$?\s*(\d{1,3}(?:,\d{3})*|\d+)\s*k?',
     re.IGNORECASE
 )
 
@@ -311,6 +331,24 @@ def interpret_message(text: str) -> MessageInterpretation:
     addr_match = ADDRESS_PATTERN.search(text)
     if addr_match:
         result.address_text = addr_match.group(0).strip()
+
+    # -----------------------------------------------------------------------
+    # Supplier content detection
+    # -----------------------------------------------------------------------
+    result.is_supplier_content = bool(SUPPLIER_PATTERN.search(text))
+
+    # -----------------------------------------------------------------------
+    # Budget extraction
+    # -----------------------------------------------------------------------
+    budget_match = BUDGET_PATTERN.search(text)
+    if not budget_match:
+        budget_match = BUDGET_CONTEXT_PATTERN.search(text)
+    if budget_match:
+        raw_budget = budget_match.group(1).replace(",", "")
+        budget_val = int(raw_budget)
+        if "k" in budget_match.group(0).lower():
+            budget_val *= 1000
+        result.budget_monthly = budget_val
 
     # -----------------------------------------------------------------------
     # Query type classification

@@ -22,6 +22,8 @@ class MessageInterpretation:
     query_type: str = "general"
     original_message: str = ""
     address_text: str | None = None
+    is_supplier_content: bool = False
+    budget_monthly: int | None = None
 
     def __post_init__(self):
         # Sync sqft <-> min_sqft for backward compatibility.

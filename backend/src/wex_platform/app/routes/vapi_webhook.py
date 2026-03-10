@@ -250,13 +250,15 @@ async def _handle_tool_calls(message: dict, db: AsyncSession) -> JSONResponse:
 
         try:
             if tool_name == "search_properties":
+                raw_sqft = args.get("sqft")
                 result_text = await handlers.search_properties(
                     location=args.get("location", ""),
-                    sqft=int(args.get("sqft", 0)),
+                    sqft=int(raw_sqft) if raw_sqft else None,
                     use_type=args.get("use_type"),
                     timing=args.get("timing"),
                     duration=args.get("duration"),
                     features=args.get("features"),
+                    budget_monthly=int(args["budget_monthly"]) if args.get("budget_monthly") else None,
                 )
             elif tool_name == "lookup_property_details":
                 result_text = await handlers.lookup_property_details(
@@ -273,6 +275,8 @@ async def _handle_tool_calls(message: dict, db: AsyncSession) -> JSONResponse:
                     buyer_name=args.get("buyer_name", ""),
                     buyer_email=args.get("buyer_email"),
                 )
+            elif tool_name == "check_booking_status":
+                result_text = await handlers.check_booking_status()
             else:
                 logger.warning("Unknown tool: %s", tool_name)
                 result_text = f"Unknown tool: {tool_name}"

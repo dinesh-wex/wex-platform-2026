@@ -525,6 +525,7 @@ def build_match_summaries(matches: list, buyer_sqft: int | None = None) -> list[
                 "match_score": match.get("match_score"),
                 "reasoning": reasoning,
                 "description": description,
+                "primary_image_url": wh.get("primary_image_url"),
             })
         else:
             # ORM object
