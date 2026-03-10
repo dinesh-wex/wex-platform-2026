@@ -242,3 +242,157 @@ Start zonal (no HA) to save ~$45/mo. Enable HA before accepting paying customers
 6. Make a Vapi voice call -- verify webhook at `/api/voice/webhook`
 7. Open `/ws/admin` WebSocket in browser -- confirm real-time events stream
 8. Push a code change to `main` -- confirm GitHub Actions auto-deploys
+
+---
+
+## API Endpoint Test Plan
+
+All endpoints grouped by module. Use `scripts/test_endpoints.sh` to run automated smoke tests after deployment.
+
+### Health & Infrastructure (no auth)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 1 | GET | `/health` | 200 `{"status":"ok"}` |
+
+### Auth (no auth required)
+
+| # | Method | Endpoint | Body | Expected |
+|---|--------|----------|------|----------|
+| 2 | POST | `/api/auth/signup` | `{email, password, name, role, company, phone}` | 200 + JWT token |
+| 3 | POST | `/api/auth/login` | `{email, password}` | 200 + JWT token |
+| 4 | GET | `/api/auth/me` | (Bearer token) | 200 + user profile |
+| 5 | PATCH | `/api/auth/profile` | `{name?, company?, phone?}` | 200 + updated user |
+
+### Browse & Search (no auth)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 6 | GET | `/api/browse/listings` | 200 + paginated listings |
+| 7 | GET | `/api/browse/locations` | 200 + city/state pairs |
+| 8 | POST | `/api/search` | 200 + search results with session token |
+| 9 | GET | `/api/search/session/{token}` | 200 + cached results |
+| 10 | POST | `/api/search/extract` | 200 + extracted intent fields |
+
+### Buyer Flow (no auth)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 11 | POST | `/api/buyer/register` | 200 + buyer profile |
+| 12 | POST | `/api/buyer/need` | 200 + buyer need |
+| 13 | GET | `/api/buyer/{buyer_id}/needs` | 200 + needs list |
+| 14 | POST | `/api/buyer/need/{need_id}/chat/start` | 200 + initial message |
+| 15 | POST | `/api/buyer/need/{need_id}/chat` | 200 + agent response |
+| 16 | GET | `/api/buyer/need/{need_id}/options` | 200 + matched options |
+| 17 | POST | `/api/buyer/need/{need_id}/accept` | 200 + deal created |
+| 18 | GET | `/api/buyer/{buyer_id}/deals` | 200 + deals list |
+
+### Clearing Engine (no auth)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 19 | POST | `/api/clearing/match` | 200 + tier1/tier2 matches |
+| 20 | GET | `/api/clearing/match-count?location=...` | 200 + count |
+| 21 | GET | `/api/clearing/match/{match_id}` | 200 + scoring breakdown |
+
+### Supplier Dashboard (Bearer token required)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 22 | GET | `/api/supplier/dashboard` | 200 + portfolio summary |
+| 23 | GET | `/api/supplier/properties` | 200 + property list |
+| 24 | GET | `/api/supplier/properties/{id}` | 200 + property detail |
+| 25 | POST | `/api/supplier/properties/{id}/specs` | 200 + updated specs |
+| 26 | POST | `/api/supplier/properties/{id}/config` | 200 + updated config |
+| 27 | POST | `/api/supplier/properties/{id}/pricing` | 200 + updated pricing |
+| 28 | GET | `/api/supplier/engagements` | 200 + engagement list |
+| 29 | POST | `/api/supplier/engagements/{id}/respond` | 200 + engagement updated |
+| 30 | GET | `/api/supplier/account` | 200 + account info |
+| 31 | GET | `/api/supplier/account/preferences` | 200 + prefs |
+
+### Photo Upload
+
+| # | Method | Endpoint | Auth | Expected |
+|---|--------|----------|------|----------|
+| 32 | POST | `/api/upload/token` | Bearer | 200 + upload token |
+| 33 | POST | `/api/upload/photo/{token}` | None (token) | 200 + file URL |
+
+### Engagement Lifecycle (Bearer token required)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 34 | GET | `/api/engagements/{id}` | 200 + engagement detail |
+| 35 | POST | `/api/engagements/{id}/accept` | 200 + state transition |
+| 36 | POST | `/api/engagements/{id}/tour/request` | 200 + tour requested |
+| 37 | POST | `/api/engagements/{id}/tour/confirm` | 200 + tour confirmed |
+| 38 | POST | `/api/engagements/{id}/tour/complete` | 200 + tour completed |
+
+### Q&A (Bearer token required)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 39 | POST | `/api/engagements/{id}/questions` | 200 + question created |
+| 40 | POST | `/api/engagements/{id}/questions/{qid}/supplier-answer` | 200 + answered |
+
+### Admin (admin auth required)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 41 | GET | `/api/admin/overview` | 200 + network stats |
+| 42 | GET | `/api/admin/warehouses` | 200 + all properties |
+| 43 | GET | `/api/admin/deals` | 200 + all deals |
+| 44 | GET | `/api/admin/deals/{id}` | 200 + deal detail |
+| 45 | GET | `/api/admin/agents` | 200 + agent log |
+| 46 | GET | `/api/admin/ledger` | 200 + ledger |
+| 47 | GET | `/api/admin/clearing/stats` | 200 + clearing stats |
+| 48 | GET | `/api/admin/engagements` | 200 + engagement list |
+| 49 | POST | `/api/admin/engagements/{id}/override-status` | 200 + overridden |
+| 50 | POST | `/api/admin/engagements/{id}/note` | 200 + note added |
+
+### DLA (token-based auth)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 51 | GET | `/api/dla/token/{token}` | 200 + property + buyer req |
+| 52 | POST | `/api/dla/token/{token}/rate` | 200 + rate decision |
+| 53 | POST | `/api/dla/token/{token}/confirm` | 200 + deal created |
+
+### Enrichment (no auth)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 54 | GET | `/api/enrichment/warehouse/{id}/next` | 200 + next question |
+| 55 | POST | `/api/enrichment/warehouse/{id}/respond` | 200 + stored |
+| 56 | GET | `/api/enrichment/warehouse/{id}/completeness` | 200 + % complete |
+
+### Webhooks (signature/token validated)
+
+| # | Method | Endpoint | Auth | Expected |
+|---|--------|----------|------|----------|
+| 57 | POST | `/api/voice/webhook` | Vapi HMAC signature | 200 + assistant config |
+| 58 | POST | `/api/sms/webhook` | Aircall token | 200 + `{ok}` |
+| 59 | POST | `/api/sms/buyer/webhook` | Aircall token | 200 + `{ok}` |
+
+### WebSockets
+
+| # | Endpoint | Expected |
+|---|----------|----------|
+| 60 | `wss://warehouseexchange.com/ws/admin` | Connection established, receives events |
+| 61 | `wss://warehouseexchange.com/ws/activation/{id}` | Connection established, agent responds |
+
+### Cloud Scheduler Endpoints (OIDC auth)
+
+| # | Method | Endpoint | Expected |
+|---|--------|----------|----------|
+| 62 | POST | `/api/internal/scheduler/hold-monitor` | 200 |
+| 63 | POST | `/api/internal/scheduler/sms-tick` | 200 |
+| 64 | POST | `/api/internal/scheduler/deal-ping-deadlines` | 200 |
+| 65 | POST | `/api/internal/scheduler/deadlines` | 200 |
+| 66 | POST | `/api/internal/scheduler/tour-reminders` | 200 |
+| 67 | POST | `/api/internal/scheduler/post-tour-followup` | 200 |
+| 68 | POST | `/api/internal/scheduler/qa-deadline` | 200 |
+| 69 | POST | `/api/internal/scheduler/payment-records` | 200 |
+| 70 | POST | `/api/internal/scheduler/payment-reminders` | 200 |
+| 71 | POST | `/api/internal/scheduler/stale-engagements` | 200 |
+| 72 | POST | `/api/internal/scheduler/auto-activate` | 200 |
+| 73 | POST | `/api/internal/scheduler/renewal-prompts` | 200 |

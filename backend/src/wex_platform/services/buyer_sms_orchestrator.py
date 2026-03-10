@@ -68,6 +68,81 @@ def _requirements_resolved(value) -> bool:
     return any(kw in lower for kw in _FACILITY_KEYWORDS)
 
 
+# Representative zipcodes for major warehouse markets (for budget→sqft conversion)
+_CITY_TO_ZIP = {
+    "los angeles": "90058", "la": "90058", "commerce": "90040", "vernon": "90058",
+    "city of industry": "91746", "compton": "90220", "south gate": "90280",
+    "carson": "90745", "torrance": "90501", "fontana": "92335",
+    "riverside": "92501", "ontario": "91761", "corona": "92879",
+    "rancho cucamonga": "91730", "inland empire": "92335", "long beach": "90810",
+    "san diego": "92101", "san francisco": "94080", "oakland": "94621",
+    "san jose": "95112", "sacramento": "95828", "fresno": "93706",
+    "houston": "77032", "dallas": "75247", "fort worth": "76106",
+    "san antonio": "78219", "austin": "78744", "el paso": "79936",
+    "chicago": "60632", "indianapolis": "46241", "columbus": "43228",
+    "detroit": "48209", "milwaukee": "53204", "minneapolis": "55411",
+    "atlanta": "30318", "charlotte": "28208", "jacksonville": "32218",
+    "miami": "33166", "tampa": "33610", "nashville": "37210",
+    "memphis": "38118", "louisville": "40210", "raleigh": "27603",
+    "new york": "10474", "jersey city": "07305", "newark": "07114",
+    "elizabeth": "07201", "edison": "08817", "paterson": "07503",
+    "seattle": "98108", "portland": "97217", "denver": "80216",
+    "phoenix": "85043", "tucson": "85714", "mesa": "85210",
+    "las vegas": "89115", "albuquerque": "87102", "oklahoma city": "73129",
+    "kansas city": "64120", "omaha": "68107", "tulsa": "74107",
+    "boston": "02210", "philadelphia": "19132", "baltimore": "21230",
+    "washington": "20018", "virginia beach": "23462",
+    "new orleans": "70126", "arlington": "76011",
+    "colorado springs": "80903",
+}
+
+# State-level fallback NNN rates ($/sqft/month) when no zip-level data
+_STATE_RATES = {
+    "CA": (0.85, 1.10), "TX": (0.65, 0.85), "AZ": (0.60, 0.80),
+    "SC": (0.55, 0.75), "MD": (0.70, 0.90), "GA": (0.65, 0.85),
+    "MI": (0.60, 0.80), "FL": (0.70, 0.90), "IL": (0.65, 0.85),
+    "NJ": (0.75, 0.95), "NY": (0.80, 1.05), "PA": (0.60, 0.80),
+    "OH": (0.55, 0.75), "NC": (0.60, 0.80), "IN": (0.55, 0.70),
+    "TN": (0.55, 0.75), "WA": (0.70, 0.90), "CO": (0.65, 0.85),
+    "NV": (0.55, 0.75), "OR": (0.60, 0.80), "MO": (0.50, 0.70),
+    "WI": (0.55, 0.75), "MN": (0.55, 0.75), "VA": (0.65, 0.85),
+    "MA": (0.75, 0.95), "LA": (0.55, 0.75), "AL": (0.50, 0.70),
+    "KY": (0.50, 0.70), "OK": (0.50, 0.65), "NE": (0.50, 0.65),
+    "KS": (0.50, 0.65), "IA": (0.50, 0.65), "AR": (0.45, 0.65),
+    "MS": (0.45, 0.65), "UT": (0.60, 0.80),
+}
+_DEFAULT_RATES = (0.60, 0.80)
+
+
+async def _get_market_rates(city: str, state: str | None) -> tuple[float | None, float | None]:
+    """Get NNN rates for a city, with zipcode lookup and state-level fallback.
+
+    Returns (nnn_low, nnn_high) or (None, None) if unavailable.
+    """
+    # Tier 1: city→zip lookup + Gemini/cache
+    zipcode = _CITY_TO_ZIP.get(city.lower())
+    if zipcode:
+        try:
+            from wex_platform.agents.market_rate_agent import MarketRateAgent
+            rate_agent = MarketRateAgent()
+            result = await rate_agent.get_nnn_rates(zipcode)
+            if result.ok and result.data:
+                return result.data.get("nnn_low"), result.data.get("nnn_high")
+        except Exception:
+            logger.exception("MarketRateAgent lookup failed for zip %s", zipcode)
+
+    # Tier 2: state-level fallback
+    if state:
+        rates = _STATE_RATES.get(state.upper())
+        if rates:
+            logger.info("Budget conversion: using state-level rates for %s", state)
+            return rates
+
+    # Tier 3: national default
+    logger.info("Budget conversion: using default national rates")
+    return _DEFAULT_RATES
+
+
 class BuyerSMSOrchestrator:
     """Orchestrates the full buyer SMS pipeline.
 
@@ -265,12 +340,11 @@ class BuyerSMSOrchestrator:
             budget = interpretation.budget_monthly
         if budget and merged_criteria.get("location") and not merged_criteria.get("sqft"):
             try:
-                from wex_platform.agents.market_rate_agent import MarketRateAgent
-                rate_agent = MarketRateAgent()
                 city = merged_criteria["location"].split(",")[0].strip()
-                rates = await rate_agent.get_nnn_rates(city)
-                if rates and rates.get("nnn_low") and rates.get("nnn_high"):
-                    avg_rate = (rates["nnn_low"] + rates["nnn_high"]) / 2
+                state_part = merged_criteria["location"].split(",")[1].strip().upper()[:2] if "," in merged_criteria["location"] else None
+                nnn_low, nnn_high = await _get_market_rates(city, state_part)
+                if nnn_low and nnn_high:
+                    avg_rate = (nnn_low + nnn_high) / 2
                     estimated_sqft = int(budget / avg_rate)
                     merged_criteria["sqft"] = estimated_sqft
                     plan.response_hint = (
@@ -862,7 +936,7 @@ class BuyerSMSOrchestrator:
             expires = datetime.now(timezone.utc) + timedelta(hours=48)
 
             # Build buyer-safe results matching web format (must match search.py shape)
-            req_sqft = buyer_need.size_sqft or 0
+            req_sqft = buyer_need.max_sqft or buyer_need.min_sqft or 0
             req_term = buyer_need.duration_months or 6
             tier1_safe = []
             for m in tier1:

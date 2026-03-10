@@ -94,13 +94,12 @@ class VoiceToolHandlers:
             # 2b. Budget-to-sqft conversion
             if budget_monthly and not sqft:
                 try:
-                    from wex_platform.agents.market_rate_agent import MarketRateAgent
-                    rate_agent = MarketRateAgent()
-                    rates = await rate_agent.get_nnn_rates(city)
-                    if rates and rates.get("nnn_low") and rates.get("nnn_high"):
-                        avg_rate = (rates["nnn_low"] + rates["nnn_high"]) / 2
+                    from wex_platform.services.buyer_sms_orchestrator import _get_market_rates
+                    nnn_low, nnn_high = await _get_market_rates(city, state)
+                    if nnn_low and nnn_high:
+                        avg_rate = (nnn_low + nnn_high) / 2
                         sqft = int(budget_monthly / avg_rate)
-                        logger.info("Voice budget conversion: $%d/mo -> %d sqft", budget_monthly, sqft)
+                        logger.info("Voice budget conversion: $%d/mo -> %d sqft (rate=%.2f)", budget_monthly, sqft, avg_rate)
                 except Exception:
                     logger.exception("Voice budget-to-sqft conversion failed")
 
