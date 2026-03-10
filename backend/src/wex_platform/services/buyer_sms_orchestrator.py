@@ -385,12 +385,14 @@ class BuyerSMSOrchestrator:
                 merged_criteria, phone, conversation, state
             )
 
+            # Preserve any prior hint context (e.g. budget conversion note)
+            prior_hint = plan.response_hint or ""
             if match_summaries:
                 phase = "PRESENTING"
-                plan.response_hint = f"Found {len(match_summaries)} options. Tell the buyer how many you found and briefly summarize the top options (city, rate, and monthly estimate — never mention property sqft)."
+                plan.response_hint = f"{prior_hint}Found {len(match_summaries)} options. Tell the buyer how many you found and briefly summarize the top options (city, rate, and monthly estimate — never mention property sqft).".strip()
             else:
                 phase = "QUALIFYING"
-                plan.response_hint = "Search ran but found no matches. Tell the buyer nothing exact right now, but you're expanding the search and will text them when something opens up."
+                plan.response_hint = f"{prior_hint}Search ran but found no matches. Tell the buyer nothing exact right now, but you're expanding the search and will text them when something opens up.".strip()
 
         elif plan.action == "search" and has_core_fields and not all_qualifying_done:
             # Have core fields but still missing qualifying questions — don't search yet

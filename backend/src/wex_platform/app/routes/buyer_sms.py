@@ -276,7 +276,7 @@ async def _process_buyer_message(
                 if not existing_criteria:
                     existing_criteria = {}
                 for key in ("location", "sqft", "use_type", "timing", "duration",
-                            "requirements", "goods_type", "features"):
+                            "requirements", "goods_type", "features", "budget_monthly"):
                     val = state.criteria_snapshot.get(key)
                     if val and not existing_criteria.get(key):
                         existing_criteria[key] = val
