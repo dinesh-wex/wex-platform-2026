@@ -458,12 +458,15 @@ class BuyerSMSOrchestrator:
 
         # == 4. Criteria Agent (LLM) ==
         criteria_agent = CriteriaAgent()
+        # Include state flags for criteria agent gating
+        _criteria_for_agent = dict(existing_criteria or {})
+        _criteria_for_agent["_waitlist_offered"] = bool(getattr(state, 'waitlist_offered', False))
         plan = await criteria_agent.plan(
             message=message,
             interpretation=interpretation,
             conversation_history=conversation_history,
             phase=phase,
-            existing_criteria=existing_criteria,
+            existing_criteria=_criteria_for_agent,
             resolved_property_id=resolved_property_id,
             presented_match_summaries=presented_match_summaries,
         )
@@ -493,6 +496,9 @@ class BuyerSMSOrchestrator:
             if not plan.criteria:
                 plan.criteria = {}
             if interpretation.cities and not plan.criteria.get("location"):
+                if len(interpretation.cities) > 1:
+                    # Multi-location: store array for downstream, first city as backward compat
+                    plan.criteria["locations"] = [c for c in interpretation.cities[:3]]
                 loc = interpretation.cities[0]
                 if interpretation.states:
                     loc = f"{loc}, {interpretation.states[0]}"
@@ -504,6 +510,43 @@ class BuyerSMSOrchestrator:
         merged_criteria = {**(existing_criteria or {}), **(plan.criteria or {})}
         # Remove None values
         merged_criteria = {k: v for k, v in merged_criteria.items() if v is not None}
+
+        # Deterministic: if urgency detected, force timing to ASAP
+        if interpretation.urgency_detected and not merged_criteria.get("timing"):
+            merged_criteria["timing"] = "ASAP"
+
+        # Landmark-based location: geocode the landmark and use lat/lng
+        if interpretation.landmark_text and not merged_criteria.get("location"):
+            landmark = interpretation.landmark_text
+            resolved_city = None
+            try:
+                import asyncio
+                from wex_platform.services.geocoding_service import geocode_location
+                geo_result = await asyncio.wait_for(geocode_location(landmark), timeout=5.0)
+                if geo_result and geo_result.lat and geo_result.lng:
+                    resolved_city = geo_result.city or landmark
+                    merged_criteria["location"] = resolved_city
+                    merged_criteria["_landmark_lat"] = geo_result.lat
+                    merged_criteria["_landmark_lng"] = geo_result.lng
+                    plan.response_hint = (
+                        f"Buyer wants space near {landmark}. "
+                        + (plan.response_hint or "")
+                    )
+            except Exception:
+                logger.warning("Landmark geocoding failed for %s, using city fallback", landmark)
+            # Fallback: use LANDMARK_TO_CITY if geocode failed
+            if not resolved_city:
+                from wex_platform.agents.sms.message_interpreter import LANDMARK_TO_CITY
+                raw_key = landmark.lower()
+                # Try matching against LANDMARK_TO_CITY keys
+                fallback_city = None
+                for lk, city in LANDMARK_TO_CITY.items():
+                    if lk in raw_key or raw_key in lk:
+                        fallback_city = city
+                        break
+                if fallback_city:
+                    merged_criteria["location"] = fallback_city
+                    logger.info("Landmark fallback: %s -> %s", landmark, fallback_city)
 
         # == Budget-to-sqft conversion ==
         budget = merged_criteria.get("budget_monthly")
@@ -648,10 +691,22 @@ class BuyerSMSOrchestrator:
             prior_hint = plan.response_hint or ""
             if match_summaries:
                 phase = "PRESENTING"
-                plan.response_hint = f"{prior_hint}Found {len(match_summaries)} options. Tell the buyer how many you found and briefly summarize the top options (city, rate, and monthly estimate — never mention property sqft).".strip()
+                # Detect multi-city results
+                cities_in_results = list(set(s.get("search_city") or s.get("city", "") for s in match_summaries))
+                if len(cities_in_results) > 1:
+                    city_list = " and ".join(cities_in_results)
+                    plan.response_hint = f"{prior_hint}Found {len(match_summaries)} options across {city_list}. Summarize each briefly (city, rate, monthly estimate — never mention property sqft).".strip()
+                else:
+                    plan.response_hint = f"{prior_hint}Found {len(match_summaries)} options. Tell the buyer how many you found and briefly summarize the top options (city, rate, and monthly estimate — never mention property sqft).".strip()
             else:
                 phase = "QUALIFYING"
-                plan.response_hint = f"{prior_hint}Search ran but found no matches. Tell the buyer nothing exact right now, but you're expanding the search and will text them when something opens up.".strip()
+                # Offer waitlist when no matches found and we have a location
+                if merged_criteria.get("location"):
+                    state.waitlist_offered = True
+                    city = merged_criteria["location"].split(",")[0].strip()
+                    plan.response_hint = f"{prior_hint}Search ran but found no matches in {city}. Tell the buyer: 'Nothing exact right now in {city}, but I can notify you when something opens up. Want me to add you to the waitlist?'".strip()
+                else:
+                    plan.response_hint = f"{prior_hint}Search ran but found no matches. Tell the buyer nothing exact right now, but you're expanding the search and will text them when something opens up.".strip()
 
         elif plan.action == "search" and has_core_fields and not all_qualifying_done:
             # Have core fields but still missing qualifying questions — don't search yet
@@ -702,6 +757,58 @@ class BuyerSMSOrchestrator:
                         f"Couldn't find a property at that address. "
                         f"Ask if they meant a different address or want to search by city instead."
                     )
+
+        elif plan.intent == "comparison":
+            presented_ids = state.presented_match_ids or []
+            if len(presented_ids) < 2:
+                # Single option — can't compare
+                plan.response_hint = "I only showed you one option so far. Want me to search for more to compare?"
+                phase = state.phase or "PRESENTING"
+            else:
+                # Fetch asked_fields for all presented properties
+                if plan.asked_fields:
+                    from wex_platform.services.sms_detail_fetcher import DetailFetcher
+                    detail_fetcher = DetailFetcher(self.db)
+                    comparison_parts = []
+                    for idx, pid in enumerate(presented_ids[:3]):
+                        try:
+                            fetch_results = await detail_fetcher.fetch_with_insight_fallback(
+                                property_id=pid,
+                                topics=list(plan.asked_fields),
+                                state=state,
+                                question_text=message,
+                            )
+                            answered = {r.field_key: r.formatted for r in fetch_results if r.formatted}
+                            # Label from match summaries
+                            city_label = f"Option {idx + 1}"
+                            if presented_match_summaries:
+                                for ms in presented_match_summaries:
+                                    if ms.get("id") == pid:
+                                        city_label = f"Option {idx + 1} ({ms.get('city', '?')})"
+                                        break
+                            comparison_parts.append(f"{city_label}: {answered}")
+                        except Exception:
+                            logger.exception("Comparison fetch failed for %s", pid)
+                    property_data = {
+                        "comparison": comparison_parts,
+                        "source": "comparison_lookup",
+                    }
+                else:
+                    # No specific fields — use match summaries for rate/city comparison
+                    comparison_parts = []
+                    for i, m in enumerate(presented_match_summaries or []):
+                        comparison_parts.append(
+                            f"Option {i+1} ({m.get('city', '?')}): ${m.get('rate', '?')}/sqft, ~${m.get('monthly', '?')}/mo"
+                        )
+                    property_data = {
+                        "comparison": comparison_parts,
+                        "source": "match_summary_comparison",
+                    }
+                plan.response_hint = (
+                    "Buyer wants to compare options. Present the comparison data side-by-side, concisely. "
+                    "Format: 'Option 1 (Dallas) has X, Option 2 (Houston) has Y.'"
+                )
+                phase = "PRESENTING"
 
         elif plan.action == "lookup" and resolved_property_id:
             # Real detail fetcher (Phase 3)
@@ -839,6 +946,74 @@ class BuyerSMSOrchestrator:
             state.focused_match_id = None
             state.phase = "INTAKE"
             plan.response_hint = "No problem, let's start fresh! What city are you looking in, and how much space do you need?"
+
+        elif plan.intent == "lease_modification":
+            try:
+                from wex_platform.services.email_service import send_human_escalation_email
+                await send_human_escalation_email({
+                    "phone": phone,
+                    "buyer_name": f"{state.renter_first_name or ''} {state.renter_last_name or ''}".strip() or "Unknown",
+                    "conversation_history": conversation_history[-8:] if conversation_history else [],
+                    "criteria_snapshot": state.criteria_snapshot or {},
+                    "phase": state.phase or "INTAKE",
+                    "reason": "Buyer requested lease modification",
+                })
+            except Exception:
+                logger.exception("Failed to send lease modification email")
+            return OrchestratorResult(
+                response=get_fallback("lease_modification"),
+                intent="lease_modification",
+                phase=state.phase or "INTAKE",
+            )
+
+        elif plan.intent == "callback_request":
+            requested_time = interpretation.callback_time or "Not specified"
+            try:
+                from wex_platform.services.email_service import send_callback_request_email
+                await send_callback_request_email({
+                    "phone": phone,
+                    "buyer_name": f"{state.renter_first_name or ''} {state.renter_last_name or ''}".strip() or "Unknown",
+                    "requested_time": requested_time,
+                    "conversation_history": conversation_history[-8:] if conversation_history else [],
+                    "criteria_snapshot": state.criteria_snapshot or {},
+                })
+            except Exception:
+                logger.exception("Failed to send callback request email")
+
+            time_part = f" around {requested_time}" if requested_time != "Not specified" else ""
+            return OrchestratorResult(
+                response=f"Got it, someone from our team will give you a call{time_part}.",
+                intent="callback_request",
+                phase=state.phase or "INTAKE",
+            )
+
+        elif plan.intent == "waitlist_confirm" and getattr(state, 'waitlist_offered', False):
+            # Buyer confirmed they want to be on the waitlist
+            try:
+                from wex_platform.services.waitlist_service import WaitlistService
+                waitlist = WaitlistService(self.db)
+                await waitlist.add_to_waitlist(
+                    phone=phone,
+                    buyer_id=state.buyer_id,
+                    criteria=state.criteria_snapshot or merged_criteria or {},
+                )
+                state.waitlist_offered = False
+                city = ""
+                snapshot = state.criteria_snapshot or merged_criteria or {}
+                if snapshot.get("location"):
+                    city = f" in {snapshot['location'].split(',')[0].strip()}"
+                return OrchestratorResult(
+                    response=f"Done, you're on the waitlist! I'll text you as soon as something opens up{city}.",
+                    intent="waitlist_confirm",
+                    phase=state.phase or "QUALIFYING",
+                )
+            except Exception:
+                logger.exception("Waitlist enrollment failed")
+                return OrchestratorResult(
+                    response="Sorry, hit a snag adding you to the list. I'll keep looking and text you when something opens up.",
+                    intent="waitlist_confirm",
+                    phase=state.phase or "QUALIFYING",
+                )
 
         elif plan.intent in ("new_search", "refine_search") and readiness < 0.6:
             phase = "QUALIFYING"
@@ -1072,7 +1247,46 @@ class BuyerSMSOrchestrator:
     async def _run_search(
         self, criteria: dict, phone: str, conversation, state
     ) -> list[dict] | None:
-        """Run ClearingEngine search and return match summaries."""
+        """Run search, supporting multi-location if criteria['locations'] is set."""
+        locations = criteria.get("locations")
+        if locations and len(locations) > 1:
+            return await self._run_multi_location_search(
+                criteria, locations[:3], phone, conversation, state
+            )
+        return await self._run_single_search(criteria, phone, conversation, state)
+
+    async def _run_multi_location_search(
+        self, criteria: dict, locations: list[str], phone: str, conversation, state
+    ) -> list[dict] | None:
+        """Run ClearingEngine once per city (max 3), merge results."""
+        all_summaries = []
+
+        for city_name in locations:
+            city_criteria = dict(criteria)
+            city_criteria["location"] = city_name
+            city_criteria.pop("locations", None)  # prevent recursion
+
+            summaries = await self._run_single_search(
+                city_criteria, phone, conversation, state
+            )
+            if summaries:
+                for s in summaries:
+                    s["search_city"] = city_name
+                all_summaries.extend(summaries)
+
+        if not all_summaries:
+            return None
+
+        # Sort by match_score descending, take top 3
+        all_summaries.sort(
+            key=lambda s: s.get("match_score") or 0, reverse=True
+        )
+        return all_summaries[:3]
+
+    async def _run_single_search(
+        self, criteria: dict, phone: str, conversation, state
+    ) -> list[dict] | None:
+        """Run ClearingEngine search for a single location and return match summaries."""
         try:
             from wex_platform.services.buyer_conversation_service import BuyerConversationService
             from wex_platform.services.clearing_engine import ClearingEngine
@@ -1093,6 +1307,20 @@ class BuyerSMSOrchestrator:
                 buyer_need.id, buyer_need.city, buyer_need.state,
                 buyer_need.min_sqft, buyer_need.max_sqft, buyer_need.use_type,
             )
+
+            # If timing is ASAP, set needed_from to today so ClearingEngine prioritizes available spaces
+            if criteria.get("timing") in ("ASAP", "immediately"):
+                buyer_need.needed_from = datetime.now(timezone.utc)
+                await self.db.flush()
+
+            # If landmark lat/lng was pre-resolved, use it directly with tighter radius
+            if criteria.get("_landmark_lat") and criteria.get("_landmark_lng"):
+                buyer_need.lat = criteria["_landmark_lat"]
+                buyer_need.lng = criteria["_landmark_lng"]
+                buyer_need.radius_miles = 15  # Tighter radius for landmark searches
+                await self.db.flush()
+                logger.info("SEARCH | Using landmark coords: lat=%s lng=%s radius=15mi",
+                            buyer_need.lat, buyer_need.lng)
 
             # Geocode city/state to lat/lng for better pre-filter matching
             if buyer_need.city and not buyer_need.lat:

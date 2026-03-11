@@ -137,3 +137,14 @@ async def renewal_prompts(db: AsyncSession = Depends(get_db)):
     count = await send_renewal_prompts(db)
     logger.info("Renewal prompts: sent=%d", count)
     return {"ok": True, "sent": count}
+
+
+@router.post("/check-waitlist")
+async def check_waitlist(db: AsyncSession = Depends(get_db)):
+    """Check waitlist entries against new inventory."""
+    from wex_platform.services.waitlist_service import WaitlistService
+
+    service = WaitlistService(db)
+    matched = await service.check_waitlist_matches()
+    logger.info("Waitlist check: matched=%d", matched)
+    return {"ok": True, "matched": matched}

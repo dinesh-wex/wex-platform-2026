@@ -26,6 +26,11 @@ class MessageInterpretation:
     budget_monthly: int | None = None
     frustration_detected: bool = False
     wants_human: bool = False
+    urgency_detected: bool = False
+    callback_requested: bool = False
+    callback_time: str | None = None
+    comparison_requested: bool = False
+    landmark_text: str | None = None
 
     def __post_init__(self):
         # Sync sqft <-> min_sqft for backward compatibility.

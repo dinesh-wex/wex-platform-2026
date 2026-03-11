@@ -138,6 +138,84 @@ WANTS_HUMAN_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Urgency detection — lease ending, eviction, need to move urgently
+URGENCY_PATTERN = re.compile(
+    r'\b(?:lease\s+(?:is\s+)?end(?:s|ing)|lease\s+expires?'
+    r'|evict(?:ed|ion)|kicked\s+out|need\s+to\s+move'
+    r'|(?:have\s+to|must|gotta)\s+(?:move|vacate|leave)'
+    r'|emergency|urgent(?:ly)?|asap|right\s+away|immediately)\b',
+    re.IGNORECASE
+)
+
+# Callback request patterns
+CALLBACK_PATTERN = re.compile(
+    r'\b(?:call\s+me\s+back|callback|can\s+(?:someone|you)\s+call\s+me'
+    r'|give\s+me\s+a\s+call|ring\s+me|call\s+me\s+(?:at|around|after|before|in))\b',
+    re.IGNORECASE
+)
+
+# Time extraction for callbacks: "at 3pm", "around 2:30", "after 5"
+CALLBACK_TIME_PATTERN = re.compile(
+    r'(?:at|around|after|before)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM)?)',
+    re.IGNORECASE
+)
+
+# Comparison detection
+COMPARISON_PATTERN = re.compile(
+    r'\b(?:which\s+(?:one|option|property|space)\s+(?:has|is|does|gets)'
+    r'|compare|comparison|difference\s+between'
+    r'|how\s+do\s+they\s+compare|versus|vs\.?)\b',
+    re.IGNORECASE
+)
+
+# Known landmarks for warehouse searches (airport codes + ports)
+KNOWN_LANDMARKS = {
+    "lax": "Los Angeles International Airport",
+    "jfk": "John F Kennedy International Airport",
+    "ord": "O'Hare International Airport",
+    "dfw": "Dallas Fort Worth International Airport",
+    "atl": "Hartsfield-Jackson Atlanta International Airport",
+    "iah": "George Bush Intercontinental Airport Houston",
+    "den": "Denver International Airport",
+    "sfo": "San Francisco International Airport",
+    "sea": "Seattle-Tacoma International Airport",
+    "phx": "Phoenix Sky Harbor International Airport",
+    "mia": "Miami International Airport",
+    "ewr": "Newark Liberty International Airport",
+    "las": "Harry Reid International Airport Las Vegas",
+    "mco": "Orlando International Airport",
+    "port of los angeles": "Port of Los Angeles",
+    "port of long beach": "Port of Long Beach",
+    "port of houston": "Port of Houston",
+    "port of savannah": "Port of Savannah",
+    "port of new york": "Port of New York",
+    "port of seattle": "Port of Seattle",
+    "port of oakland": "Port of Oakland",
+    "port of miami": "Port of Miami",
+    "port of charleston": "Port of Charleston",
+}
+
+# Instant fallback: landmark → nearest city (no API call needed)
+LANDMARK_TO_CITY = {
+    "lax": "Los Angeles", "jfk": "New York", "ord": "Chicago", "dfw": "Dallas",
+    "atl": "Atlanta", "iah": "Houston", "den": "Denver", "sfo": "San Francisco",
+    "sea": "Seattle", "phx": "Phoenix", "mia": "Miami", "ewr": "Newark",
+    "las": "Las Vegas", "mco": "Orlando",
+    "port of los angeles": "Los Angeles", "port of long beach": "Long Beach",
+    "port of houston": "Houston", "port of savannah": "Savannah",
+    "port of new york": "New York", "port of seattle": "Seattle",
+    "port of oakland": "Oakland", "port of miami": "Miami",
+    "port of charleston": "Charleston",
+}
+
+# Landmark extraction: "near LAX", "close to the port of Long Beach", "by DFW"
+LANDMARK_PATTERN = re.compile(
+    r'\b(?:near|close\s+to|by|around|next\s+to)\s+'
+    r'(?:the\s+)?'
+    r'((?:port\s+of\s+[a-z\s]+)|[A-Z]{3}|(?:downtown\s+\w+))',
+    re.IGNORECASE
+)
+
 # Budget patterns — matches "$5k/month", "$8,000/mo", "$5000 per month", "$10k a month"
 BUDGET_PATTERN = re.compile(
     r'\$\s*(\d{1,3}(?:,\d{3})*|\d+)\s*k?\s*(?:/?\s*(?:mo|month|per\s*month|monthly|a\s*month))',
@@ -360,6 +438,39 @@ def interpret_message(text: str) -> MessageInterpretation:
     # -----------------------------------------------------------------------
     result.frustration_detected = bool(FRUSTRATION_PATTERN.search(text))
     result.wants_human = bool(WANTS_HUMAN_PATTERN.search(text))
+
+    # -----------------------------------------------------------------------
+    # Urgency detection
+    # -----------------------------------------------------------------------
+    result.urgency_detected = bool(URGENCY_PATTERN.search(text))
+
+    # -----------------------------------------------------------------------
+    # Callback request detection
+    # -----------------------------------------------------------------------
+    result.callback_requested = bool(CALLBACK_PATTERN.search(text))
+    callback_time_match = CALLBACK_TIME_PATTERN.search(text)
+    result.callback_time = callback_time_match.group(1).strip() if callback_time_match else None
+
+    # -----------------------------------------------------------------------
+    # Comparison request detection
+    # -----------------------------------------------------------------------
+    result.comparison_requested = bool(COMPARISON_PATTERN.search(text))
+
+    # -----------------------------------------------------------------------
+    # Landmark detection
+    # -----------------------------------------------------------------------
+    landmark_match = LANDMARK_PATTERN.search(text)
+    if landmark_match:
+        raw_landmark = landmark_match.group(1).strip().lower()
+        if raw_landmark in KNOWN_LANDMARKS:
+            result.landmark_text = KNOWN_LANDMARKS[raw_landmark]
+        else:
+            # Try as airport code (3-letter uppercase)
+            upper = raw_landmark.upper()
+            if upper.lower() in KNOWN_LANDMARKS:
+                result.landmark_text = KNOWN_LANDMARKS[upper.lower()]
+            else:
+                result.landmark_text = raw_landmark
 
     # -----------------------------------------------------------------------
     # Budget extraction

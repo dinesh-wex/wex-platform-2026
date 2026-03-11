@@ -133,14 +133,14 @@ The current SMS/Voice system handles the core search-and-book flow well, but rea
 **Problem**: Buyer texts back after hours/days and system doesn't acknowledge prior context.
 
 **Files to modify**:
-- `services/buyer_sms_orchestrator.py` — At start of `process_message`, detect time gap (>4 hours since `last_buyer_message_at` + turn > 2 + has `criteria_snapshot`). Generate contextual welcome-back response_hint
+- `services/buyer_sms_orchestrator.py` — At start of `process_message`, detect time gap (>7 days since `last_buyer_message_at` + turn > 2 + has `criteria_snapshot`). Generate contextual welcome-back response_hint
 - `agents/sms/criteria_agent.py` — Add `"returning_buyer"` intent
 - `agents/sms/response_agent.py` — Add guideline: "For returning buyers, briefly acknowledge their prior search before continuing"
 
-**UX approach** (don't be creepy, be helpful):
-- Short gap (< 4 hours): Continue naturally, no special handling
-- Medium gap (4-48 hours): "Hey, welcome back! Still looking at those options in {city}?"
-- Long gap (> 48 hours): "Hey {name}, good to hear from you again. Last time you were looking for space in {city}. Want to pick up where we left off, or start fresh?"
+**UX approach** (think like a real broker — don't over-acknowledge short gaps):
+- Under 7 days: Continue naturally, no special handling. They're still in the same search journey.
+- 7–30 days: "Hey, welcome back! Still looking at those options in {city}?"
+- Over 30 days: "Hey {name}, good to hear from you again. Last time you were looking for space in {city}. Want to pick up where we left off, or start fresh?"
 - If they have active engagement: skip to engagement status
 
 **Voice**: Already partially implemented via SMS context seeding in `vapi_webhook.py`. Enhancement: add time-gap awareness to `build_assistant_config()` first message.

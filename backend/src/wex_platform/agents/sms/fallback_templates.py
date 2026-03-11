@@ -96,6 +96,25 @@ TEMPLATES = {
     "human_escalation_confirmed": (
         "Got it, someone from our team will reach out shortly."
     ),
+    "lease_modification": (
+        "For lease changes, I'll connect you with our team. "
+        "Email support@warehouseexchange.com with the details, "
+        "or I can have someone call you."
+    ),
+    "callback_request": (
+        "Got it, someone from our team will give you a call. "
+        "Is this the best number to reach you?"
+    ),
+    "comparison": (
+        "Let me compare those options for you. One moment."
+    ),
+    "waitlist_offer": (
+        "Nothing exact right now, but I can notify you when something opens up. "
+        "Want me to add you to the waitlist?"
+    ),
+    "waitlist_confirmed": (
+        "Done, you're on the waitlist! I'll text you as soon as something opens up."
+    ),
 }
 
 

@@ -255,6 +255,27 @@ If the caller sounds frustrated, upset, or says things like "this isn't working"
 """
 
     base_prompt += """
+LEASE MODIFICATION:
+If the caller mentions changing, modifying, cancelling, or rescheduling an existing booking, lease, or tour:
+- Acknowledge: "Got it, for lease changes I'll have our team help you with that."
+- Offer email: "You can email support@warehouseexchange.com, or I can have someone call you back."
+"""
+
+    base_prompt += """
+CALLBACK REQUESTS:
+If the caller asks for someone to call them back or at a specific time:
+- Note the preferred time if given
+- Confirm: "Got it, I'll have someone from the team call you back around {time}."
+- If no time given: "Got it, someone will call you back shortly."
+"""
+
+    base_prompt += """
+LANDMARK-BASED SEARCH:
+If the caller references a landmark instead of a city ("near LAX", "close to the port"),
+pass it as the location in search_properties. The system will geocode it automatically.
+"""
+
+    base_prompt += """
 RETURNING CALLER RECOGNITION:
 If the caller mentions they've called or texted before, reference what you know from SMS history.
 Use the SMS context section to remind yourself what's been discussed — don't re-ask answered questions.
@@ -380,6 +401,11 @@ def _build_tool_definitions() -> list[dict]:
                         "budget_monthly": {
                             "type": "integer",
                             "description": "Monthly budget in dollars if the caller gives a budget instead of sqft, e.g. 5000 for '$5k/month'"
+                        },
+                        "locations": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Multiple cities to search (max 3). Use when caller wants space in multiple cities."
                         }
                     },
                     "required": ["location"]

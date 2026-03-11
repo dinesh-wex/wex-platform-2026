@@ -42,6 +42,10 @@ Choose exactly one:
 - "engagement_status" — asking about their booking/lease status ("what happened with my booking", "did the owner accept", "any update", "where's my lease", "is my tour confirmed")
 - "human_escalation" — buyer is frustrated, upset, or explicitly asking to speak with a real person ("this isn't working", "waste of time", "speak to a real person", "get me someone", "customer service")
 - "start_fresh" — buyer wants to start over, clear previous search criteria (e.g. "start fresh", "start over", "new search", "forget that", "let's try something different")
+- "lease_modification" — buyer wants to change an existing booking/lease ("change my booking", "modify my lease", "adjust my dates", "cancel my tour", "reschedule")
+- "callback_request" — buyer wants a human to call them back ("call me back", "can someone call me at 3pm", "give me a call")
+- "comparison" — buyer is comparing two or more presented properties ("which one has more parking?", "which is cheaper?", "how do they compare?", "difference between option 1 and 2")
+- "waitlist_confirm" — buyer confirms they want to be added to the waitlist ("yes add me", "sure notify me", "yeah waitlist me"). IMPORTANT: Only classify as waitlist_confirm when waitlist_offered is True in conversation state. A bare "yes" or "sure" after any OTHER question is NOT waitlist_confirm.
 - "unknown" — can't determine intent
 
 ## TOUR REQUEST DETECTION
@@ -68,6 +72,48 @@ set intent = "human_escalation", action = null.
 Do NOT classify frustration as "unknown" — this is a specific intent requiring empathetic handling.
 If the message also contains search criteria (city, sqft, use type), classify as the appropriate
 search intent instead — the system will handle the frustration flag separately.
+
+## LEASE MODIFICATION
+If the buyer mentions changing, modifying, cancelling, or rescheduling an existing booking, lease, or tour,
+set intent = "lease_modification", action = null.
+Examples: "I need to change my booking", "can I modify my lease", "reschedule my tour",
+"I need to adjust my dates", "change the sqft on my lease", "cancel my reservation"
+
+## CALLBACK REQUEST
+If the buyer asks for a callback ("call me back", "can someone call me", "give me a ring at 3pm"),
+set intent = "callback_request", action = null. If a time is mentioned, include it in response_hint.
+IMPORTANT: If the message also contains search criteria (city, sqft) and the callback language is
+conditional ("call me if you find something", "let me know"), classify as the search intent instead.
+The callback_requested flag is just a signal — you decide the final intent based on full context.
+
+## COMPARATIVE QUESTIONS
+If the buyer asks to compare properties ("which one has more parking?", "which is cheaper?",
+"how do they compare?", "what's the difference?"), set intent = "comparison".
+Set asked_fields to the fields being compared (e.g., ["parking_spaces"] for "which has more parking?").
+Set action = "lookup" so the system fetches the data for comparison.
+If the match_summaries already contain the answer (e.g., rate/city), set action = null and include
+the comparison in response_hint.
+
+## MULTI-LOCATION SEARCH
+If the buyer mentions multiple cities ("I need space in Dallas and Houston", "looking in both LA and Phoenix"),
+set criteria.locations as an array of city names (max 3). Also set criteria.location to the first city
+for backward compatibility. The system will search each city separately and merge results.
+
+## LANDMARK-BASED LOCATION
+If the buyer mentions a landmark instead of a city ("near LAX", "close to the port of Long Beach",
+"by DFW airport", "downtown Chicago"), the interpreter will extract the landmark.
+Treat this as location context. The system will geocode the landmark automatically.
+
+## WAITLIST CONFIRMATION
+If the buyer says "yes", "sure", "add me", "notify me", etc. AND waitlist_offered is True,
+set intent = "waitlist_confirm". CRITICAL: Only use this intent when the PREVIOUS system message
+offered the waitlist. A bare "yes" or "sure" after a completely different question should use the
+appropriate intent for that context (e.g., "provide_info", "commitment", etc.), NOT "waitlist_confirm".
+
+## CONTEXTUAL URGENCY
+If the buyer mentions urgency ("my lease ends next month", "need to move ASAP", "eviction",
+"have to vacate", "emergency"), set criteria.timing to "ASAP" and include in response_hint:
+"Buyer is under time pressure. Prioritize immediately available spaces."
 
 ## SUPPLIER CONTENT
 If is_supplier_content=True but message also contains buyer criteria (city, sqft, use type), treat as buyer.
@@ -155,10 +201,11 @@ If the user provides their name anywhere in the message, extract it:
 
 ## REQUIRED JSON SCHEMA
 {{
-  "intent": "new_search|refine_search|facility_info|tour_request|commitment|provide_info|greeting|address_lookup|faq|engagement_status|human_escalation|start_fresh|unknown",
+  "intent": "new_search|refine_search|facility_info|tour_request|commitment|provide_info|greeting|address_lookup|faq|engagement_status|human_escalation|start_fresh|lease_modification|callback_request|comparison|waitlist_confirm|unknown",
   "action": "search|lookup|schedule_tour|commitment_handoff|collect_info|address_lookup" or null,
   "criteria": {{
     "location": "city or area name" or null,
+    "locations": ["city1", "city2", ...] or null,
     "sqft": number or null,
     "use_type": "storage|fulfillment|distribution|light_assembly|cold_storage|manufacturing" or null,
     "timing": "ASAP|next_month|3_months|6_months|flexible" or null,
@@ -259,6 +306,11 @@ class CriteriaAgent(BaseAgent):
             "address_text": interpretation.address_text,
             "is_supplier_content": interpretation.is_supplier_content,
             "budget_monthly": interpretation.budget_monthly,
+            "urgency_detected": interpretation.urgency_detected,
+            "callback_requested": interpretation.callback_requested,
+            "callback_time": interpretation.callback_time,
+            "comparison_requested": interpretation.comparison_requested,
+            "landmark_text": interpretation.landmark_text,
         })
 
         existing_ctx = f"\nExisting criteria: {json.dumps(existing_criteria)}" if existing_criteria else ""

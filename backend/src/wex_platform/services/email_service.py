@@ -604,6 +604,72 @@ async def send_human_escalation_email(data: dict) -> bool:
         return False
 
 
+def _build_callback_request_html(data: dict) -> str:
+    """Build HTML for callback request notification."""
+    phone = data.get("phone", "Unknown")
+    buyer_name = data.get("buyer_name", "Unknown")
+    requested_time = data.get("requested_time", "Not specified")
+    criteria = data.get("criteria_snapshot", {})
+    recent = data.get("conversation_history", [])
+
+    criteria_rows = ""
+    for key, val in list(criteria.items())[:5]:
+        if val and key != "match_summaries":
+            label = key.replace("_", " ").title()
+            criteria_rows += f"<tr><td style='font-weight:600; padding: 6px 12px 6px 0;'>{label}:</td><td>{val}</td></tr>"
+
+    conversation_rows = ""
+    for msg in recent[-5:]:
+        role = msg.get("role", "?")
+        content = msg.get("content", "")
+        prefix = "Buyer" if role in ("buyer", "user") else "Jess"
+        conversation_rows += f"<p style='margin: 4px 0; font-size: 13px;'><strong>{prefix}:</strong> {content}</p>"
+
+    return f"""
+<html><body style="font-family: Arial, sans-serif; padding: 20px;">
+<div style="background-color: #dbeafe; border-left: 4px solid #3b82f6; padding: 15px; margin-bottom: 20px;">
+  <h2 style="margin: 0; color: #1e40af;">Callback Requested</h2>
+  <p style="margin: 8px 0 0; color: #1e40af;">Preferred time: {requested_time}</p>
+</div>
+<table style="font-size: 14px; color: #374151;">
+  <tr><td style="font-weight:600; padding: 6px 12px 6px 0;">Phone:</td><td><a href="tel:{phone}">{phone}</a></td></tr>
+  <tr><td style="font-weight:600; padding: 6px 12px 6px 0;">Name:</td><td>{buyer_name}</td></tr>
+  {criteria_rows}
+</table>
+<h3 style="color: #374151; margin-top: 20px;">Recent Conversation</h3>
+<div style="background: #f3f4f6; padding: 12px; border-radius: 6px;">{conversation_rows or '<p>No messages available.</p>'}</div>
+</body></html>
+"""
+
+
+async def send_callback_request_email(data: dict) -> bool:
+    """Send notification when a buyer requests a callback."""
+    api_key, alert_from, alert_to = _get_config()
+    if not api_key:
+        logger.warning("SendGrid not configured, skipping callback request email")
+        return False
+
+    phone = data.get("phone", "Unknown")
+    requested_time = data.get("requested_time", "Not specified")
+    html = _build_callback_request_html(data)
+
+    mail = Mail(
+        from_email=Email(alert_from, "Warehouse Exchange"),
+        to_emails=To(alert_to),
+        subject=f"[WEx] Callback Requested - {phone} ({requested_time})",
+        html_content=Content("text/html", html),
+    )
+
+    try:
+        success = await asyncio.to_thread(_send_mail, mail)
+        if success:
+            logger.info("Callback request email sent for %s", phone)
+        return success
+    except Exception:
+        logger.exception("Failed to send callback request email for %s", phone)
+        return False
+
+
 async def send_supplier_redirect_email(data: dict) -> bool:
     """Send internal notification when a supplier contacts the buyer SMS line."""
     api_key, alert_from, alert_to = _get_config()

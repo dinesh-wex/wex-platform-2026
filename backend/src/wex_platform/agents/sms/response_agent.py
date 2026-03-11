@@ -170,6 +170,7 @@ class ResponseAgent(BaseAgent):
             f"- If response_hint contains a link, include it naturally\n"
             f"- The link goes to a page with Book Now, Reserve & Tour, Ask Question buttons\n"
             f"- Do NOT push for any specific action — the buyer decides via the web page\n"
+            f"- When presenting multi-city results, group by city: 'In Dallas: Option 1 at $X/sqft. In Houston: Option 2 at $Y/sqft.'\n"
             f"- Example: \"Found 3 spaces that could work. Best match is in Denver at $1.08/sqft (~$10,800/mo). "
             f"Also have options in Aurora and Lakewood. Check them out here: {{link}}\"\n\n"
 
@@ -208,6 +209,8 @@ class ResponseAgent(BaseAgent):
             f"identity → mention marketplace). Then naturally transition back: 'What city are you looking in?'\n"
             f"- engagement_status: Report status naturally. If declined, offer alternatives.\n"
             f"- start_fresh: Acknowledge they want to start over, ask for new criteria.\n"
+            f"- lease_modification: Acknowledge their request, say you'll connect them with the team.\n"
+            f"- comparison: Compare presented options side-by-side. Be concise: 'Option 1 has X, Option 2 has Y.'\n"
             f"- unknown/other: Ask what kind of space they need (city, size, use)\n\n"
 
             # --- FRUSTRATION AWARENESS ---

@@ -41,6 +41,7 @@ class SMSConversationState(Base):
     reengagement_count = Column(Integer, default=0)
     next_reengagement_at = Column(DateTime(timezone=True), nullable=True)
     stall_nudge_counts = Column(JSON, default=dict)
+    waitlist_offered = Column(Boolean, default=False)
     opted_out = Column(Boolean, default=False)
     opted_out_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=func.now())
@@ -84,3 +85,23 @@ class SmsSignupToken(Base):
     used = Column(Boolean, default=False)
     used_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=func.now())
+
+
+class BuyerWaitlist(Base):
+    __tablename__ = "buyer_waitlists"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    buyer_id = Column(String(36), ForeignKey("buyers.id"), nullable=False)
+    phone = Column(String(50), nullable=False, index=True)
+    city = Column(String(100), nullable=False)
+    state = Column(String(50), nullable=True)
+    min_sqft = Column(Integer, nullable=True)
+    max_sqft = Column(Integer, nullable=True)
+    use_type = Column(String(50), nullable=True)
+    criteria_snapshot = Column(JSON, default=dict)
+    status = Column(String(20), default="active")  # active, matched, expired, cancelled
+    matched_property_id = Column(String(36), nullable=True)
+    notified_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)  # 90-day TTL
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
