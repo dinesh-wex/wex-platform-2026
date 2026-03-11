@@ -278,6 +278,8 @@ async def _handle_tool_calls(message: dict, db: AsyncSession) -> JSONResponse:
                 )
             elif tool_name == "check_booking_status":
                 result_text = await handlers.check_booking_status()
+            elif tool_name == "add_to_waitlist":
+                result_text = await handlers.handle_add_to_waitlist(args)
             else:
                 logger.warning("Unknown tool: %s", tool_name)
                 result_text = f"Unknown tool: {tool_name}"

@@ -255,6 +255,7 @@ class BuyerSMSOrchestrator:
         from wex_platform.agents.sms.context_builder import build_match_summaries
 
         phase = state.phase or "INTAKE"
+        initial_phase = phase  # Track phase at start of turn
 
         # == Validate inbound ==
         gate = validate_inbound(message)
@@ -1180,7 +1181,8 @@ class BuyerSMSOrchestrator:
 
         # == 7. Response Agent (LLM) ==
         response_agent = ResponseAgent()
-        is_first = (state.turn or 0) <= 1
+        just_entered_presenting = (phase == "PRESENTING" and initial_phase != "PRESENTING")
+        is_first = (state.turn or 0) <= 1 or just_entered_presenting
 
         response_text = await response_agent.generate_reply(
             message=message,

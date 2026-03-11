@@ -162,7 +162,7 @@ CONVERSATION FLOW:
 
    Once you have at least location + size + use type, call search_properties.
 
-4. SEARCH: Once you have enough criteria, call the search_properties tool. ALWAYS confirm criteria before presenting results: "So you're looking for about 10,000 square feet in Dallas for fulfillment — here's what I found..." Then describe ALL options returned (up to 3), including:
+4. SEARCH: Once you have enough criteria, call the search_properties tool. The FIRST time you present results, confirm criteria briefly: "So you're looking for about 10,000 square feet in Dallas for fulfillment — here's what I found..." On follow-up messages in the same conversation, skip the criteria recap and jump straight to the answer. Then describe ALL options returned (up to 3), including:
    - City/area
    - Price per sqft and estimated monthly cost
    - 1-2 standout features for each
@@ -264,6 +264,14 @@ If the caller mentions changing, modifying, cancelling, or rescheduling an exist
     base_prompt += """
 RESULT REJECTION:
 If the caller says the options aren't right and doesn't specify why, ask what's missing — price, location, size, or features. Don't repeat the same options.
+"""
+
+    base_prompt += """
+WAITLIST:
+If search_properties returns zero results, offer to add them to the waitlist:
+"Nothing available in that area right now, but I can add you to our notification list. The moment something opens up there, I'll send you a text. Want me to do that?"
+If they say yes, call the add_to_waitlist tool with city, sqft_needed, and use_type from their criteria.
+Notifications go out via text message since we can't call them proactively.
 """
 
     base_prompt += """
@@ -502,6 +510,31 @@ def _build_tool_definitions() -> list[dict]:
                     "type": "object",
                     "properties": {},
                     "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_to_waitlist",
+                "description": "Add the caller to the waitlist for a city where no properties are currently available. They'll be notified via text when something opens up.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "type": "string",
+                            "description": "The city to waitlist for"
+                        },
+                        "sqft_needed": {
+                            "type": "integer",
+                            "description": "How much space they need in sqft"
+                        },
+                        "use_type": {
+                            "type": "string",
+                            "description": "What they'll use the space for (storage, fulfillment, distribution, etc.)"
+                        }
+                    },
+                    "required": ["city"]
                 }
             }
         },

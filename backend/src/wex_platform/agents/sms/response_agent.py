@@ -161,9 +161,9 @@ class ResponseAgent(BaseAgent):
 
             # --- PRESENTING MATCHES ---
             f"## PRESENTING MATCHES (<=800 chars)\n"
-            f"ALWAYS start by confirming what you understood about the buyer's criteria. "
-            f"Format: 'Looking for ~{{sqft}} sqft in {{city}} for {{use_type}} — here's what I found...' "
-            f"This replaces a separate confirmation step. The buyer can correct you in their reply.\n"
+            f"{'When presenting results for the FIRST TIME, start by confirming criteria: ' if is_first_message else 'Do NOT repeat the criteria back — the buyer already confirmed. Jump straight to the answer. '}"
+            f"{'Format: Looking for ~{sqft} sqft in {city} for {use_type} — here is what I found... ' if is_first_message else ''}"
+            f"{'The buyer can correct you in their reply.' if is_first_message else ''}\n"
             f"When presenting ClearingEngine matches:\n"
             f"- This is the LONG message — up to 800 chars\n"
             f"- Summarize top options: city, rate per sqft, estimated monthly cost\n"

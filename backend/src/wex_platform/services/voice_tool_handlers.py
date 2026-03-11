@@ -664,6 +664,63 @@ class VoiceToolHandlers:
             )
 
     # ------------------------------------------------------------------
+    # add_to_waitlist
+    # ------------------------------------------------------------------
+
+    async def handle_add_to_waitlist(self, params: dict) -> str:
+        """Add caller to waitlist for a city with no current inventory."""
+        city = params.get("city")
+        if not city:
+            return "I need to know which city to add you to the waitlist for."
+
+        sqft_needed = params.get("sqft_needed")
+        use_type = params.get("use_type")
+
+        from wex_platform.services.waitlist_service import WaitlistService
+        waitlist = WaitlistService(self.db)
+
+        criteria = {}
+        if sqft_needed:
+            criteria["sqft"] = sqft_needed
+        if use_type:
+            criteria["use_type"] = use_type
+        criteria["location"] = city
+
+        # Use call_state phone and buyer_id
+        phone = self.call_state.caller_phone
+        buyer_id = self.call_state.buyer_id
+
+        # Ensure we have a buyer_id — create buyer record if needed
+        if not buyer_id:
+            result = await self.db.execute(
+                select(Buyer).where(Buyer.phone == phone)
+            )
+            buyer = result.scalar_one_or_none()
+            if not buyer:
+                buyer = Buyer(
+                    id=str(uuid.uuid4()),
+                    phone=phone,
+                    name=self.call_state.buyer_name or "",
+                )
+                self.db.add(buyer)
+                await self.db.flush()
+            buyer_id = buyer.id
+            self.call_state.buyer_id = buyer_id
+
+        try:
+            await waitlist.add_to_waitlist(
+                phone=phone,
+                buyer_id=buyer_id,
+                criteria=criteria,
+                source_channel="voice",
+            )
+        except Exception as e:
+            logger.error("add_to_waitlist failed: %s", e, exc_info=True)
+            return "I had trouble adding you to the waitlist. I'll note your interest and follow up by text."
+
+        return f"Done — added to the waitlist for {city}. They'll get a text when something opens up."
+
+    # ------------------------------------------------------------------
     # check_booking_status
     # ------------------------------------------------------------------
 

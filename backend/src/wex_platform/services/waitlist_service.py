@@ -22,6 +22,7 @@ class WaitlistService:
         phone: str,
         buyer_id: str,
         criteria: dict,
+        source_channel: str = "sms",
     ) -> BuyerWaitlist:
         """Add a buyer to the waitlist for a city with no current matches."""
         location = criteria.get("location", "")
@@ -41,6 +42,7 @@ class WaitlistService:
             max_sqft=int(sqft * 1.5) if sqft else None,
             use_type=criteria.get("use_type"),
             criteria_snapshot=criteria,
+            source_channel=source_channel,
             status="active",
             expires_at=datetime.now(timezone.utc) + timedelta(days=DEFAULT_EXPIRY_DAYS),
         )
@@ -87,16 +89,23 @@ class WaitlistService:
                     entry.matched_property_id = tier1[0].get("warehouse_id")
                     entry.notified_at = now
 
-                    # Send SMS notification
+                    # Send SMS notification (channel-aware message)
                     from wex_platform.services.sms_service import SMSService
                     sms = SMSService()
                     city = entry.city
                     count = len(tier1)
-                    await sms.send_buyer_sms(
-                        entry.phone,
-                        f"Hey, good news! {count} new space{'s' if count != 1 else ''} "
-                        f"just opened up in {city}. Text me back to see the options.",
-                    )
+                    if entry.source_channel == "voice":
+                        msg = (
+                            f"Hey, remember when you called about space in {city}? "
+                            f"{count} new spot{'s' if count != 1 else ''} just opened up. "
+                            f"Text me back to see the options. - Jess, Warehouse Exchange"
+                        )
+                    else:
+                        msg = (
+                            f"Good news! {count} new space{'s' if count != 1 else ''} "
+                            f"just opened up in {city}. Text me back to see the options."
+                        )
+                    await sms.send_buyer_sms(entry.phone, msg)
                     matched_count += 1
                     logger.info("Waitlist match: %s -> %d matches in %s", entry.phone, count, city)
 

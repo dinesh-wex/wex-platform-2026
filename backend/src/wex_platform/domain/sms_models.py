@@ -99,6 +99,7 @@ class BuyerWaitlist(Base):
     max_sqft = Column(Integer, nullable=True)
     use_type = Column(String(50), nullable=True)
     criteria_snapshot = Column(JSON, default=dict)
+    source_channel = Column(String(10), default="sms")  # "sms" or "voice"
     status = Column(String(20), default="active")  # active, matched, expired, cancelled
     matched_property_id = Column(String(36), nullable=True)
     notified_at = Column(DateTime(timezone=True), nullable=True)
