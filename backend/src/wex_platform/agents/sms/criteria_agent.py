@@ -32,6 +32,7 @@ Interpreted data: {interp_ctx}
 Choose exactly one:
 - "new_search" — looking for warehouse space (new inquiry)
 - "refine_search" — adjusting previous search criteria
+- "reject_results" — buyer rejects presented options without giving new criteria (e.g. "I don't like these", "none of these work", "not what I'm looking for", "you didn't understand my needs")
 - "facility_info" — asking about a specific facility detail
 - "tour_request" — wants to see/tour a facility
 - "commitment" — wants to book/commit ("I want that one", "book it", "let's go with this one")
@@ -85,6 +86,10 @@ set intent = "callback_request", action = null. If a time is mentioned, include 
 IMPORTANT: If the message also contains search criteria (city, sqft) and the callback language is
 conditional ("call me if you find something", "let me know"), classify as the search intent instead.
 The callback_requested flag is just a signal — you decide the final intent based on full context.
+
+## RESULT REJECTION\n
+If the buyer expresses dissatisfaction with presented options but does NOT provide new search criteria (no new city, sqft, features, price constraint), classify as `reject_results` not `refine_search`.\n
+If they DO give a reason ('too expensive', 'need bigger', 'somewhere closer'), that IS new criteria — classify as `refine_search`.\n
 
 ## COMPARATIVE QUESTIONS
 If the buyer asks to compare properties ("which one has more parking?", "which is cheaper?",
@@ -201,7 +206,7 @@ If the user provides their name anywhere in the message, extract it:
 
 ## REQUIRED JSON SCHEMA
 {{
-  "intent": "new_search|refine_search|facility_info|tour_request|commitment|provide_info|greeting|address_lookup|faq|engagement_status|human_escalation|start_fresh|lease_modification|callback_request|comparison|waitlist_confirm|unknown",
+  "intent": "new_search|refine_search|reject_results|facility_info|tour_request|commitment|provide_info|greeting|address_lookup|faq|engagement_status|human_escalation|start_fresh|lease_modification|callback_request|comparison|waitlist_confirm|unknown",
   "action": "search|lookup|schedule_tour|commitment_handoff|collect_info|address_lookup" or null,
   "criteria": {{
     "location": "city or area name" or null,
@@ -263,6 +268,9 @@ GOOD: "can I tour option 2?"
 
 GOOD: "does it have dock doors?"
 -> {{"intent": "facility_info", "action": "lookup", "criteria": {{}}, "resolved_property_id": null, "extracted_name": null, "asked_fields": ["dock_doors"], "clarification_needed": null, "response_hint": null, "confidence": 0.9}}
+
+BAD: "I don't like any of these, I don't think you understood my needs"
+-> Classify as reject_results (NOT refine_search) because no new criteria given.
 
 BAD: Inventing sqft when user only said a city — NEVER guess missing fields
 BAD: Setting action: "search" when only location is provided (need location + sqft + use_type minimum)

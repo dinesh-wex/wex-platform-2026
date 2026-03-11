@@ -262,6 +262,11 @@ If the caller mentions changing, modifying, cancelling, or rescheduling an exist
 """
 
     base_prompt += """
+RESULT REJECTION:
+If the caller says the options aren't right and doesn't specify why, ask what's missing — price, location, size, or features. Don't repeat the same options.
+"""
+
+    base_prompt += """
 CALLBACK REQUESTS:
 If the caller asks for someone to call them back or at a specific time:
 - Note the preferred time if given

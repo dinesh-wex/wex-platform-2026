@@ -292,6 +292,46 @@ The current SMS/Voice system handles the core search-and-book flow well, but rea
 
 ---
 
+## Wave 4: Result Quality & Rejection Handling
+
+### 4.1 — Result Rejection / "I Don't Like These"
+
+**Problem**: When a buyer says "I don't like any of these" or "you didn't understand my needs," the system re-runs the same search with identical criteria and presents the exact same options. This is the most bot-like failure mode — it proves Jess isn't listening.
+
+**Two sub-problems**:
+
+**A. No `reject_results` intent** — "I don't like these" gets classified as `refine_search` with no new criteria, which triggers an identical search.
+
+**What should happen**: Jess should ask what was wrong, not re-search blindly.
+
+**Files to modify**:
+- `agents/sms/criteria_agent.py` — Add `"reject_results"` intent: "buyer is unhappy with presented options but hasn't said why." Examples: "I don't like any of these", "none of these work", "these aren't what I need", "not what I'm looking for", "you didn't understand"
+- `services/buyer_sms_orchestrator.py` — Add handler: if `plan.intent == "reject_results"` and no new criteria in the message, do NOT re-search. Instead ask what was wrong: "Sorry those weren't a fit. Was it the price, the location, or something specific about the spaces? That'll help me find better options."
+- `agents/sms/response_agent.py` — Add guideline: "reject_results: Never re-present the same options. Ask what didn't work. Offer specific dimensions to react to: price, location, size, features."
+- `agents/sms/fallback_templates.py` — Add `"reject_results"` template
+- `services/vapi_assistant_config.py` — Add RESULT REJECTION section to voice prompt: "If the caller says the options aren't right, don't repeat them. Ask what's missing."
+
+**B. Pricing outlier filter** — A $228/sqft option alongside $1.91/sqft options should never be shown.
+
+**Files to modify**:
+- `services/buyer_sms_orchestrator.py` (or `services/clearing_engine.py`) — After ClearingEngine returns results, add an outlier filter before presenting:
+  - Calculate median `buyer_rate` across results
+  - Exclude any result where `buyer_rate > 5x median` (or `buyer_rate > 3x` the next-highest result)
+  - Log excluded outliers for data quality review
+  - If filtering removes all but 1 result, still present that 1 — don't show garbage alongside it
+
+**Implementation order**: 4.1A first (reject_results intent), then 4.1B (outlier filter).
+
+**Effort**: ~3h SMS + 0.5h Voice = 3.5h total
+
+**Verification**:
+- Present 3 options → buyer says "I don't like these" → expect clarifying question, NOT same options repeated
+- Present 3 options → buyer says "too expensive" → expect `refine_search` with price constraint (existing behavior, not reject_results)
+- Search returns results with 1 extreme outlier → expect outlier filtered out before presentation
+- Search returns 3 results all at similar prices → expect no filtering (regression)
+
+---
+
 ## Additional UX Enhancements (Woven Into Waves Above)
 
 These aren't separate items but principles applied throughout:
@@ -326,7 +366,9 @@ These aren't separate items but principles applied throughout:
 | 3.6 Landmarks | 3 | 3h | 0.5h | 3.5h |
 | 3.7 Comparison | 3 | 3h | 0.5h | 3.5h |
 
-**Wave 1 Total**: ~14h | **Wave 2 Total**: ~7.5h | **Wave 3 Total**: ~24.5h
+| 4.1 Result Rejection + Outlier Filter | 4 | 3h | 0.5h | 3.5h |
+
+**Wave 1 Total**: ~14h | **Wave 2 Total**: ~7.5h | **Wave 3 Total**: ~24.5h | **Wave 4 Total**: ~3.5h
 
 ---
 

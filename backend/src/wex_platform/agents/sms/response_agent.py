@@ -211,6 +211,7 @@ class ResponseAgent(BaseAgent):
             f"- start_fresh: Acknowledge they want to start over, ask for new criteria.\n"
             f"- lease_modification: Acknowledge their request, say you'll connect them with the team.\n"
             f"- comparison: Compare presented options side-by-side. Be concise: 'Option 1 has X, Option 2 has Y.'\n"
+            f"- reject_results: NEVER re-present the same options. Ask what didn't work. Offer specific dimensions: price, location, size, features.\n"
             f"- unknown/other: Ask what kind of space they need (city, size, use)\n\n"
 
             # --- FRUSTRATION AWARENESS ---

@@ -918,6 +918,15 @@ class BuyerSMSOrchestrator:
             if phase != "AWAITING_ANSWER":
                 phase = "PROPERTY_FOCUSED"
 
+        elif plan.intent == "reject_results":
+            # Stay in PRESENTING — do NOT re-search with same criteria
+            phase = "PRESENTING"
+            plan.response_hint = (
+                "Buyer rejected the presented options without saying why. "
+                "Ask what didn't work — was it the price, the location, or something specific about the spaces? "
+                "Offer dimensions to react to. NEVER re-present the same options."
+            )
+
         elif plan.intent == "greeting":
             pass  # Stay in current phase
 
@@ -1281,7 +1290,34 @@ class BuyerSMSOrchestrator:
         all_summaries.sort(
             key=lambda s: s.get("match_score") or 0, reverse=True
         )
+        all_summaries = self._filter_outlier_matches(all_summaries)
         return all_summaries[:3]
+
+    def _filter_outlier_matches(self, summaries: list[dict]) -> list[dict]:
+        """Remove pricing outliers — any result with rate > 5x the median."""
+        rates = [s["rate"] for s in summaries if s.get("rate")]
+        if len(rates) < 2:
+            return summaries  # Need at least 2 to compare
+
+        sorted_rates = sorted(rates)
+        median = sorted_rates[len(sorted_rates) // 2]
+        threshold = median * 5
+
+        filtered = []
+        for s in summaries:
+            rate = s.get("rate")
+            if rate and rate > threshold:
+                logger.info(
+                    "OUTLIER_FILTER | Excluding property %s: rate=%.2f > threshold=%.2f (median=%.2f)",
+                    s.get("id"), rate, threshold, median,
+                )
+            else:
+                filtered.append(s)
+
+        # If filtering removed everything, return original
+        if not filtered:
+            return summaries
+        return filtered
 
     async def _run_single_search(
         self, criteria: dict, phone: str, conversation, state
@@ -1360,6 +1396,7 @@ class BuyerSMSOrchestrator:
             from wex_platform.agents.sms.context_builder import build_match_summaries
             buyer_sqft = criteria.get("sqft") if criteria else None
             summaries = build_match_summaries(tier1, buyer_sqft=buyer_sqft)
+            summaries = self._filter_outlier_matches(summaries)
 
             # Extract top match photo URL for inline sharing
             top_photo = None

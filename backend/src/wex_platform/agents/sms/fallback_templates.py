@@ -108,6 +108,10 @@ TEMPLATES = {
     "comparison": (
         "Let me compare those options for you. One moment."
     ),
+    "reject_results": (
+        "Sorry those weren't a fit. Was it the price, the location, "
+        "or something about the spaces? That'll help me find better options."
+    ),
     "waitlist_offer": (
         "Nothing exact right now, but I can notify you when something opens up. "
         "Want me to add you to the waitlist?"
