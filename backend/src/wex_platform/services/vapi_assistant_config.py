@@ -23,11 +23,29 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
     settings = get_settings()
     voice_id = settings.vapi_voice_id or DEFAULT_VOICE_ID
 
+    # Compute time gap for returning callers
+    gap_hours = None
+    if sms_context and sms_context.get("last_buyer_message_at"):
+        try:
+            from datetime import datetime, timezone
+            last_sms_at = datetime.fromisoformat(sms_context["last_buyer_message_at"])
+            gap_hours = (datetime.now(timezone.utc) - last_sms_at).total_seconds() / 3600
+        except (ValueError, TypeError):
+            pass
+
     # Build dynamic first message — 3 tiers based on SMS history
+    gap_days = gap_hours / 24 if gap_hours else 0
     if sms_context and sms_context.get("presented_match_ids"):
         count = len(sms_context["presented_match_ids"])
         first_name = buyer_name.split()[0] if buyer_name else None
-        if first_name:
+        if gap_days > 30 and first_name:
+            first_message = (
+                f"Hey {first_name}, it's Jess from Warehouse Exchange. "
+                f"Good to hear from you again! I still have those "
+                f"{count} option{'s' if count != 1 else ''} we found, "
+                f"want to pick up where we left off?"
+            )
+        elif first_name:
             first_message = (
                 f"Hey {first_name}, this is Jess from Warehouse Exchange. "
                 f"I've got those {count} option{'s' if count != 1 else ''} pulled up "
@@ -45,7 +63,15 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
         if criteria.get("location"):
             city = criteria["location"].split(",")[0].strip()
         first_name = buyer_name.split()[0] if buyer_name else None
-        if first_name and city:
+        name_part = f" {first_name}" if first_name else ""
+        if gap_days and gap_days > 30:
+            city_part = f" in {city}" if city else ""
+            first_message = (
+                f"Hey{name_part}, it's Jess from Warehouse Exchange. "
+                f"Good to hear from you again! Last time you were looking for space{city_part}. "
+                f"Want to pick up where we left off, or start fresh?"
+            )
+        elif first_name and city:
             first_message = (
                 f"Hey {first_name}, this is Jess from Warehouse Exchange. "
                 f"Looks like you were asking about space in {city}, "
@@ -116,10 +142,14 @@ CONVERSATION FLOW:
    - Use type (storage, fulfillment, distribution, manufacturing, etc.)
    If the caller gives partial info, follow up on ONLY the missing items before moving on.
 
-   Beat 2 (after they answer beat 1): "Got it. Do you need office space in there too? And how about parking — is that important?"
-   - Office space
-   - Parking
-   - Other features (dock doors, climate control, etc. — ask if relevant to their use type)
+   Beat 2 (after they answer beat 1): Ask use-type-specific follow-up questions:
+   - Distribution/fulfillment: "Got it. How many dock doors do you need? And what clear height?"
+   - Cold storage: "Got it. What temperature range are you looking at? Refrigerated or frozen?"
+   - Manufacturing: "Got it. What kind of power supply do you need? Any floor load requirements?"
+   - Light assembly: "Got it. Do you need office space in there? What about power requirements?"
+   - Storage: "Got it. Do you need climate control? How about drive-in access?"
+   - General/other: "Got it. Do you need office space in there too? And how about parking — is that important?"
+   Only ask about features relevant to their stated use type.
    WAIT for their answer before continuing.
 
    Beat 3 (after they answer beat 2): "How soon do you need it, and how long are you thinking?"
@@ -132,7 +162,7 @@ CONVERSATION FLOW:
 
    Once you have at least location + size + use type, call search_properties.
 
-4. SEARCH: Once you have enough criteria, call the search_properties tool. Then describe ALL options returned (up to 3), including:
+4. SEARCH: Once you have enough criteria, call the search_properties tool. ALWAYS confirm criteria before presenting results: "So you're looking for about 10,000 square feet in Dallas for fulfillment — here's what I found..." Then describe ALL options returned (up to 3), including:
    - City/area
    - Price per sqft and estimated monthly cost
    - 1-2 standout features for each
@@ -212,6 +242,23 @@ SUPPLIER DETECTION:
 If the caller says they own a warehouse, want to list space, or are looking for tenants, acknowledge them warmly:
 "That's great, I'll have our supplier team reach out to you. Is this the best number to reach you at?"
 Note the preference in the call summary.
+"""
+
+    base_prompt += """
+FRUSTRATION HANDLING:
+If the caller sounds frustrated, upset, or says things like "this isn't working" or "I just want to talk to someone":
+- Acknowledge their frustration empathetically: "I hear you, I'm sorry about that."
+- Offer to have someone from the team call them back: "I can have one of our team members reach out to you directly, would that help?"
+- If they say yes, note it and tell them: "Got it, someone from our team will reach out shortly."
+- Then gracefully wrap up the call.
+- Never argue with or dismiss a frustrated caller.
+"""
+
+    base_prompt += """
+RETURNING CALLER RECOGNITION:
+If the caller mentions they've called or texted before, reference what you know from SMS history.
+Use the SMS context section to remind yourself what's been discussed — don't re-ask answered questions.
+If it's been a while, offer to pick up where they left off or start fresh.
 """
 
     sms_section = _build_sms_context_section(sms_context) if sms_context else ""

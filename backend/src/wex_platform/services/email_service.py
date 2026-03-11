@@ -530,3 +530,118 @@ async def send_escalation_email(data: dict) -> bool:
     except Exception:
         logger.exception("Failed to send escalation email")
         return False
+
+
+def _build_human_escalation_html(data: dict) -> str:
+    """Build HTML for human escalation notification."""
+    phone = data.get("phone", "Unknown")
+    buyer_name = data.get("buyer_name", "Unknown")
+    reason = data.get("reason", "Buyer requested human assistance")
+    phase = data.get("phase", "Unknown")
+    criteria = data.get("criteria_snapshot", {})
+    recent = data.get("conversation_history", [])
+
+    criteria_rows = ""
+    for key, val in criteria.items():
+        if val and key != "match_summaries":
+            label = key.replace("_", " ").title()
+            criteria_rows += f"<tr><td style='font-weight:600; padding: 6px 12px 6px 0;'>{label}:</td><td>{val}</td></tr>"
+
+    conversation_rows = ""
+    for msg in recent[-5:]:
+        role = msg.get("role", "?")
+        content = msg.get("content", "")
+        prefix = "Buyer" if role in ("buyer", "user") else "Jess"
+        conversation_rows += f"<p style='margin: 4px 0; font-size: 13px;'><strong>{prefix}:</strong> {content}</p>"
+
+    return f"""
+<html><body style="font-family: Arial, sans-serif; padding: 20px;">
+<div style="background-color: #fef3cd; border-left: 4px solid #f59e0b; padding: 15px; margin-bottom: 20px;">
+  <h2 style="margin: 0; color: #92400e;">Human Assistance Requested</h2>
+  <p style="margin: 8px 0 0; color: #92400e;">{reason}</p>
+</div>
+<table style="font-size: 14px; color: #374151;">
+  <tr><td style="font-weight:600; padding: 6px 12px 6px 0;">Phone:</td><td><a href="tel:{phone}">{phone}</a></td></tr>
+  <tr><td style="font-weight:600; padding: 6px 12px 6px 0;">Name:</td><td>{buyer_name}</td></tr>
+  <tr><td style="font-weight:600; padding: 6px 12px 6px 0;">Phase:</td><td>{phase}</td></tr>
+  {criteria_rows}
+</table>
+<h3 style="color: #374151; margin-top: 20px;">Recent Conversation</h3>
+<div style="background: #f3f4f6; padding: 12px; border-radius: 6px;">{conversation_rows or '<p>No messages available.</p>'}</div>
+</body></html>
+"""
+
+
+async def send_human_escalation_email(data: dict) -> bool:
+    """Send notification when a buyer requests human assistance.
+
+    Args:
+        data: Dict with phone, buyer_name, conversation_history, criteria_snapshot,
+              phase, reason.
+    """
+    api_key, alert_from, alert_to = _get_config()
+    if not api_key:
+        logger.warning("SendGrid not configured, skipping human escalation email")
+        return False
+
+    phone = data.get("phone", "Unknown")
+    html = _build_human_escalation_html(data)
+
+    mail = Mail(
+        from_email=Email(alert_from, "Warehouse Exchange"),
+        to_emails=To(alert_to),
+        subject=f"[WEx] Human Assistance Requested - {phone}",
+        html_content=Content("text/html", html),
+    )
+
+    try:
+        success = await asyncio.to_thread(_send_mail, mail)
+        if success:
+            logger.info("Human escalation email sent for %s", phone)
+        return success
+    except Exception:
+        logger.exception("Failed to send human escalation email for %s", phone)
+        return False
+
+
+async def send_supplier_redirect_email(data: dict) -> bool:
+    """Send internal notification when a supplier contacts the buyer SMS line."""
+    api_key, alert_from, alert_to = _get_config()
+    if not api_key:
+        logger.warning("SendGrid not configured, skipping supplier redirect email")
+        return False
+
+    phone = data.get("phone", "Unknown")
+    buyer_name = data.get("buyer_name") or "Unknown"
+    message_text = data.get("message", "")
+    from datetime import datetime, timezone
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    html = f"""
+<html><body style="font-family: Arial, sans-serif; padding: 20px;">
+<h2 style="color: #065f46;">Supplier Inquiry via SMS</h2>
+<table style="font-size: 14px; color: #374151;">
+  <tr><td style="font-weight:600; padding: 6px 12px 6px 0;">Phone:</td><td>{phone}</td></tr>
+  <tr><td style="font-weight:600; padding: 6px 12px 6px 0;">Name:</td><td>{buyer_name}</td></tr>
+  <tr><td style="font-weight:600; padding: 6px 12px 6px 0;">Time:</td><td>{timestamp}</td></tr>
+</table>
+<h3 style="color: #374151; margin-top: 20px;">Message</h3>
+<p style="background: #f3f4f6; padding: 12px; border-radius: 6px; white-space: pre-wrap;">{message_text}</p>
+</body></html>
+"""
+
+    mail = Mail(
+        from_email=Email(alert_from, "Warehouse Exchange"),
+        to_emails=To(alert_to),
+        subject=f"[WEx] Supplier Inquiry from {phone}",
+        html_content=Content("text/html", html),
+    )
+
+    try:
+        success = await asyncio.to_thread(_send_mail, mail)
+        if success:
+            logger.info("Supplier redirect email sent for phone %s", phone)
+        return success
+    except Exception:
+        logger.exception("Failed to send supplier redirect email")
+        return False

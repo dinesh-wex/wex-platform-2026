@@ -89,6 +89,13 @@ TEMPLATES = {
         "Got it, it sounds like you have space available. "
         "I'll have our team reach out to you. Is this the best number?"
     ),
+    "human_escalation": (
+        "I hear you, and I'm sorry for the trouble. "
+        "I can have one of our team members reach out to you directly. Would that help?"
+    ),
+    "human_escalation_confirmed": (
+        "Got it, someone from our team will reach out shortly."
+    ),
 }
 
 

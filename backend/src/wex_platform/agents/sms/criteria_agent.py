@@ -40,6 +40,8 @@ Choose exactly one:
 - "address_lookup" — buyer provided a specific street address to look up
 - "faq" — asking about WEx itself (pricing, how it works, who we are, privacy, legitimacy)
 - "engagement_status" — asking about their booking/lease status ("what happened with my booking", "did the owner accept", "any update", "where's my lease", "is my tour confirmed")
+- "human_escalation" — buyer is frustrated, upset, or explicitly asking to speak with a real person ("this isn't working", "waste of time", "speak to a real person", "get me someone", "customer service")
+- "start_fresh" — buyer wants to start over, clear previous search criteria (e.g. "start fresh", "start over", "new search", "forget that", "let's try something different")
 - "unknown" — can't determine intent
 
 ## TOUR REQUEST DETECTION
@@ -58,6 +60,14 @@ If buyer asks about WEx itself (not about a property), set intent = "faq", actio
 Examples: "is this free?", "how does this work?", "are you a broker?", "what is warehouse exchange?",
 "is there a fee?", "how much does your service cost?", "is this legit?", "are you real?", "what do you guys do?"
 {faq_block}
+
+## FRUSTRATION / HUMAN ESCALATION
+If the buyer expresses frustration ("this isn't working", "waste of time", "nothing works") or
+asks to speak with a person ("talk to a real person", "get me someone", "customer service"),
+set intent = "human_escalation", action = null.
+Do NOT classify frustration as "unknown" — this is a specific intent requiring empathetic handling.
+If the message also contains search criteria (city, sqft, use type), classify as the appropriate
+search intent instead — the system will handle the frustration flag separately.
 
 ## SUPPLIER CONTENT
 If is_supplier_content=True but message also contains buyer criteria (city, sqft, use type), treat as buyer.
@@ -126,6 +136,16 @@ If buyer says "no", "none", "nothing", "no deal breakers", etc. → requirements
 - "No" (when asked about deal-breakers) -> requirements: "none"
 - "nothing special" -> requirements: "none"
 
+## USE-TYPE FOLLOW-UP
+When use_type is known and requirements have not been collected yet, tailor your response_hint
+to suggest the right follow-up question based on use type:
+- distribution/fulfillment: ask about dock doors, clear height
+- cold_storage: ask about temperature range, refrigerated vs frozen
+- manufacturing: ask about power supply, floor load
+- light_assembly: ask about office space, power
+- storage: ask about climate control, drive-in access
+- default: ask about office space, parking, other must-haves
+
 ## NAME EXTRACTION
 If the user provides their name anywhere in the message, extract it:
 - "Hi, I'm Peter DeSantis" -> extracted_name: {{ "first_name": "Peter", "last_name": "DeSantis" }}
@@ -135,7 +155,7 @@ If the user provides their name anywhere in the message, extract it:
 
 ## REQUIRED JSON SCHEMA
 {{
-  "intent": "new_search|refine_search|facility_info|tour_request|commitment|provide_info|greeting|address_lookup|faq|engagement_status|unknown",
+  "intent": "new_search|refine_search|facility_info|tour_request|commitment|provide_info|greeting|address_lookup|faq|engagement_status|human_escalation|start_fresh|unknown",
   "action": "search|lookup|schedule_tour|commitment_handoff|collect_info|address_lookup" or null,
   "criteria": {{
     "location": "city or area name" or null,

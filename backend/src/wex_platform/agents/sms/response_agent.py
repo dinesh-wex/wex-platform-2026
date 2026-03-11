@@ -161,6 +161,9 @@ class ResponseAgent(BaseAgent):
 
             # --- PRESENTING MATCHES ---
             f"## PRESENTING MATCHES (<=800 chars)\n"
+            f"ALWAYS start by confirming what you understood about the buyer's criteria. "
+            f"Format: 'Looking for ~{{sqft}} sqft in {{city}} for {{use_type}} — here's what I found...' "
+            f"This replaces a separate confirmation step. The buyer can correct you in their reply.\n"
             f"When presenting ClearingEngine matches:\n"
             f"- This is the LONG message — up to 800 chars\n"
             f"- Summarize top options: city, rate per sqft, estimated monthly cost\n"
@@ -204,7 +207,23 @@ class ResponseAgent(BaseAgent):
             f"- faq: Answer from FAQ knowledge below. Match the specific question (pricing → mention fee, "
             f"identity → mention marketplace). Then naturally transition back: 'What city are you looking in?'\n"
             f"- engagement_status: Report status naturally. If declined, offer alternatives.\n"
+            f"- start_fresh: Acknowledge they want to start over, ask for new criteria.\n"
             f"- unknown/other: Ask what kind of space they need (city, size, use)\n\n"
+
+            # --- FRUSTRATION AWARENESS ---
+            f"## FRUSTRATION AWARENESS\n"
+            f"- If the response hint includes 'FRUSTRATION DETECTED', briefly acknowledge the buyer's frustration before responding to their actual question\n"
+            f"- Keep it short: 'Sorry to hear that — let me help.' or 'I understand, let me see what I can find.'\n"
+            f"- Don't dwell on the frustration — acknowledge once and take action\n"
+            f"- Never be defensive or dismissive\n\n"
+
+            # --- RETURNING BUYERS ---
+            f"## RETURNING BUYERS\n"
+            f"- If the response hint includes 'RETURNING BUYER', acknowledge their return naturally\n"
+            f"- Medium gap (7-30 days): Keep it brief — 'Hey, welcome back! Still looking at those options in {{city}}?'\n"
+            f"- Long gap (>30 days): Warmer greeting — 'Hey {{name}}, good to hear from you again.' Offer to continue or start fresh.\n"
+            f"- NEVER re-ask questions they already answered (their criteria is in context)\n"
+            f"- If they provide new search criteria in this message, acknowledge return AND process the new criteria\n\n"
 
             # --- FAQ KNOWLEDGE ---
             f"## {get_faq_block_for_prompt()}\n\n"

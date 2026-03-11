@@ -37,6 +37,7 @@ class SMSConversationState(Base):
     tour_suggested_for = Column(JSON, default=list)
     last_buyer_message_at = Column(DateTime(timezone=True), nullable=True)
     last_system_message_at = Column(DateTime(timezone=True), nullable=True)
+    human_escalation_offered_at = Column(DateTime(timezone=True), nullable=True)
     reengagement_count = Column(Integer, default=0)
     next_reengagement_at = Column(DateTime(timezone=True), nullable=True)
     stall_nudge_counts = Column(JSON, default=dict)

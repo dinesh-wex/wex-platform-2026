@@ -122,6 +122,7 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
                 "buyer_need_id": sms_state.buyer_need_id,
                 "conversation_id": sms_state.conversation_id,
                 "sms_state_id": sms_state.id,
+                "last_buyer_message_at": sms_state.last_buyer_message_at.isoformat() if sms_state and sms_state.last_buyer_message_at else None,
             }
             # Prefer SMS-captured name — more recently verified than Buyer.name
             if sms_state.renter_first_name:

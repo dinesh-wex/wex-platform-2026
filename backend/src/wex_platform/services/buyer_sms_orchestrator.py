@@ -55,6 +55,20 @@ _NO_REQUIREMENTS_PATTERNS = frozenset({
     "no thanks", "none needed",
 })
 
+# Use-type-specific qualifying questions (replaces generic "office space or parking?" for all types)
+_USE_TYPE_QUESTIONS = {
+    "distribution": "deal-breakers — ask specifically: 'How many dock doors do you need? What clear height?'",
+    "fulfillment": "deal-breakers — ask specifically: 'How many dock doors do you need? What clear height?'",
+    "cold_storage": "deal-breakers — ask specifically: 'What temperature range do you need? Refrigerated or frozen?'",
+    "manufacturing": "deal-breakers — ask specifically: 'What kind of power supply do you need? Any floor load requirements?'",
+    "light_assembly": "deal-breakers — ask specifically: 'Do you need office space in there? Power requirements?'",
+    "storage": "deal-breakers — ask specifically: 'Do you need climate control? Drive-in access?'",
+}
+_DEFAULT_REQUIREMENTS_QUESTION = (
+    "deal-breakers — ask specifically: 'Do you need office space or parking? "
+    "Any other must-haves like dock doors, climate control, or 24/7 access?'"
+)
+
 
 def _requirements_resolved(value) -> bool:
     """Return True if requirements question has been answered (yes with specifics, or no)."""
@@ -66,6 +80,61 @@ def _requirements_resolved(value) -> bool:
         return True
     # Actual facility keywords
     return any(kw in lower for kw in _FACILITY_KEYWORDS)
+
+
+def _compute_time_gap_hint(state, merged_name: str | None = None) -> str | None:
+    """Compute a response_hint for returning callers based on time gap.
+
+    Returns None if no special handling needed (< 7 days or turn <= 2).
+    Tiers:  < 7 days  → continue naturally (no hint)
+           7–30 days → brief welcome-back
+           > 30 days → warmer greeting, offer to continue or start fresh
+    """
+    if not state.last_buyer_message_at or (state.turn or 0) <= 2:
+        return None
+
+    now = datetime.now(timezone.utc)
+    gap = now - state.last_buyer_message_at
+    gap_days = gap.total_seconds() / 86400
+
+    if gap_days < 7:
+        return None  # Same search journey — continue naturally
+
+    # If they have an active engagement, let engagement_status handler take over
+    if state.engagement_id:
+        return None
+
+    # Extract city from criteria snapshot for context
+    city = None
+    if state.criteria_snapshot and state.criteria_snapshot.get("location"):
+        city = state.criteria_snapshot["location"].split(",")[0].strip()
+
+    name = merged_name or state.renter_first_name
+
+    if gap_days <= 30:
+        # Medium gap (7–30 days) — warm acknowledgment, assume still interested
+        if city:
+            return f"RETURNING BUYER (medium gap, ~{int(gap_days)}d): Welcome them back briefly — 'Hey, welcome back! Still looking at those options in {city}?' Continue naturally without re-asking what they already told us."
+        else:
+            return f"RETURNING BUYER (medium gap, ~{int(gap_days)}d): Welcome them back briefly. Continue naturally."
+    else:
+        # Long gap (> 30 days) — needs may have changed, offer choice
+        if city and name:
+            return (
+                f"RETURNING BUYER (long gap, ~{int(gap_days)}d): Greet {name} warmly. "
+                f"They were looking for space in {city}. Offer to pick up where they left off or start fresh. "
+                f"Don't re-ask questions they already answered."
+            )
+        elif city:
+            return (
+                f"RETURNING BUYER (long gap, ~{int(gap_days)}d): Welcome them back. "
+                f"They were looking for space in {city}. Offer to pick up where they left off or start fresh."
+            )
+        else:
+            return (
+                f"RETURNING BUYER (long gap, ~{int(gap_days)}d): Welcome them back warmly. "
+                f"Offer to continue their search or start fresh."
+            )
 
 
 # Representative zipcodes for major warehouse markets (for budget→sqft conversion)
@@ -121,25 +190,30 @@ async def _get_market_rates(city: str, state: str | None) -> tuple[float | None,
     """
     # Tier 1: city→zip lookup + Gemini/cache
     zipcode = _CITY_TO_ZIP.get(city.lower())
+    logger.info("MARKET RATE | city=%s -> zip=%s (state=%s)", city, zipcode, state)
     if zipcode:
         try:
             from wex_platform.agents.market_rate_agent import MarketRateAgent
             rate_agent = MarketRateAgent()
             result = await rate_agent.get_nnn_rates(zipcode)
+            logger.info("MARKET RATE | Gemini/cache result: ok=%s data=%s", result.ok, result.data)
             if result.ok and result.data:
                 return result.data.get("nnn_low"), result.data.get("nnn_high")
+            logger.info("MARKET RATE | Gemini/cache miss or no data for zip %s", zipcode)
         except Exception:
-            logger.exception("MarketRateAgent lookup failed for zip %s", zipcode)
+            logger.exception("MARKET RATE | MarketRateAgent lookup failed for zip %s", zipcode)
+    else:
+        logger.info("MARKET RATE | city '%s' not in _CITY_TO_ZIP lookup", city)
 
     # Tier 2: state-level fallback
     if state:
         rates = _STATE_RATES.get(state.upper())
         if rates:
-            logger.info("Budget conversion: using state-level rates for %s", state)
+            logger.info("MARKET RATE | using state-level rates for %s: %s", state, rates)
             return rates
 
     # Tier 3: national default
-    logger.info("Budget conversion: using default national rates")
+    logger.info("MARKET RATE | using default national rates: %s", _DEFAULT_RATES)
     return _DEFAULT_RATES
 
 
@@ -213,6 +287,90 @@ class BuyerSMSOrchestrator:
                     intent="supplier_inquiry",
                     phase=state.phase or "INTAKE",
                 )
+
+        # == Frustration / human escalation handler ==
+        if interpretation.frustration_detected or interpretation.wants_human:
+            has_buyer_signals = (
+                interpretation.cities or interpretation.sqft
+                or interpretation.features or interpretation.action_keywords
+            )
+
+            if not has_buyer_signals:
+                # Pure frustration/escalation — no search criteria mixed in
+
+                # Check if we previously offered human help (state flag, not message scanning)
+                if state.human_escalation_offered_at:
+                    # Check if buyer is confirming the previous offer
+                    msg_lower = message.strip().lower().rstrip(".!?")
+                    _confirm_words = frozenset({
+                        "yes", "yeah", "yep", "please", "yes please", "sure", "ok", "okay",
+                        "that would help", "yes that would help", "please do", "definitely",
+                        "absolutely", "ya", "yea", "do it", "go ahead",
+                    })
+                    if msg_lower in _confirm_words or interpretation.wants_human:
+                        # Send team notification email
+                        try:
+                            from wex_platform.services.email_service import send_human_escalation_email
+                            await send_human_escalation_email({
+                                "phone": phone,
+                                "buyer_name": f"{state.renter_first_name or ''} {state.renter_last_name or ''}".strip() or "Unknown",
+                                "conversation_history": conversation_history[-8:] if conversation_history else [],
+                                "criteria_snapshot": state.criteria_snapshot or {},
+                                "phase": state.phase or "INTAKE",
+                                "reason": "Buyer requested human assistance",
+                            })
+                        except Exception:
+                            logger.exception("Failed to send human escalation email")
+
+                        state.human_escalation_offered_at = None  # Clear flag
+                        return OrchestratorResult(
+                            response=get_fallback("human_escalation_confirmed"),
+                            intent="human_escalation",
+                            phase=state.phase or "INTAKE",
+                        )
+
+                # First time showing frustration OR wants_human — offer human help
+                state.human_escalation_offered_at = datetime.now(timezone.utc)
+                return OrchestratorResult(
+                    response=get_fallback("human_escalation"),
+                    intent="human_escalation",
+                    phase=state.phase or "INTAKE",
+                )
+
+            # else: has buyer signals — let normal pipeline handle it
+            # (frustration_detected flag will be passed to response agent below)
+
+        # == Check for human escalation confirmation (buyer replied "yes" to prior offer) ==
+        elif state.human_escalation_offered_at:
+            msg_lower = message.strip().lower().rstrip(".!?")
+            _confirm_words = frozenset({
+                "yes", "yeah", "yep", "please", "yes please", "sure", "ok", "okay",
+                "that would help", "yes that would help", "please do", "definitely",
+                "absolutely", "ya", "yea", "do it", "go ahead",
+            })
+            if msg_lower in _confirm_words:
+                try:
+                    from wex_platform.services.email_service import send_human_escalation_email
+                    await send_human_escalation_email({
+                        "phone": phone,
+                        "buyer_name": f"{state.renter_first_name or ''} {state.renter_last_name or ''}".strip() or "Unknown",
+                        "conversation_history": conversation_history[-8:] if conversation_history else [],
+                        "criteria_snapshot": state.criteria_snapshot or {},
+                        "phase": state.phase or "INTAKE",
+                        "reason": "Buyer confirmed human assistance request",
+                    })
+                except Exception:
+                    logger.exception("Failed to send human escalation email")
+
+                state.human_escalation_offered_at = None
+                return OrchestratorResult(
+                    response=get_fallback("human_escalation_confirmed"),
+                    intent="human_escalation",
+                    phase=state.phase or "INTAKE",
+                )
+            else:
+                # Buyer moved on to something else — clear the flag
+                state.human_escalation_offered_at = None
 
         # == 2. Property Reference Resolution ==
         resolved_property_id = None
@@ -290,6 +448,9 @@ class BuyerSMSOrchestrator:
                     phase=phase,
                 )
 
+        # == Returning caller recognition ==
+        time_gap_hint = _compute_time_gap_hint(state)
+
         # == 3. Build match summaries from state ==
         presented_match_summaries = None
         if state.criteria_snapshot and state.criteria_snapshot.get("match_summaries"):
@@ -306,6 +467,16 @@ class BuyerSMSOrchestrator:
             resolved_property_id=resolved_property_id,
             presented_match_summaries=presented_match_summaries,
         )
+
+        # Prepend returning-caller context to response hint
+        if time_gap_hint and plan.intent not in ("engagement_status",):
+            existing_hint = plan.response_hint or ""
+            plan.response_hint = f"{time_gap_hint}\n{existing_hint}".strip()
+
+        # Add frustration awareness to response hint
+        if interpretation.frustration_detected and plan.intent not in ("human_escalation",):
+            frustration_note = "FRUSTRATION DETECTED: Buyer sounds frustrated. Briefly acknowledge before responding: 'Sorry to hear that — let me help.'\n"
+            plan.response_hint = frustration_note + (plan.response_hint or "")
 
         # == Deterministic override: if interpreter found search data, it's not a greeting ==
         has_search_data = (
@@ -336,13 +507,21 @@ class BuyerSMSOrchestrator:
 
         # == Budget-to-sqft conversion ==
         budget = merged_criteria.get("budget_monthly")
+        logger.info(
+            "BUDGET CHECK | budget_from_criteria=%s | interp_budget=%s | has_sqft=%s | has_location=%s",
+            merged_criteria.get("budget_monthly"), interpretation.budget_monthly,
+            bool(merged_criteria.get("sqft")), bool(merged_criteria.get("location")),
+        )
         if not budget and interpretation.budget_monthly and not merged_criteria.get("sqft"):
             budget = interpretation.budget_monthly
+            logger.info("BUDGET CHECK | using interpreter budget: %s", budget)
         if budget and merged_criteria.get("location") and not merged_criteria.get("sqft"):
             try:
                 city = merged_criteria["location"].split(",")[0].strip()
                 state_part = merged_criteria["location"].split(",")[1].strip().upper()[:2] if "," in merged_criteria["location"] else None
+                logger.info("BUDGET CONVERT | city=%s state=%s budget=%s", city, state_part, budget)
                 nnn_low, nnn_high = await _get_market_rates(city, state_part)
+                logger.info("BUDGET CONVERT | nnn_low=%s nnn_high=%s", nnn_low, nnn_high)
                 if nnn_low and nnn_high:
                     avg_rate = (nnn_low + nnn_high) / 2
                     estimated_sqft = int(budget / avg_rate)
@@ -352,14 +531,18 @@ class BuyerSMSOrchestrator:
                         f"{estimated_sqft:,} sqft. "
                         + (plan.response_hint or "")
                     )
-                    logger.info("Budget conversion: $%d/mo -> %d sqft (rate=%.2f)", budget, estimated_sqft, avg_rate)
+                    logger.info("BUDGET CONVERT SUCCESS | $%d/mo -> %d sqft (rate=%.2f)", budget, estimated_sqft, avg_rate)
                 else:
                     plan.response_hint = (
                         "I don't have rate data for that area yet, can you give me an approximate size instead?"
                     )
-                    logger.info("Budget conversion: no rate data for %s", city)
+                    logger.info("BUDGET CONVERT FAIL | no rates returned for city=%s state=%s", city, state_part)
             except Exception:
                 logger.exception("Budget-to-sqft conversion failed")
+        elif budget and not merged_criteria.get("location"):
+            logger.info("BUDGET SKIP | have budget=%s but no location yet", budget)
+        elif merged_criteria.get("sqft"):
+            logger.info("BUDGET SKIP | sqft already set to %s", merged_criteria.get("sqft"))
 
         # Deterministic: if buyer says "no" to deal-breakers, mark requirements as answered
         msg_lower = message.strip().lower().rstrip(".!?")
@@ -405,7 +588,9 @@ class BuyerSMSOrchestrator:
         prior = existing_criteria or {}
         extra_missing = []
         if not _requirements_resolved(prior.get("requirements")) and not _requirements_resolved(merged_criteria.get("requirements")):
-            extra_missing.append("deal-breakers — ask specifically: 'Do you need office space or parking? Any other must-haves like dock doors, climate control, or 24/7 access?'")
+            use_type = merged_criteria.get("use_type", "").lower()
+            requirements_question = _USE_TYPE_QUESTIONS.get(use_type, _DEFAULT_REQUIREMENTS_QUESTION)
+            extra_missing.append(requirements_question)
         if not prior.get("timing") and not merged_criteria.get("timing"):
             extra_missing.append("when they need it")
         if not prior.get("duration") and not merged_criteria.get("duration"):
@@ -632,12 +817,28 @@ class BuyerSMSOrchestrator:
         elif plan.intent == "faq":
             pass  # Stay in current phase, response agent handles it
 
+        elif plan.intent == "human_escalation":
+            state.human_escalation_offered_at = datetime.now(timezone.utc)
+            return OrchestratorResult(
+                response=get_fallback("human_escalation"),
+                intent="human_escalation",
+                phase=state.phase or "INTAKE",
+            )
+
         elif plan.intent == "engagement_status":
             status_msg = await self._check_engagement_status(state, phone)
             if status_msg:
                 plan.response_hint = status_msg
             else:
                 plan.response_hint = "I don't see an active booking for your number. Want to start a new search?"
+
+        elif plan.intent == "start_fresh":
+            # Clear stale criteria and reset
+            state.criteria_snapshot = None
+            state.presented_match_ids = None
+            state.focused_match_id = None
+            state.phase = "INTAKE"
+            plan.response_hint = "No problem, let's start fresh! What city are you looking in, and how much space do you need?"
 
         elif plan.intent in ("new_search", "refine_search") and readiness < 0.6:
             phase = "QUALIFYING"
@@ -884,7 +1085,14 @@ class BuyerSMSOrchestrator:
             )
 
             if not buyer_need:
+                logger.info("SEARCH | buyer_need creation returned None — criteria=%s", criteria)
                 return None
+
+            logger.info(
+                "SEARCH | BuyerNeed created: id=%s city=%s state=%s min_sqft=%s max_sqft=%s use_type=%s",
+                buyer_need.id, buyer_need.city, buyer_need.state,
+                buyer_need.min_sqft, buyer_need.max_sqft, buyer_need.use_type,
+            )
 
             # Geocode city/state to lat/lng for better pre-filter matching
             if buyer_need.city and not buyer_need.lat:
@@ -896,8 +1104,11 @@ class BuyerSMSOrchestrator:
                         buyer_need.lat = geo_result.lat
                         buyer_need.lng = geo_result.lng
                         await self.db.flush()
+                        logger.info("SEARCH | Geocoded: lat=%s lng=%s", buyer_need.lat, buyer_need.lng)
+                    else:
+                        logger.warning("SEARCH | Geocoding returned no result for %s", location_str)
                 except Exception as geo_err:
-                    logger.warning("Geocoding failed for SMS search: %s", geo_err)
+                    logger.warning("SEARCH | Geocoding failed: %s", geo_err)
 
             state.buyer_need_id = buyer_need.id
 
@@ -908,6 +1119,12 @@ class BuyerSMSOrchestrator:
 
             # run_clearing returns {"tier1_matches": [...], "tier2_matches": [...], ...}
             tier1 = result.get("tier1_matches", []) if isinstance(result, dict) else result
+            logger.info(
+                "SEARCH | ClearingEngine result: tier1=%d tier2=%d total=%d",
+                len(result.get("tier1_matches", [])) if isinstance(result, dict) else len(result),
+                len(result.get("tier2_matches", [])) if isinstance(result, dict) else 0,
+                result.get("total_matches", 0) if isinstance(result, dict) else len(result),
+            )
             if not tier1:
                 return None
 

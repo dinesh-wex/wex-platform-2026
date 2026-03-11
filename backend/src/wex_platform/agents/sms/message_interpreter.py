@@ -120,6 +120,24 @@ SUPPLIER_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Frustration detection
+FRUSTRATION_PATTERN = re.compile(
+    r'\b(?:frustrated|frustrating|waste of time|this (?:isn\'?t|is not) working'
+    r'|nothing works|useless|terrible|awful|horrible|this sucks'
+    r'|ridiculous|unacceptable|disappointed|fed up)\b',
+    re.IGNORECASE
+)
+
+# Wants-human detection
+WANTS_HUMAN_PATTERN = re.compile(
+    r'\b(?:(?:speak|talk) (?:to|with) (?:a |an? )?(?:real |actual )?(?:person|human|agent|someone|representative|rep|manager)'
+    r'|real person|actual person|human (?:being|agent|help)'
+    r'|get me (?:a |an? )?(?:person|human|someone)'
+    r'|transfer me|connect me|customer (?:service|support)'
+    r'|can(?:\'t| not) (?:deal|do this)|give up|done with this)\b',
+    re.IGNORECASE
+)
+
 # Budget patterns — matches "$5k/month", "$8,000/mo", "$5000 per month", "$10k a month"
 BUDGET_PATTERN = re.compile(
     r'\$\s*(\d{1,3}(?:,\d{3})*|\d+)\s*k?\s*(?:/?\s*(?:mo|month|per\s*month|monthly|a\s*month))',
@@ -336,6 +354,12 @@ def interpret_message(text: str) -> MessageInterpretation:
     # Supplier content detection
     # -----------------------------------------------------------------------
     result.is_supplier_content = bool(SUPPLIER_PATTERN.search(text))
+
+    # -----------------------------------------------------------------------
+    # Frustration / wants-human detection
+    # -----------------------------------------------------------------------
+    result.frustration_detected = bool(FRUSTRATION_PATTERN.search(text))
+    result.wants_human = bool(WANTS_HUMAN_PATTERN.search(text))
 
     # -----------------------------------------------------------------------
     # Budget extraction

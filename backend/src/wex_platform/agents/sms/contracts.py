@@ -24,6 +24,8 @@ class MessageInterpretation:
     address_text: str | None = None
     is_supplier_content: bool = False
     budget_monthly: int | None = None
+    frustration_detected: bool = False
+    wants_human: bool = False
 
     def __post_init__(self):
         # Sync sqft <-> min_sqft for backward compatibility.
