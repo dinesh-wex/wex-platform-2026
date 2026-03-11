@@ -6,6 +6,7 @@ running a mini-pipeline: validate -> execute -> gate -> format for voice.
 
 import asyncio
 import logging
+import os
 import re
 import secrets
 import uuid
@@ -24,6 +25,17 @@ from wex_platform.domain.models import (
 
 logger = logging.getLogger(__name__)
 
+VOICE_TOOL_LIMITS = {
+    "search": int(os.environ.get("VOICE_SEARCH_LIMIT", "9")),
+    "detail": int(os.environ.get("VOICE_DETAIL_LIMIT", "15")),
+    "address": int(os.environ.get("VOICE_ADDRESS_LIMIT", "6")),
+}
+
+VOICE_LIMIT_RESPONSE = (
+    "I've shown you quite a few options. Want to narrow down what we've looked at, "
+    "or I can have our team email you a full summary?"
+)
+
 
 class VoiceToolHandlers:
     """Handles Vapi tool-call execution by delegating to existing WEx services."""
@@ -31,6 +43,27 @@ class VoiceToolHandlers:
     def __init__(self, db: AsyncSession, call_state: VoiceCallState):
         self.db = db
         self.call_state = call_state
+
+    async def _check_and_increment(self, tool_key: str) -> str | None:
+        """Check tool limit, increment counter. Returns redirect message if limit hit, None if OK."""
+        counts = self.call_state.tool_counts or {}
+        current = counts.get(tool_key, 0)
+        if current >= VOICE_TOOL_LIMITS.get(tool_key, 99):
+            logger.warning("TOOL_LIMIT | voice %s hit limit %d for %s",
+                           self.call_state.vapi_call_id, current, tool_key)
+            from wex_platform.services.email_service import send_tool_limit_email
+            await send_tool_limit_email({
+                "phone": self.call_state.caller_phone,
+                "channel": "voice",
+                "tool_key": tool_key,
+                "count": current,
+                "limits": VOICE_TOOL_LIMITS,
+                "call_id": self.call_state.vapi_call_id,
+            })
+            return VOICE_LIMIT_RESPONSE
+        counts[tool_key] = current + 1
+        self.call_state.tool_counts = counts
+        return None
 
     # ------------------------------------------------------------------
     # search_properties
@@ -50,6 +83,10 @@ class VoiceToolHandlers:
 
         Pipeline: validate -> get/create buyer+need -> geocode -> ClearingEngine -> format
         """
+        limit_msg = await self._check_and_increment("search")
+        if limit_msg:
+            return limit_msg
+
         try:
             # 1. Get or create buyer + conversation
             phone = self.call_state.caller_phone
@@ -214,6 +251,8 @@ class VoiceToolHandlers:
             from wex_platform.agents.sms.context_builder import build_match_summaries
 
             summaries = build_match_summaries(tier1, buyer_sqft=sqft)
+            from wex_platform.agents.voice.gatekeeper import sanitize_match_summary
+            summaries = [sanitize_match_summary(s) for s in summaries]
 
             # Store presented IDs on call state
             presented_ids = [s["id"] for s in summaries if s.get("id")]
@@ -239,8 +278,6 @@ class VoiceToolHandlers:
                     "city": wh.get("city", ""),
                     "state": wh.get("state", ""),
                     "address": wh.get("address", ""),
-                    "available_sqft": tc.get("max_sqft"),
-                    "building_size_sqft": wh.get("building_size_sqft"),
                     "buyer_rate": rate,
                     "monthly_cost": round(rate * alloc_sqft, 2),
                     "term_months": req_term,
@@ -354,6 +391,10 @@ class VoiceToolHandlers:
 
         Pipeline: resolve option -> DetailFetcher -> escalation check -> format
         """
+        limit_msg = await self._check_and_increment("detail")
+        if limit_msg:
+            return limit_msg
+
         try:
             presented = self.call_state.presented_match_ids or []
             if not presented or option_number < 1 or option_number > len(presented):
@@ -390,6 +431,12 @@ class VoiceToolHandlers:
                 topics=topics,
                 state=self.call_state,  # Uses known_answers for caching
             )
+
+            # Sanitize: strip voice-restricted fields from results
+            from wex_platform.agents.voice.gatekeeper import sanitize_detail_response
+            for r in fetch_results:
+                if hasattr(r, "property_data") and isinstance(r.property_data, dict):
+                    r.property_data = sanitize_detail_response(r.property_data)
 
             # Separate answered from unanswered
             answered = [r for r in fetch_results if r.status in ("FOUND", "CACHE_HIT")]
@@ -475,7 +522,8 @@ class VoiceToolHandlers:
                         timeout=4.0,
                     )
                     if insight.found and insight.answer:
-                        parts.append(insight.answer)
+                        from wex_platform.agents.voice.gatekeeper import scrub_narrative_for_voice
+                        parts.append(scrub_narrative_for_voice(insight.answer))
                         insight_found = True
                 except asyncio.TimeoutError:
                     logger.warning(
@@ -527,6 +575,10 @@ class VoiceToolHandlers:
 
         Pipeline: address_lookup service -> tier check -> format for voice
         """
+        limit_msg = await self._check_and_increment("address")
+        if limit_msg:
+            return limit_msg
+
         try:
             from wex_platform.services.address_lookup import lookup_by_address as _lookup
 
@@ -538,7 +590,8 @@ class VoiceToolHandlers:
                     "Want me to search for available space in that area instead?"
                 )
 
-            data = result.property_data
+            from wex_platform.agents.voice.gatekeeper import sanitize_detail_response
+            data = sanitize_detail_response(result.property_data or {})
             city = data.get("city", "the area")
             state = data.get("state", "")
             location_str = f"{city}, {state}" if state else city

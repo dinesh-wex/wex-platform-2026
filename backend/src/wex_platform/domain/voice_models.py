@@ -31,6 +31,9 @@ class VoiceCallState(Base):
     # DetailFetcher cache compat
     known_answers = Column(JSON, default=dict)
 
+    # Tool usage counters (enumeration prevention)
+    tool_counts = Column(JSON, default=dict)
+
     # Escalation tracking
     answered_questions = Column(JSON, default=list)
     pending_escalations = Column(JSON, default=dict)

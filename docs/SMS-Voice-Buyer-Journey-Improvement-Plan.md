@@ -238,12 +238,23 @@ The current SMS/Voice system handles the core search-and-book flow well, but rea
 **Problem**: "Nothing in Carson? Let me know if something opens up" → no mechanism.
 
 **New files**:
-- `services/waitlist_service.py` — `add_to_waitlist()`, `check_waitlist_matches()` (periodic job)
-- New model `BuyerWaitlist` in `domain/sms_models.py`
+- `services/waitlist_service.py` — **Shared service** (lives in `services/`, not `agents/sms/`). Both SMS and Voice funnel into the same enrollment logic. Methods: `add_to_waitlist()`, `check_waitlist_matches()` (periodic job)
+- New model `BuyerWaitlist` in `domain/sms_models.py` (placed here for FK CASCADE ordering against `buyers` table, but the model itself is channel-agnostic)
 
-**Files to modify**:
-- `services/buyer_sms_orchestrator.py` — When search returns 0 matches, offer waitlist and auto-add
-- Periodic job: when new property activates, run ClearingEngine against active waitlist entries, send SMS notifications
+**BuyerWaitlist model** should include a `channel` column (`"sms"` or `"voice"`) so the notification job can pick the right message template:
+- Voice-enrolled: "Hey, remember when you called about space in Carson? A new 12k sqft spot just opened up — want to take a look?"
+- SMS-enrolled: "Good news — a new 12k sqft space just opened in Carson. Want to take a look?"
+
+**SMS files to modify**:
+- `services/buyer_sms_orchestrator.py` — When search returns 0 matches, offer waitlist. Double-guard enrollment: `waitlist_confirm` intent only accepted when `state.waitlist_offered == True`
+- Periodic job: when new property activates, run ClearingEngine against active waitlist entries, send SMS notifications using channel-aware templates
+
+**Voice files to modify** (cross-channel waitlist enrollment):
+- `services/vapi_assistant_config.py` — Add `add_to_waitlist(city, sqft_needed, use_type)` tool definition + `## WAITLIST` section in system prompt: "If the search returns no results, offer to add them to the waitlist: 'Nothing available right now, but I can notify you the moment something opens up in that area. Want me to do that?'"
+- `services/voice_tool_handlers.py` — Add `handle_add_to_waitlist()` handler that delegates to shared `WaitlistService`
+- `app/routes/vapi_webhook.py` — Add `elif tool_name == "add_to_waitlist"` to tool dispatch
+
+**Note**: Notifications when inventory opens always go out via SMS (can't proactively call someone). The `channel` column ensures the notification text references the original interaction correctly.
 
 ---
 
@@ -332,6 +343,124 @@ The current SMS/Voice system handles the core search-and-book flow well, but rea
 
 ---
 
+## Wave 5: Security Hardening (Voice Data Gating + Cross-Channel Abuse Prevention)
+
+### 5.1 — Voice Data Leakage Prevention
+
+**Problem**: The voice pipeline gates data at the **speech layer** (system prompt rules + regex on tool result text), not the **data layer**. Sensitive fields flow into tool results → Vapi's LLM sees them → a persistent caller can extract them conversationally. The SMS pipeline doesn't have this problem because its Gatekeeper is a hard code gate on the final output channel.
+
+**Architecture principle**: Gate at the data layer (what goes into the tool result), not the speech layer (what the LLM says). All fixes below are in-memory dict/set operations — **zero latency impact**.
+
+**Layer 1: Data Gate** (highest priority — prevents data from reaching the LLM)
+
+Add a `VOICE_RESTRICTED_FIELDS` set to the voice gatekeeper and enforce it in the tool handlers **before** building the summary string:
+
+```python
+# In agents/voice/gatekeeper.py
+VOICE_RESTRICTED_FIELDS = frozenset([
+    "supplier_rate_per_sqft",  # Your cost basis — never expose
+    "spread_pct",              # Your margin — never expose
+    "owner_email",             # Owner PII
+    "owner_phone",             # Owner PII
+    "owner_name",              # Owner PII
+    "full_address",            # Full street address (city/area only)
+    "building_size_sqft",      # System prompt says don't share, enforce in code
+    "available_sqft",          # System prompt says don't share, enforce in code
+])
+```
+
+Then in `voice_tool_handlers.py`, when building match summaries or detail responses, filter these fields **before** the string is constructed. The data never enters the tool result → the LLM never sees it → it can't leak it.
+
+**Layer 2: Dict Sanitization** (already exists, just wire it up)
+
+`sanitize_match_summary()` in `agents/voice/gatekeeper.py` already strips `_SENSITIVE_MATCH_FIELDS` from match dicts — it's just **never called**. Call it in `voice_tool_handlers.py` wherever match dicts are built into summary strings:
+
+- `search_properties` — before formatting each match
+- `lookup_property_details` — before formatting the detail response
+- `lookup_by_address` — before formatting the address lookup result
+
+**Layer 3: Keep the regex gatekeeper** (defense in depth)
+
+The existing `validate_tool_result()` regex remains as a **last resort** catch. Don't remove it — but recognize it's the weakest layer (catches literal patterns like "available sqft", not semantic rephrasing like "there's room for 10,000 square feet").
+
+**What could leak without this fix**:
+
+| Data | Risk | Why |
+|------|------|-----|
+| Supplier rate (your cost basis) | **High** | `supplier_rate_per_sqft` is queryable via DetailFetcher with zero gatekeeper protection |
+| Full street addresses | **Medium** | Tool handlers build summaries with address fields; gatekeeper regex catches some but `lookup_by_address` returns address data by design |
+| Building size / available sqft | **Medium** | Gatekeeper regex catches "available sqft" but misses conversational rephrasing |
+| Owner PII | **Low** | Not in field catalog, but could surface through PropertyInsight narrative answers |
+
+**Files to modify**:
+- `agents/voice/gatekeeper.py` — Add `VOICE_RESTRICTED_FIELDS` frozenset
+- `services/voice_tool_handlers.py` — Call `sanitize_match_summary()` in `search_properties`, `lookup_property_details`, `lookup_by_address`; filter `VOICE_RESTRICTED_FIELDS` from detail responses before string-building
+
+**Priority order**:
+
+| # | Fix | Effort | Impact |
+|---|-----|--------|--------|
+| 1 | Block `supplier_rate_per_sqft` from voice tool handler responses | 1 line per handler | **Critical** — this is your cost basis |
+| 2 | Call `sanitize_match_summary()` in tool handlers | 3-4 lines | **High** — activates existing protection |
+| 3 | Add `VOICE_RESTRICTED_FIELDS` set + enforce in DetailFetcher when `channel="voice"` | ~20 lines | **High** — systematic data gate |
+| 4 | Add `building_size_sqft` and `available_sqft` to restricted set | 1 line | **Medium** — system prompt says don't share, code should enforce |
+
+**Effort**: ~0.5h SMS (no changes) + 2h Voice = 2.5h total
+
+---
+
+### 5.2 — Cross-Channel Inventory Enumeration Prevention
+
+**Problem**: A caller or bot could repeatedly invoke search/lookup tools to catalog the full inventory. Voice is fast (dozens of properties in one call), and SMS is automatable (scripted webhooks). Neither channel has tool usage limits.
+
+**Threat scenarios**:
+1. **Repeat `search_properties`** — cycling through cities: "Show me space in LA", "now Dallas", "now Houston"...
+2. **Repeat `lookup_by_address`** — probing specific addresses to check if they're in your system
+3. **Repeat `lookup_property_details`** — drilling into every option to extract specs on every property
+
+**Implementation**: Per-session tool counters (in-memory, zero latency). Voice tracks per-call, SMS tracks per-conversation with a rolling 24h window (prevents resetting by starting new conversations).
+
+**Per-session tool limits** (configurable via env vars — start generous during testing, tighten based on real usage data):
+
+| Tool / Action | Voice (per call) | SMS (per conversation, rolling 24h) | Production target | Why different |
+|---------------|-----------------|--------------------------------------|-------------------|---------------|
+| `search_properties` | **9** | **15** | 3 / 5 | SMS buyers refine more over hours — legit. Voice is one sitting |
+| `lookup_by_address` | **6** | **9** | 2 / 3 | Same risk both channels |
+| `lookup_property_details` | **15** | **24** | 5 / 8 | SMS buyers ask detail questions across multiple messages |
+
+> **Note**: Initial limits are set to **3x production targets** to avoid blocking testers and team members during QA. Tighten to production targets after testing phase is complete. All limits should be configurable via environment variables (e.g., `VOICE_SEARCH_LIMIT=9`, `SMS_SEARCH_LIMIT=15`) so thresholds can be tuned without redeploying.
+
+**Voice implementation**: Counter dict on the call state (already in memory via `call_state` in tool handlers). Increment on each tool invocation, check before executing.
+
+**SMS implementation**: Counter fields on `SMSConversationState` (persists across messages). Rolling 24h window — reset counts if `last_buyer_message_at` is >24h ago.
+
+**When limits hit** (graceful redirect, not a hard block):
+- **Voice**: "I've shown you quite a few options — want to narrow down what we've looked at, or I can have our team email you a full summary?"
+- **SMS**: "I've pulled up a lot of options for you! Want to dig into any of these, or I can have our team put together a custom list?"
+
+Both route to the team via SendGrid (`send_escalation_email()` pattern) — which gives visibility into who's hitting limits and whether they're legit or probing.
+
+**Files to modify**:
+- `services/voice_tool_handlers.py` — Add `_tool_counts` dict to call state; check/increment before each tool execution; return redirect response when limit hit
+- `services/buyer_sms_orchestrator.py` — Add `search_count`, `address_lookup_count`, `detail_count` fields to conversation state tracking; enforce rolling 24h limits
+- `domain/sms_models.py` — Add counter fields to `SMSConversationState` if not using JSON blob
+- `services/email_service.py` — Reuse `send_escalation_email()` for limit-hit notifications (include phone, tool counts, conversation context)
+
+**Effort**: ~2h SMS + 1.5h Voice = 3.5h total
+
+**Rollout strategy**:
+1. **Phase 1 (testing)**: Deploy with 3x limits + logging. Monitor logs to see actual usage patterns across team testers and real buyers
+2. **Phase 2 (production)**: Tighten to production targets via env vars based on real usage data. No redeploy needed
+
+**Verification** (using initial 3x limits):
+- Voice: Call and request 10+ different city searches → expect graceful redirect on the 10th
+- SMS: Send 16+ search requests in one conversation → expect redirect on the 16th
+- Both: Verify redirect message includes team follow-up offer
+- Both: Verify SendGrid email fires with tool usage details
+- Regression: Normal buyer flow (1 search, 2 detail lookups) completes without hitting any limits
+
+---
+
 ## Additional UX Enhancements (Woven Into Waves Above)
 
 These aren't separate items but principles applied throughout:
@@ -360,15 +489,17 @@ These aren't separate items but principles applied throughout:
 | 2.4 Micro-Confirmations | 2 | 0.5h | 0h | 0.5h |
 | 3.1 Multi-Location | 3 | 4h | 2h | 6h |
 | 3.2 Callbacks (email team) | 3 | 2h | 0.5h | 2.5h |
-| 3.3 Waitlist | 3 | 5h | 1h | 6h |
+| 3.3 Waitlist (SMS + Voice enrollment) | 3 | 5h | 2h | 7h |
 | 3.4 Lease Modification | 3 | 0.5h | 0.5h | 1h |
 | 3.5 Urgency | 3 | 1.5h | 0.5h | 2h |
 | 3.6 Landmarks | 3 | 3h | 0.5h | 3.5h |
 | 3.7 Comparison | 3 | 3h | 0.5h | 3.5h |
 
 | 4.1 Result Rejection + Outlier Filter | 4 | 3h | 0.5h | 3.5h |
+| 5.1 Voice Data Leakage Prevention | 5 | 0h | 2h | 2h |
+| 5.2 Cross-Channel Enumeration Prevention | 5 | 2h | 1.5h | 3.5h |
 
-**Wave 1 Total**: ~14h | **Wave 2 Total**: ~7.5h | **Wave 3 Total**: ~24.5h | **Wave 4 Total**: ~3.5h
+**Wave 1 Total**: ~14h | **Wave 2 Total**: ~7.5h | **Wave 3 Total**: ~25.5h | **Wave 4 Total**: ~3.5h | **Wave 5 Total**: ~5.5h
 
 ---
 
@@ -377,8 +508,8 @@ These aren't separate items but principles applied throughout:
 | Wave | What | Purpose |
 |------|------|---------|
 | 1 | `send_callback_request_email()` in existing `email_service.py` | Team notification for callbacks (no new file) |
-| 3 | `services/waitlist_service.py` | Buyer waitlist management |
-| 3 | `BuyerWaitlist` model in `sms_models.py` | Waitlist entries |
+| 3 | `services/waitlist_service.py` | **Shared service** — both SMS and Voice use same enrollment logic |
+| 3 | `BuyerWaitlist` model in `sms_models.py` | Waitlist entries. Includes `channel` column (`"sms"` / `"voice"`) for context-aware notifications |
 
 All other changes are modifications to existing files. No new API credentials, templates, or external services needed.
 
@@ -406,6 +537,8 @@ After each wave:
 - [ ] **Human escalation state flag** — When team emails a callback, mark it in state so buyer doesn't get "I'll have someone reach out" again on next message
 - [ ] **Regression test suite** — After each wave, run original happy-path flows (search → present → commit) to catch prompt degradation
 - [ ] **Budget conversion disclaimer** — Market rate estimates aren't exact; consider noting "Based on rates in the area, that's roughly X sqft"
+- [ ] **Tool limit monitoring** — After Wave 5, review SendGrid limit-hit emails weekly to tune thresholds (too low = legit buyers blocked, too high = no protection)
+- [ ] **Voice gatekeeper audit** — Periodically test voice with adversarial questions ("what's the supplier rate?", "give me the owner's email") to verify data gate holds
 
 ### Known Remaining Gaps (Future Work)
 - **Live call transfer** — Jess can't warm-transfer to a human mid-call (Vapi supports it but not wired up)
@@ -425,6 +558,7 @@ After each wave:
 | `agents/sms/contracts.py` | Wave 1-2 — new fields on MessageInterpretation and OrchestratorResult |
 | `agents/sms/response_agent.py` | Every wave — new response guidelines per intent |
 | `services/vapi_assistant_config.py` | Every wave — system prompt sections + new tool definitions |
-| `services/voice_tool_handlers.py` | Wave 1 — new check_booking_status handler, budget param on search |
-| `app/routes/vapi_webhook.py` | Wave 1 — new tool dispatch entry |
+| `services/voice_tool_handlers.py` | Wave 1 + 3 + 5 — check_booking_status handler, budget param on search, `handle_add_to_waitlist()`, `sanitize_match_summary()` calls, `VOICE_RESTRICTED_FIELDS` enforcement, per-call tool counters |
+| `agents/voice/gatekeeper.py` | Wave 5 — `VOICE_RESTRICTED_FIELDS` frozenset, data gate enforcement |
+| `app/routes/vapi_webhook.py` | Wave 1 + 3 — tool dispatch entries for check_booking_status + add_to_waitlist |
 | `agents/sms/fallback_templates.py` | Wave 1 — new fallback templates (faq, supplier_inquiry) |

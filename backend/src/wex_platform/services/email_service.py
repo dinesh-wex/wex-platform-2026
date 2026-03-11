@@ -670,6 +670,67 @@ async def send_callback_request_email(data: dict) -> bool:
         return False
 
 
+def _build_tool_limit_html(data: dict) -> str:
+    """Build HTML for tool limit notification email."""
+    phone = data.get("phone", "Unknown")
+    channel = data.get("channel", "unknown")
+    tool_key = data.get("tool_key", "unknown")
+    count = data.get("count", 0)
+    limits = data.get("limits", {})
+    call_id = data.get("call_id", "")
+
+    limits_str = ", ".join(f"{k}: {v}" for k, v in limits.items())
+
+    return f"""
+    <div style="font-family: Arial, sans-serif; max-width: 600px;">
+        <div style="background: #f57c00; color: white; padding: 12px 20px; border-radius: 8px 8px 0 0;">
+            <strong>Tool Limit Hit</strong>
+        </div>
+        <div style="border: 1px solid #ddd; border-top: none; padding: 20px; border-radius: 0 0 8px 8px;">
+            <p><strong>Phone:</strong> {phone}</p>
+            <p><strong>Channel:</strong> {channel}</p>
+            <p><strong>Tool:</strong> {tool_key} (hit {count} calls)</p>
+            <p><strong>Configured limits:</strong> {limits_str}</p>
+            {"<p><strong>Call ID:</strong> " + call_id + "</p>" if call_id else ""}
+            <p style="color: #666; font-size: 13px; margin-top: 16px;">
+                This buyer was redirected to team follow-up. Check if this is a legitimate buyer
+                who needs more options or a potential enumeration attempt.
+            </p>
+        </div>
+    </div>
+    """
+
+
+async def send_tool_limit_email(data: dict) -> bool:
+    """Send notification when a buyer hits tool usage limits."""
+    api_key, alert_from, alert_to = _get_config()
+    if not api_key:
+        logger.warning("SendGrid not configured, skipping tool limit email")
+        return False
+
+    phone = data.get("phone", "Unknown")
+    channel = data.get("channel", "unknown")
+    tool_key = data.get("tool_key", "unknown")
+
+    subject = f"[WEx] Tool Limit Hit - {phone} ({channel})"
+    html = _build_tool_limit_html(data)
+
+    mail = Mail(
+        from_email=Email(alert_from, "Warehouse Exchange"),
+        to_emails=To(alert_to),
+        subject=subject,
+        html_content=Content("text/html", html),
+    )
+
+    try:
+        await asyncio.to_thread(_send_mail, mail)
+        logger.info("Tool limit email sent for %s (%s, %s)", phone, channel, tool_key)
+        return True
+    except Exception:
+        logger.exception("Failed to send tool limit email")
+        return False
+
+
 async def send_supplier_redirect_email(data: dict) -> bool:
     """Send internal notification when a supplier contacts the buyer SMS line."""
     api_key, alert_from, alert_to = _get_config()

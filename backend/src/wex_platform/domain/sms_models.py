@@ -41,6 +41,8 @@ class SMSConversationState(Base):
     reengagement_count = Column(Integer, default=0)
     next_reengagement_at = Column(DateTime(timezone=True), nullable=True)
     stall_nudge_counts = Column(JSON, default=dict)
+    tool_counts = Column(JSON, default=dict)
+    tool_counts_reset_at = Column(DateTime(timezone=True), nullable=True)
     waitlist_offered = Column(Boolean, default=False)
     opted_out = Column(Boolean, default=False)
     opted_out_at = Column(DateTime(timezone=True), nullable=True)

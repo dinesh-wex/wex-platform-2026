@@ -47,8 +47,20 @@ BAD_TERMS: dict[str, str] = {
 
 # Fields that must never appear in voice match summaries
 _SENSITIVE_MATCH_FIELDS = frozenset([
-    "address", "full_address", "supplier_rate", "spread_pct",
-    "owner_email", "owner_phone", "owner_name",
+    "address", "full_address", "supplier_rate", "supplier_rate_per_sqft",
+    "spread_pct", "owner_email", "owner_phone", "owner_name",
+    "building_size_sqft", "available_sqft",
+])
+
+VOICE_RESTRICTED_FIELDS = frozenset([
+    "supplier_rate_per_sqft",
+    "spread_pct",
+    "owner_email",
+    "owner_phone",
+    "owner_name",
+    "full_address",
+    "building_size_sqft",
+    "available_sqft",
 ])
 
 
@@ -114,3 +126,35 @@ def sanitize_match_summary(match: dict) -> dict:
     for field in _SENSITIVE_MATCH_FIELDS:
         safe.pop(field, None)
     return safe
+
+
+def sanitize_detail_response(data: dict) -> dict:
+    """Remove restricted fields from property detail/insight data before voice delivery."""
+    safe = dict(data)
+    for field in VOICE_RESTRICTED_FIELDS:
+        safe.pop(field, None)
+    for key, val in list(safe.items()):
+        if isinstance(val, dict):
+            safe[key] = {k: v for k, v in val.items() if k not in VOICE_RESTRICTED_FIELDS}
+    return safe
+
+
+_NARRATIVE_SQFT_PATTERN = re.compile(
+    r'\b\d[\d,]*\s*(?:sq\.?\s*ft|sqft|square\s+feet)\b', re.IGNORECASE
+)
+_NARRATIVE_ADDRESS_PATTERN = ADDRESS_PATTERN
+_NARRATIVE_EMAIL_PATTERN = re.compile(
+    r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+)
+_NARRATIVE_PHONE_PATTERN = re.compile(
+    r'(?:\+?1[-.\s]?)?\(?[2-9]\d{2}\)?[-.\s]?\d{3}[-.\s]?\d{4}'
+)
+
+
+def scrub_narrative_for_voice(text: str) -> str:
+    """Scrub PropertyInsight narrative strings that may contain sensitive data."""
+    scrubbed = _NARRATIVE_SQFT_PATTERN.sub("[size info redacted]", text)
+    scrubbed = _NARRATIVE_ADDRESS_PATTERN.sub("[address redacted]", scrubbed)
+    scrubbed = _NARRATIVE_EMAIL_PATTERN.sub("[contact redacted]", scrubbed)
+    scrubbed = _NARRATIVE_PHONE_PATTERN.sub("[contact redacted]", scrubbed)
+    return scrubbed

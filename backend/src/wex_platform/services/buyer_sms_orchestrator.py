@@ -13,6 +13,7 @@ Replaces the old BuyerSMSPipeline with a proper multi-agent flow:
 """
 
 import logging
+import os
 import re
 import secrets
 from dataclasses import dataclass, field
@@ -22,6 +23,17 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+SMS_TOOL_LIMITS = {
+    "search": int(os.environ.get("SMS_SEARCH_LIMIT", "15")),
+    "detail": int(os.environ.get("SMS_DETAIL_LIMIT", "24")),
+    "address": int(os.environ.get("SMS_ADDRESS_LIMIT", "9")),
+}
+
+SMS_LIMIT_RESPONSE = (
+    "I've pulled up a lot of options for you! Want to dig into any of these, "
+    "or I can have our team put together a custom list?"
+)
 
 
 @dataclass
@@ -234,6 +246,33 @@ class BuyerSMSOrchestrator:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def _check_sms_tool_limit(self, state, tool_key: str, phone: str) -> str | None:
+        """Check SMS tool limit with rolling 24h window. Returns redirect message if limit hit."""
+        now = datetime.now(timezone.utc)
+        # Reset counts if >24h since last reset
+        if state.tool_counts_reset_at and (now - state.tool_counts_reset_at) > timedelta(hours=24):
+            state.tool_counts = {}
+            state.tool_counts_reset_at = now
+        elif not state.tool_counts_reset_at:
+            state.tool_counts_reset_at = now
+
+        counts = state.tool_counts or {}
+        current = counts.get(tool_key, 0)
+        if current >= SMS_TOOL_LIMITS.get(tool_key, 99):
+            logger.warning("TOOL_LIMIT | sms %s hit limit %d for %s", phone, current, tool_key)
+            from wex_platform.services.email_service import send_tool_limit_email
+            await send_tool_limit_email({
+                "phone": phone,
+                "channel": "sms",
+                "tool_key": tool_key,
+                "count": current,
+                "limits": SMS_TOOL_LIMITS,
+            })
+            return SMS_LIMIT_RESPONSE
+        counts[tool_key] = current + 1
+        state.tool_counts = counts
+        return None
 
     async def process_message(
         self,
@@ -684,30 +723,35 @@ class BuyerSMSOrchestrator:
 
         elif plan.action == "search" and all_qualifying_done:
             # All questions answered — trigger ClearingEngine search
-            match_summaries = await self._run_search(
-                merged_criteria, phone, conversation, state
-            )
-
-            # Preserve any prior hint context (e.g. budget conversion note)
-            prior_hint = plan.response_hint or ""
-            if match_summaries:
-                phase = "PRESENTING"
-                # Detect multi-city results
-                cities_in_results = list(set(s.get("search_city") or s.get("city", "") for s in match_summaries))
-                if len(cities_in_results) > 1:
-                    city_list = " and ".join(cities_in_results)
-                    plan.response_hint = f"{prior_hint}Found {len(match_summaries)} options across {city_list}. Summarize each briefly (city, rate, monthly estimate — never mention property sqft).".strip()
-                else:
-                    plan.response_hint = f"{prior_hint}Found {len(match_summaries)} options. Tell the buyer how many you found and briefly summarize the top options (city, rate, and monthly estimate — never mention property sqft).".strip()
+            limit_msg = await self._check_sms_tool_limit(state, "search", phone)
+            if limit_msg:
+                plan.response_hint = limit_msg
+                plan.action = None  # Skip the search
             else:
-                phase = "QUALIFYING"
-                # Offer waitlist when no matches found and we have a location
-                if merged_criteria.get("location"):
-                    state.waitlist_offered = True
-                    city = merged_criteria["location"].split(",")[0].strip()
-                    plan.response_hint = f"{prior_hint}Search ran but found no matches in {city}. Tell the buyer: 'Nothing exact right now in {city}, but I can notify you when something opens up. Want me to add you to the waitlist?'".strip()
+                match_summaries = await self._run_search(
+                    merged_criteria, phone, conversation, state
+                )
+
+                # Preserve any prior hint context (e.g. budget conversion note)
+                prior_hint = plan.response_hint or ""
+                if match_summaries:
+                    phase = "PRESENTING"
+                    # Detect multi-city results
+                    cities_in_results = list(set(s.get("search_city") or s.get("city", "") for s in match_summaries))
+                    if len(cities_in_results) > 1:
+                        city_list = " and ".join(cities_in_results)
+                        plan.response_hint = f"{prior_hint}Found {len(match_summaries)} options across {city_list}. Summarize each briefly (city, rate, monthly estimate — never mention property sqft).".strip()
+                    else:
+                        plan.response_hint = f"{prior_hint}Found {len(match_summaries)} options. Tell the buyer how many you found and briefly summarize the top options (city, rate, and monthly estimate — never mention property sqft).".strip()
                 else:
-                    plan.response_hint = f"{prior_hint}Search ran but found no matches. Tell the buyer nothing exact right now, but you're expanding the search and will text them when something opens up.".strip()
+                    phase = "QUALIFYING"
+                    # Offer waitlist when no matches found and we have a location
+                    if merged_criteria.get("location"):
+                        state.waitlist_offered = True
+                        city = merged_criteria["location"].split(",")[0].strip()
+                        plan.response_hint = f"{prior_hint}Search ran but found no matches in {city}. Tell the buyer: 'Nothing exact right now in {city}, but I can notify you when something opens up. Want me to add you to the waitlist?'".strip()
+                    else:
+                        plan.response_hint = f"{prior_hint}Search ran but found no matches. Tell the buyer nothing exact right now, but you're expanding the search and will text them when something opens up.".strip()
 
         elif plan.action == "search" and has_core_fields and not all_qualifying_done:
             # Have core fields but still missing qualifying questions — don't search yet
@@ -720,44 +764,49 @@ class BuyerSMSOrchestrator:
         elif plan.action == "address_lookup":
             address_text = interpretation.address_text if hasattr(interpretation, 'address_text') else None
             if address_text:
-                from wex_platform.services.address_lookup import lookup_by_address as do_address_lookup
+                limit_msg = await self._check_sms_tool_limit(state, "address", phone)
+                if limit_msg:
+                    plan.response_hint = limit_msg
+                    plan.action = None
+                else:
+                    from wex_platform.services.address_lookup import lookup_by_address as do_address_lookup
 
-                addr_result = await do_address_lookup(address_text, self.db)
+                    addr_result = await do_address_lookup(address_text, self.db)
 
-                if addr_result.found and addr_result.property_id:
-                    # Present as focused property
-                    state.focused_match_id = addr_result.property_id
-                    presented = list(state.presented_match_ids or [])
-                    if addr_result.property_id not in presented:
-                        presented.append(addr_result.property_id)
-                        state.presented_match_ids = presented
-                    state.phase = "PROPERTY_FOCUSED"
-                    phase = "PROPERTY_FOCUSED"
+                    if addr_result.found and addr_result.property_id:
+                        # Present as focused property
+                        state.focused_match_id = addr_result.property_id
+                        presented = list(state.presented_match_ids or [])
+                        if addr_result.property_id not in presented:
+                            presented.append(addr_result.property_id)
+                            state.presented_match_ids = presented
+                        state.phase = "PROPERTY_FOCUSED"
+                        phase = "PROPERTY_FOCUSED"
 
-                    if addr_result.tier == 2:
-                        plan.response_hint = (
-                            f"Found the property in {addr_result.city}. "
-                            f"It's not currently in our active network. "
-                            f"Offer to check availability with the owner."
-                        )
+                        if addr_result.tier == 2:
+                            plan.response_hint = (
+                                f"Found the property in {addr_result.city}. "
+                                f"It's not currently in our active network. "
+                                f"Offer to check availability with the owner."
+                            )
+                        else:
+                            plan.response_hint = (
+                                f"Found the property in {addr_result.city}. "
+                                f"Share basic details and ask if they'd like to learn more or schedule a tour."
+                            )
+
+                        # Populate property_data so the response agent has context
+                        property_data = addr_result.property_data or {
+                            "id": addr_result.property_id,
+                            "city": addr_result.city,
+                            "address": addr_result.address,
+                            "source": "address_lookup",
+                        }
                     else:
                         plan.response_hint = (
-                            f"Found the property in {addr_result.city}. "
-                            f"Share basic details and ask if they'd like to learn more or schedule a tour."
+                            f"Couldn't find a property at that address. "
+                            f"Ask if they meant a different address or want to search by city instead."
                         )
-
-                    # Populate property_data so the response agent has context
-                    property_data = addr_result.property_data or {
-                        "id": addr_result.property_id,
-                        "city": addr_result.city,
-                        "address": addr_result.address,
-                        "source": "address_lookup",
-                    }
-                else:
-                    plan.response_hint = (
-                        f"Couldn't find a property at that address. "
-                        f"Ask if they meant a different address or want to search by city instead."
-                    )
 
         elif plan.intent == "comparison":
             presented_ids = state.presented_match_ids or []
@@ -813,111 +862,116 @@ class BuyerSMSOrchestrator:
 
         elif plan.action == "lookup" and resolved_property_id:
             # Real detail fetcher (Phase 3)
-            from wex_platform.services.sms_detail_fetcher import DetailFetcher
-
-            detail_fetcher = DetailFetcher(self.db)
-
-            topics_to_fetch = list(interpretation.topics) if interpretation.topics else []
-            if plan.asked_fields:
-                for af in plan.asked_fields:
-                    if af not in topics_to_fetch:
-                        topics_to_fetch.append(af)
-            if topics_to_fetch:
-                fetch_results = await detail_fetcher.fetch_with_insight_fallback(
-                    property_id=resolved_property_id,
-                    topics=topics_to_fetch,
-                    state=state,
-                    question_text=message,
-                )
-
-                # Check if any need escalation
-                needs_escalation = any(r.needs_escalation for r in fetch_results)
-                answered = [r for r in fetch_results if r.status in ("FOUND", "CACHE_HIT")]
-
-                if answered:
-                    # Build property_data from answered results
-                    property_data = {
-                        "id": resolved_property_id,
-                        "answers": {r.field_key: r.formatted for r in answered if r.formatted},
-                        "source": "detail_fetcher",
-                    }
-
-                if needs_escalation:
-                    # Escalate unanswered questions
-                    from wex_platform.services.escalation_service import EscalationService
-                    esc_service = EscalationService(self.db)
-
-                    unanswered = [r for r in fetch_results if r.needs_escalation]
-                    for result in unanswered:
-                        esc_result = await esc_service.check_and_escalate(
-                            property_id=resolved_property_id,
-                            question_text=message,
-                            field_key=result.field_key,
-                            state=state,
-                            source_type="sms",
-                        )
-                        if esc_result.get("escalated"):
-                            phase = "AWAITING_ANSWER"
-                        elif esc_result.get("answer"):
-                            if not property_data:
-                                property_data = {"id": resolved_property_id, "answers": {}, "source": "escalation_cache"}
-                            if result.field_key:
-                                property_data["answers"][result.field_key] = esc_result["answer"]
-                        elif esc_result.get("waiting"):
-                            phase = "AWAITING_ANSWER"
+            limit_msg = await self._check_sms_tool_limit(state, "detail", phone)
+            if limit_msg:
+                plan.response_hint = limit_msg
+                plan.action = None
             else:
-                # No mapped topics detected.
-                # If this is a facility_info question (buyer asked something specific),
-                # escalate it instead of silently dropping it.
-                # If it's just general browsing, use the stub as before.
-                if plan.intent == "facility_info":
-                    # Try PropertyInsight first — check knowledge stores before escalating
-                    from wex_platform.services.property_insight_service import PropertyInsightService
-                    insight_service = PropertyInsightService(self.db)
-                    insight = await insight_service.search(
+                from wex_platform.services.sms_detail_fetcher import DetailFetcher
+
+                detail_fetcher = DetailFetcher(self.db)
+
+                topics_to_fetch = list(interpretation.topics) if interpretation.topics else []
+                if plan.asked_fields:
+                    for af in plan.asked_fields:
+                        if af not in topics_to_fetch:
+                            topics_to_fetch.append(af)
+                if topics_to_fetch:
+                    fetch_results = await detail_fetcher.fetch_with_insight_fallback(
                         property_id=resolved_property_id,
-                        question=message,
-                        channel="sms",
+                        topics=topics_to_fetch,
+                        state=state,
+                        question_text=message,
                     )
-                    if insight.found and insight.answer:
+
+                    # Check if any need escalation
+                    needs_escalation = any(r.needs_escalation for r in fetch_results)
+                    answered = [r for r in fetch_results if r.status in ("FOUND", "CACHE_HIT")]
+
+                    if answered:
+                        # Build property_data from answered results
                         property_data = {
                             "id": resolved_property_id,
-                            "answers": {"_insight": insight.answer},
-                            "source": "property_insight",
+                            "answers": {r.field_key: r.formatted for r in answered if r.formatted},
+                            "source": "detail_fetcher",
                         }
-                    else:
-                        # PropertyInsight couldn't answer — fall through to escalation
+
+                    if needs_escalation:
+                        # Escalate unanswered questions
                         from wex_platform.services.escalation_service import EscalationService
                         esc_service = EscalationService(self.db)
-                        esc_result = await esc_service.check_and_escalate(
-                            property_id=resolved_property_id,
-                            question_text=message,
-                            field_key=None,
-                            state=state,
-                            source_type="sms",
-                        )
-                        if esc_result.get("escalated"):
-                            phase = "AWAITING_ANSWER"
-                        elif esc_result.get("answer"):
-                            property_data = {
-                                "id": resolved_property_id,
-                                "answers": {"_unmapped": esc_result["answer"]},
-                                "source": "escalation_cache",
-                            }
-                        elif esc_result.get("waiting"):
-                            property_data = {
-                                "id": resolved_property_id,
-                                "answers": {"_unmapped": "We're still checking on that with the warehouse owner."},
-                                "source": "escalation_pending",
-                            }
-                else:
-                    # General lookup with no specific question — return stub summary
-                    property_data = self._stub_lookup(resolved_property_id, presented_match_summaries)
 
-            if resolved_property_id != state.focused_match_id:
-                state.focused_match_id = resolved_property_id
-            if phase != "AWAITING_ANSWER":
-                phase = "PROPERTY_FOCUSED"
+                        unanswered = [r for r in fetch_results if r.needs_escalation]
+                        for result in unanswered:
+                            esc_result = await esc_service.check_and_escalate(
+                                property_id=resolved_property_id,
+                                question_text=message,
+                                field_key=result.field_key,
+                                state=state,
+                                source_type="sms",
+                            )
+                            if esc_result.get("escalated"):
+                                phase = "AWAITING_ANSWER"
+                            elif esc_result.get("answer"):
+                                if not property_data:
+                                    property_data = {"id": resolved_property_id, "answers": {}, "source": "escalation_cache"}
+                                if result.field_key:
+                                    property_data["answers"][result.field_key] = esc_result["answer"]
+                            elif esc_result.get("waiting"):
+                                phase = "AWAITING_ANSWER"
+                else:
+                    # No mapped topics detected.
+                    # If this is a facility_info question (buyer asked something specific),
+                    # escalate it instead of silently dropping it.
+                    # If it's just general browsing, use the stub as before.
+                    if plan.intent == "facility_info":
+                        # Try PropertyInsight first — check knowledge stores before escalating
+                        from wex_platform.services.property_insight_service import PropertyInsightService
+                        insight_service = PropertyInsightService(self.db)
+                        insight = await insight_service.search(
+                            property_id=resolved_property_id,
+                            question=message,
+                            channel="sms",
+                        )
+                        if insight.found and insight.answer:
+                            property_data = {
+                                "id": resolved_property_id,
+                                "answers": {"_insight": insight.answer},
+                                "source": "property_insight",
+                            }
+                        else:
+                            # PropertyInsight couldn't answer — fall through to escalation
+                            from wex_platform.services.escalation_service import EscalationService
+                            esc_service = EscalationService(self.db)
+                            esc_result = await esc_service.check_and_escalate(
+                                property_id=resolved_property_id,
+                                question_text=message,
+                                field_key=None,
+                                state=state,
+                                source_type="sms",
+                            )
+                            if esc_result.get("escalated"):
+                                phase = "AWAITING_ANSWER"
+                            elif esc_result.get("answer"):
+                                property_data = {
+                                    "id": resolved_property_id,
+                                    "answers": {"_unmapped": esc_result["answer"]},
+                                    "source": "escalation_cache",
+                                }
+                            elif esc_result.get("waiting"):
+                                property_data = {
+                                    "id": resolved_property_id,
+                                    "answers": {"_unmapped": "We're still checking on that with the warehouse owner."},
+                                    "source": "escalation_pending",
+                                }
+                    else:
+                        # General lookup with no specific question — return stub summary
+                        property_data = self._stub_lookup(resolved_property_id, presented_match_summaries)
+
+                if resolved_property_id != state.focused_match_id:
+                    state.focused_match_id = resolved_property_id
+                if phase != "AWAITING_ANSWER":
+                    phase = "PROPERTY_FOCUSED"
 
         elif plan.intent == "reject_results":
             # Stay in PRESENTING — do NOT re-search with same criteria
