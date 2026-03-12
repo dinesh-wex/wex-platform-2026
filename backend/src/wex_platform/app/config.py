@@ -46,8 +46,8 @@ class Settings(BaseSettings):
     vapi_api_key: str = ""
     vapi_server_secret: str = ""
     vapi_phone_number_id: str = ""
-    vapi_voice_id: str = ""
-    vapi_voice_provider: str = "deepgram"  # 11labs, playht, deepgram, etc.
+    vapi_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # ElevenLabs Rachel voice
+    vapi_voice_provider: str = "11labs"  # 11labs, playht, deepgram, etc.
 
     # Admin
     admin_password: str = "wex2026"
