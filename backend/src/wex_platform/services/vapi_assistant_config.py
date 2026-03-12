@@ -579,6 +579,7 @@ async def register_vapi_phone_number(server_url: str) -> bool:
         server_config["secret"] = settings.vapi_server_secret
     payload = {
         "server": server_config,
+        "assistantId": "ee1c27db-c3a5-49cc-8e36-12a1c644b482",
     }
 
     try:
