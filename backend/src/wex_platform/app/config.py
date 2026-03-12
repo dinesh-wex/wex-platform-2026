@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     vapi_voice_id: str = "asteria"  # Deepgram Asteria - VAPI-native short name
     vapi_voice_provider: str = "deepgram"  # Using Deepgram to avoid ElevenLabs failures
 
+    # Groq (used by Vapi assistant for ultra-low latency LLM)
+    groq_api_key: str = ""
+
     # Admin
     admin_password: str = "wex2026"
 
