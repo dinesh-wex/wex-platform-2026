@@ -25,8 +25,8 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
     - Call limits
     """
     settings = get_settings()
-    voice_provider = settings.vapi_voice_provider or "playht"
-    voice_id = settings.vapi_voice_id or DEFAULT_VOICE_IDS.get(voice_provider, "jennifer")
+    voice_provider = settings.vapi_voice_provider or "deepgram"
+    voice_id = settings.vapi_voice_id or DEFAULT_VOICE_IDS.get(voice_provider, "aura-asteria-en")
 
     # Compute time gap for returning callers
     gap_hours = None
