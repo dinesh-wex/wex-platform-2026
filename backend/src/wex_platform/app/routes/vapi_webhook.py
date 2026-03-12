@@ -158,17 +158,33 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
     db.add(call_state)
     await db.commit()
 
-    # Build and return assistant config
+    # Return assistantId + assistantOverrides (dynamic system prompt + firstMessage per caller).
+    # This pattern responds fast (no heavy inline config) while injecting per-call context.
+    # The static assistant (ee1c27db) holds tools, voice, model, and server URL.
     try:
-        from wex_platform.services.vapi_assistant_config import build_assistant_config
-        config = build_assistant_config(
+        from wex_platform.services.vapi_assistant_config import (
+            build_assistant_config,
+            _build_system_prompt,
+        )
+        # Build only the dynamic parts — system prompt and firstMessage
+        overrides_config = build_assistant_config(
             caller_phone=caller_phone,
             buyer_name=buyer_name,
             sms_context=sms_context,
         )
-    except ImportError:
-        logger.warning("vapi_assistant_config not available yet, returning minimal config")
-        config = _fallback_assistant_config(caller_phone, buyer_name)
+        inner = overrides_config.get("assistant", {})
+        config = {
+            "assistantId": "ee1c27db-c3a5-49cc-8e36-12a1c644b482",
+            "assistantOverrides": {
+                "firstMessage": inner.get("firstMessage", "Hey, thanks for calling Warehouse Exchange, this is Jess. Who am I speaking with?"),
+                "model": {
+                    "messages": inner.get("model", {}).get("messages", []),
+                },
+            },
+        }
+    except Exception:
+        logger.warning("vapi_assistant_config unavailable, returning assistantId only", exc_info=True)
+        config = {"assistantId": "ee1c27db-c3a5-49cc-8e36-12a1c644b482"}
 
     return JSONResponse(config)
 
