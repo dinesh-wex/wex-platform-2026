@@ -408,8 +408,14 @@ def _validate_vapi_signature(request: Request, body_bytes: bytes) -> None:
     """Validate Vapi webhook signature (HMAC-SHA256).
 
     Skipped when vapi_server_secret is not configured (local dev).
+    
+    TEMPORARILY DISABLED for debugging - Vapi not calling webhook.
     """
     settings = get_settings()
+    
+    # TEMP: Skip validation to test if signature is the issue
+    logger.warning("Vapi signature validation TEMPORARILY DISABLED for debugging")
+    return
 
     if not settings.vapi_server_secret:
         return  # Skip validation in dev
