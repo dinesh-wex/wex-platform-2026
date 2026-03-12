@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_VOICE_IDS = {
     "11labs": "21m00Tcm4TlvDq8ikWAM",  # "Rachel" - calm professional female
     "playht": "jennifer",               # PlayHT female voice
-    "deepgram": "aura-asteria-en",       # Deepgram Asteria - professional female
+    "deepgram": "asteria",               # Deepgram Asteria - professional female (short name)
 }
 
 

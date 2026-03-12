@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     vapi_api_key: str = ""
     vapi_server_secret: str = ""
     vapi_phone_number_id: str = ""
-    vapi_voice_id: str = "aura-asteria-en"  # Deepgram Asteria - VAPI-native, no API key needed
+    vapi_voice_id: str = "asteria"  # Deepgram Asteria - VAPI-native short name
     vapi_voice_provider: str = "deepgram"  # Using Deepgram to avoid ElevenLabs failures
 
     # Admin
