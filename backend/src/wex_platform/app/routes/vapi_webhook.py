@@ -389,6 +389,15 @@ async def _handle_end_of_call(message: dict, db: AsyncSession) -> JSONResponse:
         sms_text = f"{name_prefix}it's Jess from Warehouse Exchange. Here's the link to complete your warehouse booking: {link}"
         await _send_follow_up_sms(sms_phone, sms_text, call_state)
 
+    elif sms_phone and not call_state.sms_sent:
+        # Fallback SMS — no search or booking happened, but still send a follow-up
+        sms_text = (
+            f"{name_prefix}it's Jess from Warehouse Exchange. "
+            "Thanks for calling! If you're looking for warehouse or industrial space, "
+            "just reply here and I'll help you find the right fit."
+        )
+        await _send_follow_up_sms(sms_phone, sms_text, call_state)
+
     # Send deferred escalation emails for any questions asked during the call.
     # Voice escalations are batched — emails deferred until call ends so we
     # don't spam ops while the buyer is still talking.
