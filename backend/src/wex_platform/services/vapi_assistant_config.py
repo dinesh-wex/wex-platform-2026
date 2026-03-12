@@ -7,8 +7,12 @@ from wex_platform.app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# ElevenLabs default voice (warm, professional)
-DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # "Rachel" - calm professional female
+# Default voice IDs per provider (warm, professional female voices)
+DEFAULT_VOICE_IDS = {
+    "11labs": "21m00Tcm4TlvDq8ikWAM",  # "Rachel" - calm professional female
+    "playht": "jennifer",               # PlayHT female voice
+    "deepgram": "aura-asteria-en",       # Deepgram Asteria - professional female
+}
 
 
 def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms_context: dict | None = None) -> dict:
@@ -21,7 +25,8 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
     - Call limits
     """
     settings = get_settings()
-    voice_id = settings.vapi_voice_id or DEFAULT_VOICE_ID
+    voice_provider = settings.vapi_voice_provider or "playht"
+    voice_id = settings.vapi_voice_id or DEFAULT_VOICE_IDS.get(voice_provider, "jennifer")
 
     # Compute time gap for returning callers
     gap_hours = None
@@ -110,7 +115,7 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
                 "temperature": 0.7,
             },
             "voice": {
-                "provider": "11labs",
+                "provider": voice_provider,
                 "voiceId": voice_id,
             },
             "firstMessage": first_message,
