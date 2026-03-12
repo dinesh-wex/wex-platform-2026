@@ -299,9 +299,9 @@ class BuyerNotificationService:
         if state.opted_out:
             return False
 
-        # Check quiet hours for proactive messages
-        # Infer timezone from search city (simplified: default to Eastern)
-        timezone_str = None  # Could be inferred from state.criteria_snapshot city
+        # Check quiet hours for proactive messages (timezone-aware)
+        from wex_platform.services.timezone_utils import get_buyer_timezone
+        timezone_str = get_buyer_timezone(state)
         if SMSService.check_quiet_hours(timezone_str):
             logger.debug("Quiet hours — queuing message for %s", state.phone)
             return False  # In a real impl, would queue for later

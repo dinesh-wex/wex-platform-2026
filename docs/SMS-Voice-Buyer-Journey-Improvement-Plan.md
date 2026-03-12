@@ -459,6 +459,89 @@ Both route to the team via SendGrid (`send_escalation_email()` pattern) — whic
 - Both: Verify SendGrid email fires with tool usage details
 - Regression: Normal buyer flow (1 search, 2 detail lookups) completes without hitting any limits
 
+### 5.3 — Timezone-Aware Quiet Hours for Outbound Messages
+
+**Problem**: Proactive follow-ups and reminders (stall nudges, tour reminders, dormant re-engagement, payment reminders) are sent based on server time without timezone awareness. A "just checking in" text at 6:03 AM local time feels spammy and unprofessional.
+
+**Current state**: The infrastructure is **already partially built** but not wired up:
+- `SMSService.check_quiet_hours(timezone_str)` exists — returns `True` if local hour is 9 PM–9 AM (line 186-201 of `sms_service.py`)
+- `BuyerNotificationService._send_if_allowed()` calls it — but always passes `timezone_str=None` (line 304), which defaults to Eastern time
+- The comment in the code literally says: `"Could be inferred from state.criteria_snapshot city"`
+- Background jobs (`send_tour_reminders`, `send_post_tour_followup`, `send_payment_reminders`) bypass quiet hours entirely
+
+**What this does NOT affect**: Inbound replies. If a buyer texts at 3 AM, Jess responds immediately. Quiet hours only apply to **outbound proactive messages**.
+
+**Timezone estimation strategy** (best-effort, two signals):
+
+| Signal | Priority | Reliability | Source |
+|--------|----------|-------------|--------|
+| **Search city/state** | Primary | Good (~90%) | `state.criteria_snapshot["city"]` or `criteria["city"]` — also handles `"location"` key with "city, state" format |
+| **Phone area code** | Fallback | Decent (~80%) | First 3 digits of cleaned phone number |
+| **Default** | Last resort | Safe | `"America/New_York"` (most conservative for early-morning protection) |
+
+**New file**: `services/timezone_utils.py` (~250 lines)
+
+`get_buyer_timezone(state=None, *, phone=None, criteria=None) -> str` — flexible signature that accepts an `SMSConversationState` object (reads `.criteria_snapshot` and `.phone`) OR explicit `phone`/`criteria` kwargs for use from background jobs where only `Buyer.phone` is available.
+
+Contains two lookup dicts:
+- `CITY_TIMEZONE_MAP` — ~60 top US warehouse markets → IANA timezone
+- `AREA_CODE_TIMEZONE_MAP` — ~200 US area codes → IANA timezone
+
+**Change 1: Notification service** — `services/buyer_notification_service.py` (line 304, one-line fix):
+
+Replace `timezone_str = None` with `timezone_str = get_buyer_timezone(state)`. This activates the entire quiet hours system for all outbound notifications that flow through `_send_if_allowed()`: stall nudges, re-engagement, tour confirmations, escalation answers, new match alerts.
+
+**Change 2: Tour + post-tour reminders → move to 15-min SMS tick**
+
+Cloud Scheduler runs `send_tour_reminders()` once daily at 6 AM ET. That's quiet hours for **every US timezone** (6 AM ET = 3 AM PT). With a continue-on-quiet-hours approach, the next run is tomorrow at 6 AM — also quiet hours. Tour reminders would **never send**.
+
+Fix: Move tour and post-tour reminder logic into `SMSScheduler.tick()` which runs every 15 minutes. A Pacific buyer skipped at 6 AM ET (3 AM local) gets retried at 6:15, 6:30, etc. First successful delivery at 12:00 PM ET = 9 AM PT. Tour reminder still arrives day-before, just later in the day.
+
+Files:
+- `services/sms_scheduler.py` — Add two new steps to `tick()`: call `send_tour_reminders(self.db)` and `send_post_tour_followup(self.db)` in try/except blocks
+- `services/background_jobs.py` — Add quiet hours gate inside both functions:
+  - Add `.options(selectinload(Engagement.buyer))` to each query (async SQLAlchemy raises `MissingGreenlet` on lazy relationship access)
+  - Inside the `for eng` loop, before `_log_event`: check `SMSService.check_quiet_hours(get_buyer_timezone(phone=eng.buyer.phone))` → `continue` if quiet
+  - Both jobs use existing idempotency guards (check if `REMINDER_SENT` event already logged today) so running every 15 min is safe — no double-reminders
+
+Cloud Scheduler endpoints (`/tour-reminders`, `/post-tour-followup`) remain functional as manual triggers but are no longer the primary delivery mechanism.
+
+**Change 3: Payment reminders → shift Cloud Scheduler to 12 PM ET**
+
+Payment reminders run daily at 9 AM ET = 6 AM PT. West Coast buyers hit quiet hours.
+
+Fix: Change Cloud Scheduler cron from `0 9 * * *` to `0 12 * * *` (12 PM ET = 9 AM PT). Safe for all US timezones. Payment due dates aren't time-sensitive to the hour.
+
+- `services/background_jobs.py` — Add quiet hours gate inside `send_payment_reminders()` as defense-in-depth. Uses `.options(selectinload(PaymentRecord.engagement).selectinload(Engagement.buyer))` for the double-hop relationship loading.
+- Cloud Scheduler change (manual, not code): Update `/payment-reminders` cron from `0 9 * * *` to `0 12 * * *` (America/New_York)
+
+All three jobs need imports added at top of `background_jobs.py`:
+```python
+from sqlalchemy.orm import selectinload
+from wex_platform.services.timezone_utils import get_buyer_timezone
+from wex_platform.services.sms_service import SMSService
+```
+
+**Files to modify**:
+- **New file**: `services/timezone_utils.py` — `get_buyer_timezone()` + city/area code maps (~250 lines)
+- `services/buyer_notification_service.py` — Replace `timezone_str = None` with `timezone_str = get_buyer_timezone(state)` (1 line + 1 import)
+- `services/background_jobs.py` — Add quiet hours gate in 3 jobs (3 blocks of ~4 lines each + selectinload + 3 imports)
+- `services/sms_scheduler.py` — Add tour reminder + post-tour follow-up to 15-min tick (2 try/except blocks)
+- Cloud Scheduler cron change for payment reminders (manual)
+
+**Effort**: ~3h SMS + 0h Voice = 3h total (voice doesn't send proactive outbound)
+
+**Verification**:
+- Buyer with search city "Los Angeles" → nudge respects Pacific quiet hours (skip 9 PM–9 AM PT)
+- Buyer with 212 area code and no city → uses Eastern timezone
+- Buyer with no city and unrecognized area code → defaults to Eastern
+- Tour reminder at 6 AM ET for Pacific buyer → skipped, retries every 15 min, fires at 12 PM ET (9 AM PT)
+- Post-tour follow-up for Mountain buyer → same 15-min retry pattern
+- Payment reminder at 12 PM ET → safe for all US timezones (defense-in-depth gate also present)
+- Inbound SMS reply at 3 AM → Jess still responds immediately (regression — quiet hours only in `_send_if_allowed`, not in inbound `process_message`)
+- Normal daytime nudge → sends normally (no regression)
+- Tour/post-tour idempotency → running every 15 min doesn't produce duplicate events
+
 ---
 
 ## Additional UX Enhancements (Woven Into Waves Above)
@@ -498,8 +581,9 @@ These aren't separate items but principles applied throughout:
 | 4.1 Result Rejection + Outlier Filter | 4 | 3h | 0.5h | 3.5h |
 | 5.1 Voice Data Leakage Prevention | 5 | 0h | 2h | 2h |
 | 5.2 Cross-Channel Enumeration Prevention | 5 | 2h | 1.5h | 3.5h |
+| 5.3 Timezone-Aware Quiet Hours | 5 | 3h | 0h | 3h |
 
-**Wave 1 Total**: ~14h | **Wave 2 Total**: ~7.5h | **Wave 3 Total**: ~25.5h | **Wave 4 Total**: ~3.5h | **Wave 5 Total**: ~5.5h
+**Wave 1 Total**: ~14h | **Wave 2 Total**: ~7.5h | **Wave 3 Total**: ~25.5h | **Wave 4 Total**: ~3.5h | **Wave 5 Total**: ~8.5h
 
 ---
 
@@ -510,6 +594,7 @@ These aren't separate items but principles applied throughout:
 | 1 | `send_callback_request_email()` in existing `email_service.py` | Team notification for callbacks (no new file) |
 | 3 | `services/waitlist_service.py` | **Shared service** — both SMS and Voice use same enrollment logic |
 | 3 | `BuyerWaitlist` model in `sms_models.py` | Waitlist entries. Includes `channel` column (`"sms"` / `"voice"`) for context-aware notifications |
+| 5 | `services/timezone_utils.py` | `get_buyer_timezone()` — city map + area code map for quiet hours (~60 lines) |
 
 All other changes are modifications to existing files. No new API credentials, templates, or external services needed.
 
@@ -552,6 +637,9 @@ After each wave:
 
 | File | Changes |
 |------|---------|
+| `services/buyer_notification_service.py` | Wave 5.3 — wire `get_buyer_timezone()` into `_send_if_allowed()` quiet hours check |
+| `services/background_jobs.py` | Wave 5.3 — quiet hours gate + selectinload in tour reminders, post-tour follow-ups, payment reminders |
+| `services/sms_scheduler.py` | Wave 5.3 — tour + post-tour reminders moved to 15-min tick |
 | `services/buyer_sms_orchestrator.py` | Every wave — new intent handlers, photo attachment, budget conversion, returning caller, multi-search |
 | `agents/sms/criteria_agent.py` | Every wave — new intents (faq, engagement_status, supplier_inquiry, human_escalation, comparison, callback_request, lease_modification) |
 | `agents/sms/message_interpreter.py` | Wave 1-3 — new regex patterns (budget, supplier, frustration, landmarks, callbacks, photos) |

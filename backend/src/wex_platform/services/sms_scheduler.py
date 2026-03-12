@@ -54,6 +54,24 @@ class SMSScheduler:
             logger.error("check_escalation_sla failed: %s", e)
             results["sla_error"] = str(e)
 
+        # 5. Check tour reminders (timezone-aware, runs every tick)
+        try:
+            from wex_platform.services.background_jobs import send_tour_reminders
+            tour_reminders = await send_tour_reminders(self.db)
+            results["tour_reminders"] = tour_reminders
+        except Exception as e:
+            logger.error("send_tour_reminders failed: %s", e)
+            results["tour_reminders_error"] = str(e)
+
+        # 6. Check post-tour follow-ups (timezone-aware, runs every tick)
+        try:
+            from wex_platform.services.background_jobs import send_post_tour_followup
+            post_tour = await send_post_tour_followup(self.db)
+            results["post_tour_followups"] = post_tour
+        except Exception as e:
+            logger.error("send_post_tour_followup failed: %s", e)
+            results["post_tour_error"] = str(e)
+
         await self.db.commit()
 
         return results

@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from wex_platform.domain.enums import (
     EngagementActor,
@@ -32,6 +33,8 @@ from wex_platform.services.engagement_state_machine import (
     InvalidTransitionError,
     TERMINAL_STATES,
 )
+from wex_platform.services.timezone_utils import get_buyer_timezone
+from wex_platform.services.sms_service import SMSService
 
 logger = logging.getLogger(__name__)
 state_machine = EngagementStateMachine()
@@ -203,7 +206,7 @@ async def send_tour_reminders(db: AsyncSession) -> int:
     tomorrow_end = tomorrow_start + timedelta(days=1)
 
     result = await db.execute(
-        select(Engagement).where(
+        select(Engagement).options(selectinload(Engagement.buyer)).where(
             and_(
                 Engagement.status.in_([
                     EngagementStatus.TOUR_CONFIRMED.value,
@@ -232,6 +235,12 @@ async def send_tour_reminders(db: AsyncSession) -> int:
         if existing.scalar_one_or_none():
             continue
 
+        # Quiet hours gate — skip, tick retries in 15 min
+        if eng.buyer and eng.buyer.phone:
+            tz = get_buyer_timezone(phone=eng.buyer.phone)
+            if SMSService.check_quiet_hours(tz):
+                continue
+
         await _log_event(
             db, eng.id,
             EngagementEventType.REMINDER_SENT,
@@ -259,7 +268,7 @@ async def send_post_tour_followup(db: AsyncSession) -> int:
     cutoff = now - timedelta(hours=24)
 
     result = await db.execute(
-        select(Engagement).where(
+        select(Engagement).options(selectinload(Engagement.buyer)).where(
             and_(
                 Engagement.status == EngagementStatus.TOUR_COMPLETED.value,
                 Engagement.tour_completed_at.isnot(None),
@@ -283,6 +292,12 @@ async def send_post_tour_followup(db: AsyncSession) -> int:
         )
         if existing.scalar_one_or_none():
             continue
+
+        # Quiet hours gate — skip, tick retries in 15 min
+        if eng.buyer and eng.buyer.phone:
+            tz = get_buyer_timezone(phone=eng.buyer.phone)
+            if SMSService.check_quiet_hours(tz):
+                continue
 
         await _log_event(
             db, eng.id,
@@ -485,7 +500,9 @@ async def send_payment_reminders(db: AsyncSession) -> int:
     today = date.today()
 
     result = await db.execute(
-        select(PaymentRecord).where(
+        select(PaymentRecord).options(
+            selectinload(PaymentRecord.engagement).selectinload(Engagement.buyer)
+        ).where(
             and_(
                 PaymentRecord.buyer_status == "invoiced",
                 PaymentRecord.period_start <= today + timedelta(days=3),
@@ -509,6 +526,12 @@ async def send_payment_reminders(db: AsyncSession) -> int:
         )
         if existing.scalar_one_or_none():
             continue
+
+        # Quiet hours defense-in-depth
+        if p.engagement and p.engagement.buyer and p.engagement.buyer.phone:
+            tz = get_buyer_timezone(phone=p.engagement.buyer.phone)
+            if SMSService.check_quiet_hours(tz):
+                continue
 
         await _log_event(
             db, p.engagement_id,
