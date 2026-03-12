@@ -130,33 +130,40 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
                 if sms_state.renter_last_name:
                     buyer_name = f"{sms_state.renter_first_name} {sms_state.renter_last_name}"
 
-    # Create VoiceCallState for this call
-    call_state = VoiceCallState(
-        id=str(uuid.uuid4()),
-        vapi_call_id=vapi_call_id,
-        caller_phone=caller_phone,
-        verified_phone=caller_phone,  # Default to caller ID; updated if they give alternate
-        call_started_at=datetime.now(timezone.utc),
+    # Check if VoiceCallState already exists (Vapi may retry assistant-request)
+    existing = await db.execute(
+        select(VoiceCallState).where(VoiceCallState.vapi_call_id == vapi_call_id)
     )
+    call_state = existing.scalar_one_or_none()
 
-    # Seed cross-channel fields from SMS state when available.
-    # VoiceCallState is seeded once here and updated independently for the call.
-    # SMSConversationState is NEVER written to by voice handlers — channels are independent.
-    if sms_context:
-        call_state.buyer_id = buyer_id
-        call_state.conversation_id = sms_context["conversation_id"]
-        call_state.buyer_need_id = sms_context["buyer_need_id"]
-        call_state.known_answers = sms_context["known_answers"]
-        call_state.answered_questions = sms_context["answered_questions"]
-        call_state.presented_match_ids = sms_context["presented_match_ids"]
-        call_state.buyer_name = buyer_name
+    if call_state is None:
+        # Create VoiceCallState for this call
+        call_state = VoiceCallState(
+            id=str(uuid.uuid4()),
+            vapi_call_id=vapi_call_id,
+            caller_phone=caller_phone,
+            verified_phone=caller_phone,
+            call_started_at=datetime.now(timezone.utc),
+        )
 
-        sms_summaries = sms_context["criteria_snapshot"].get("match_summaries")
-        if sms_summaries:
-            call_state.match_summaries = _build_voice_summaries_from_sms(sms_summaries)
+        # Seed cross-channel fields from SMS state when available.
+        # VoiceCallState is seeded once here and updated independently for the call.
+        # SMSConversationState is NEVER written to by voice handlers — channels are independent.
+        if sms_context:
+            call_state.buyer_id = buyer_id
+            call_state.conversation_id = sms_context["conversation_id"]
+            call_state.buyer_need_id = sms_context["buyer_need_id"]
+            call_state.known_answers = sms_context["known_answers"]
+            call_state.answered_questions = sms_context["answered_questions"]
+            call_state.presented_match_ids = sms_context["presented_match_ids"]
+            call_state.buyer_name = buyer_name
 
-    db.add(call_state)
-    await db.commit()
+            sms_summaries = sms_context["criteria_snapshot"].get("match_summaries")
+            if sms_summaries:
+                call_state.match_summaries = _build_voice_summaries_from_sms(sms_summaries)
+
+        db.add(call_state)
+        await db.commit()
 
     # Return assistantId + assistantOverrides (dynamic system prompt + firstMessage per caller).
     # This pattern responds fast (no heavy inline config) while injecting per-call context.
