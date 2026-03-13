@@ -107,7 +107,7 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
         "assistant": {
             "model": {
                 "provider": "google",
-                "model": "gemini-2.0-flash",
+                "model": "gemini-3-flash-preview",
                 "messages": [
                     {"role": "system", "content": _build_system_prompt(sms_context=sms_context)}
                 ],
