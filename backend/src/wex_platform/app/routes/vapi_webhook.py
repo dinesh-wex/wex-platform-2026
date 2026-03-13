@@ -219,13 +219,26 @@ async def _handle_tool_calls(message: dict, db: AsyncSession) -> JSONResponse:
     call_state = result.scalar_one_or_none()
 
     if not call_state:
-        logger.error("No VoiceCallState for call_id=%s", vapi_call_id)
-        return JSONResponse({
-            "results": [
-                {"toolCallId": tc.get("id", ""), "result": "System error, please try again."}
-                for tc in message.get("toolCallList", [])
-            ]
-        })
+        # Static assistant bypasses assistant-request, so VoiceCallState may not exist yet.
+        # Create it now from the tool-call payload so tools can proceed normally.
+        logger.warning("No VoiceCallState for call_id=%s — creating on first tool call", vapi_call_id)
+        caller_phone = call.get("customer", {}).get("number", "")
+        call_state = VoiceCallState(
+            id=str(uuid.uuid4()),
+            vapi_call_id=vapi_call_id,
+            caller_phone=caller_phone,
+            verified_phone=caller_phone,
+            call_started_at=datetime.now(timezone.utc),
+        )
+        # Seed buyer info if available
+        if caller_phone:
+            buyer_result = await db.execute(select(Buyer).where(Buyer.phone == caller_phone))
+            buyer = buyer_result.scalar_one_or_none()
+            if buyer:
+                call_state.buyer_id = buyer.id
+                call_state.buyer_name = buyer.name
+        db.add(call_state)
+        await db.commit()
 
     # Extract conversation transcript from Vapi message so tool handlers
     # can access the buyer's actual question (not just topic slugs).
