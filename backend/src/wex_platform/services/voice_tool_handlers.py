@@ -278,6 +278,8 @@ class VoiceToolHandlers:
                     "city": wh.get("city", ""),
                     "state": wh.get("state", ""),
                     "address": wh.get("address", ""),
+                    "available_sqft": tc.get("max_sqft"),
+                    "building_size_sqft": wh.get("building_size_sqft"),
                     "buyer_rate": rate,
                     "monthly_cost": round(rate * alloc_sqft, 2),
                     "term_months": req_term,
