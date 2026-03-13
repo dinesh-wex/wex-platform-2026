@@ -8,7 +8,7 @@ from wex_platform.app.config import get_settings
 logger = logging.getLogger(__name__)
 
 # ElevenLabs default voice (warm, professional)
-DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # "Rachel" - calm professional female
+DEFAULT_VOICE_ID = "RNnkVeW25AwKYxZgnHBH"  # ElevenLabs custom voice
 
 
 def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms_context: dict | None = None) -> dict:
