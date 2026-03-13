@@ -11,7 +11,7 @@ Complete reference for the WEx Platform's automated buyer communication system. 
 3. [Voice Pipeline Architecture](#voice-pipeline-architecture)
 4. [Cross-Channel Integration](#cross-channel-integration)
 5. [Conversation Phases & State Machine](#conversation-phases--state-machine)
-6. [Intent Classification (17 Intents)](#intent-classification-17-intents)
+6. [Intent Classification (19 Intents)](#intent-classification-19-intents)
 7. [Search & Matching](#search--matching)
 8. [Proactive Notifications & Background Jobs](#proactive-notifications--background-jobs)
 9. [Security Hardening](#security-hardening)
@@ -81,13 +81,14 @@ Stage 1: GATEKEEPER (regex)
 Stage 2: MESSAGE INTERPRETER (regex, no LLM)
     |- Extract: cities, sqft, features, budget, urgency,
     |  frustration, callback requests, landmarks, addresses,
-    |  supplier content signals, positional refs ("option 2")
+    |  supplier content signals, positional refs ("option 2"),
+    |  link requests ("send me the link")
     |- Output: MessageInterpretation dataclass
     |
 Stage 3: CRITERIA AGENT (LLM - Gemini 3 Flash)
     |- Input: MessageInterpretation + conversation history + phase
     |- Output: CriteriaPlan (intent, action, criteria, response_hint)
-    |- 17 possible intents, 7 possible actions
+    |- 19 possible intents, 7 possible actions
     |- Confidence score 0.0-1.0
     |
 Stage 4: TOOL EXECUTION (orchestrator logic)
@@ -120,14 +121,14 @@ OUTBOUND SMS (Aircall send)
 | # | Agent | Type | Purpose |
 |---|-------|------|---------|
 | 1 | **Gatekeeper** | Regex | Validates inbound (spam check) and outbound (no addresses, no PII, max 3 options) |
-| 2 | **MessageInterpreter** | Regex | Extracts structured data: cities, sqft, features, budget, frustration, landmarks, etc. 100+ regex patterns |
-| 3 | **CriteriaAgent** | LLM | Intent classification + action planning. 17 intents, uses conversation history for context |
-| 4 | **ResponseAgent** | LLM | Generates natural SMS reply within tone/length guidelines. Phase-aware, intent-specific guidelines |
+| 2 | **MessageInterpreter** | Regex | Extracts structured data: cities, sqft, features, budget, frustration, landmarks, link requests, etc. 100+ regex patterns |
+| 3 | **CriteriaAgent** | LLM | Intent classification + action planning. 19 intents, uses conversation history for context |
+| 4 | **ResponseAgent** | LLM | Generates natural SMS reply within tone/length guidelines. Phase-aware, intent-specific guidelines. Greeting fast-path gated by `is_first_message` to prevent mid-conversation resets |
 | 5 | **Polisher** | LLM | Enforces character limits while preserving meaning. Only runs if response exceeds max length |
 
 ### Fallback Templates
 
-If the Gatekeeper rejects the ResponseAgent's output 3 times, the system falls back to hardcoded templates. 34 templates cover every intent: `greeting`, `new_search`, `matches_found`, `faq`, `human_escalation`, `reject_results`, `waitlist_offer`, `callback_request`, `lease_modification`, `comparison`, etc.
+If the Gatekeeper rejects the ResponseAgent's output 3 times, the system falls back to hardcoded templates. Templates cover every intent: `greeting`, `new_search`, `matches_found`, `faq`, `human_escalation`, `reject_results`, `waitlist_offer`, `callback_request`, `lease_modification`, `comparison`, `acknowledgment`, `send_link`, etc.
 
 ---
 
@@ -285,9 +286,9 @@ Search only triggers when readiness >= 0.8:
 
 ---
 
-## Intent Classification (17 Intents)
+## Intent Classification (19 Intents)
 
-The CriteriaAgent classifies every inbound message into one of 17 intents:
+The CriteriaAgent classifies every inbound message into one of 19 intents:
 
 | Intent | Description | Phase Impact |
 |--------|-------------|-------------|
@@ -299,7 +300,9 @@ The CriteriaAgent classifies every inbound message into one of 17 intents:
 | `tour_request` | "Can I see it?" / "Schedule a tour" | → TOUR_SCHEDULING |
 | `commitment` | "I want it" / "Let's book" | → COLLECTING_INFO → COMMITMENT |
 | `provide_info` | Buyer provides name, email, or other requested info | Updates state |
-| `greeting` | "Hi" / "Hello" / social opener | Stay in phase |
+| `greeting` | "Hi" / "Hello" — first-contact or re-introduction only | Stay in phase (fast-path greeting only on first message) |
+| `acknowledgment` | "Thanks" / "Ok cool" / "Got it" — mid-conversation acknowledgment | Stay in phase, phase-aware warm response |
+| `send_link` | "Send me the link" / "Can I get the URL" — buyer wants the browse link | Generate options URL from `search_session_token` |
 | `faq` | "Is this free?" / "How does it work?" / "Are you a broker?" | Answer from FAQ knowledge |
 | `engagement_status` | "What happened with my booking?" | Look up engagement status |
 | `human_escalation` | "Let me talk to a person" / frustration signals | Offer human callback, email team |
@@ -551,8 +554,8 @@ Tracks unanswered property questions with 24h SLA:
 | File | Purpose |
 |------|---------|
 | `app/routes/buyer_sms.py` | Aircall webhook entry point. TCPA handling, dedup, state creation, background task dispatch |
-| `agents/sms/message_interpreter.py` | Regex-based extraction: cities, sqft, features, budget, frustration, landmarks (100+ patterns) |
-| `agents/sms/criteria_agent.py` | LLM intent classification (17 intents) + action planning via Gemini 3 Flash |
+| `agents/sms/message_interpreter.py` | Regex-based extraction: cities, sqft, features, budget, frustration, landmarks, link requests (100+ patterns) |
+| `agents/sms/criteria_agent.py` | LLM intent classification (19 intents) + action planning via Gemini 3 Flash |
 | `agents/sms/response_agent.py` | LLM response generation with phase-aware, intent-specific tone guidelines |
 | `agents/sms/contracts.py` | Typed dataclasses: MessageInterpretation, CriteriaPlan, OrchestratorResult |
 | `agents/sms/fallback_templates.py` | 34 hardcoded fallback templates for when LLM fails validation |

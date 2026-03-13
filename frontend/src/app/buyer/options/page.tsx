@@ -1587,11 +1587,11 @@ function OptionsContent() {
       const rawDeal = result?.deal || {};
       const deal = {
         id: result?.engagement_id || rawDeal.id || result?.deal_id || `deal-${matchId}`,
-        warehouse_id: rawDeal.warehouse_id || option?.warehouse_id || "",
-        sqft_allocated: rawDeal.sqft_allocated || option?.property.available_sqft || 0,
-        rate_per_sqft: rawDeal.rate_per_sqft || option?.pricing.rate_sqft || 0,
-        monthly_payment: rawDeal.monthly_payment || option?.pricing.monthly_total || 0,
-        term_months: rawDeal.term_months || option?.pricing.term_months || 6,
+        warehouse_id: option?.warehouse_id || rawDeal.warehouse_id || "",
+        sqft_allocated: option?.property.available_sqft || rawDeal.sqft_allocated || 0,
+        rate_per_sqft: option?.pricing.rate_sqft || rawDeal.rate_per_sqft || 0,
+        monthly_payment: option?.pricing.monthly_total || rawDeal.monthly_payment || 0,
+        term_months: option?.pricing.term_months || rawDeal.term_months || 6,
         guarantee_signed_at: rawDeal.guarantee_signed_at || null,
         status: rawDeal.status || "terms_accepted",
       };

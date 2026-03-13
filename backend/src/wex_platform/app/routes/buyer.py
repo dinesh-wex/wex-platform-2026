@@ -760,9 +760,11 @@ async def accept_match(
         },
     )
 
-    # Determine sqft (use need's max_sqft or warehouse's max_sqft)
-    sqft = need.max_sqft or tc.max_sqft
-    term_months = need.duration_months or tc.min_term_months or 1
+    # Use buyer's requested size, capped at property's available sqft
+    prop_sqft = tc.max_sqft or 0
+    req_sqft = need.size_sqft or need.max_sqft or 0
+    sqft = min(req_sqft, prop_sqft) if (req_sqft and prop_sqft) else (req_sqft or prop_sqft)
+    term_months = need.duration_months or 6
     start_date = need.needed_from or now
 
     # Determine initial status based on deal type
