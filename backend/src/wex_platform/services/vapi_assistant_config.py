@@ -106,8 +106,8 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
     return {
         "assistant": {
             "model": {
-                "provider": "groq",
-                "model": "llama-3.1-8b-instant",
+                "provider": "google",
+                "model": "gemini-2.0-flash",
                 "messages": [
                     {"role": "system", "content": _build_system_prompt(sms_context=sms_context)}
                 ],
@@ -115,8 +115,11 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
                 "temperature": 0.7,
             },
             "voice": {
-                "provider": voice_provider,
-                "voiceId": voice_id,
+                "provider": "11labs",
+                "voiceId": "21m00Tcm4TlvDq8ikWAM",
+                "model": "eleven_turbo_v2_5",
+                "stability": 0.5,
+                "similarityBoost": 0.75,
             },
             "firstMessage": first_message,
             "server": {
