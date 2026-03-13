@@ -130,43 +130,35 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
                 if sms_state.renter_last_name:
                     buyer_name = f"{sms_state.renter_first_name} {sms_state.renter_last_name}"
 
-    # Check if VoiceCallState already exists (Vapi may retry assistant-request)
-    existing = await db.execute(
-        select(VoiceCallState).where(VoiceCallState.vapi_call_id == vapi_call_id)
+    # Create VoiceCallState for this call
+    call_state = VoiceCallState(
+        id=str(uuid.uuid4()),
+        vapi_call_id=vapi_call_id,
+        caller_phone=caller_phone,
+        verified_phone=caller_phone,  # Default to caller ID; updated if they give alternate
+        call_started_at=datetime.now(timezone.utc),
     )
-    call_state = existing.scalar_one_or_none()
 
-    if call_state is None:
-        # Create VoiceCallState for this call
-        call_state = VoiceCallState(
-            id=str(uuid.uuid4()),
-            vapi_call_id=vapi_call_id,
-            caller_phone=caller_phone,
-            verified_phone=caller_phone,
-            call_started_at=datetime.now(timezone.utc),
-        )
+    # Seed cross-channel fields from SMS state when available.
+    # VoiceCallState is seeded once here and updated independently for the call.
+    # SMSConversationState is NEVER written to by voice handlers — channels are independent.
+    if sms_context:
+        call_state.buyer_id = buyer_id
+        call_state.conversation_id = sms_context["conversation_id"]
+        call_state.buyer_need_id = sms_context["buyer_need_id"]
+        call_state.known_answers = sms_context["known_answers"]
+        call_state.answered_questions = sms_context["answered_questions"]
+        call_state.presented_match_ids = sms_context["presented_match_ids"]
+        call_state.buyer_name = buyer_name
 
-        # Seed cross-channel fields from SMS state when available.
-        # VoiceCallState is seeded once here and updated independently for the call.
-        # SMSConversationState is NEVER written to by voice handlers — channels are independent.
-        if sms_context:
-            call_state.buyer_id = buyer_id
-            call_state.conversation_id = sms_context["conversation_id"]
-            call_state.buyer_need_id = sms_context["buyer_need_id"]
-            call_state.known_answers = sms_context["known_answers"]
-            call_state.answered_questions = sms_context["answered_questions"]
-            call_state.presented_match_ids = sms_context["presented_match_ids"]
-            call_state.buyer_name = buyer_name
+        sms_summaries = sms_context["criteria_snapshot"].get("match_summaries")
+        if sms_summaries:
+            call_state.match_summaries = _build_voice_summaries_from_sms(sms_summaries)
 
-            sms_summaries = sms_context["criteria_snapshot"].get("match_summaries")
-            if sms_summaries:
-                call_state.match_summaries = _build_voice_summaries_from_sms(sms_summaries)
+    db.add(call_state)
+    await db.commit()
 
-        db.add(call_state)
-        await db.commit()
-
-    # Return full inline assistant config so Vapi creates a dynamic assistant per call.
-    # No static assistantId — phone number uses server.url + assistant-request webhook.
+    # Build and return assistant config
     try:
         from wex_platform.services.vapi_assistant_config import build_assistant_config
         config = build_assistant_config(
@@ -174,29 +166,9 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
             buyer_name=buyer_name,
             sms_context=sms_context,
         )
-        logger.info(
-            "assistant-request: returning inline assistant config for call_id=%s caller=%s prompt_len=%d",
-            vapi_call_id, caller_phone,
-            len(config.get("assistant", {}).get("model", {}).get("messages", [{}])[0].get("content", "")),
-        )
-    except Exception:
-        logger.exception("assistant-request: build_assistant_config failed, returning minimal fallback")
-        config = {
-            "assistant": {
-                "model": {
-                    "provider": "groq",
-                    "model": "llama-3.1-8b-instant",
-                    "messages": [{"role": "system", "content": "You are Jess, a warehouse broker at Warehouse Exchange. Help callers find warehouse space."}],
-                    "temperature": 0.7,
-                },
-                "voice": {"provider": "openai", "voiceId": "nova"},
-                "firstMessage": "Hey, thanks for calling Warehouse Exchange, this is Jess. Who am I speaking with?",
-                "endCallFunctionEnabled": True,
-                "recordingEnabled": True,
-                "silenceTimeoutSeconds": 30,
-                "maxDurationSeconds": 600,
-            }
-        }
+    except ImportError:
+        logger.warning("vapi_assistant_config not available yet, returning minimal config")
+        config = _fallback_assistant_config(caller_phone, buyer_name)
 
     return JSONResponse(config)
 
@@ -224,26 +196,13 @@ async def _handle_tool_calls(message: dict, db: AsyncSession) -> JSONResponse:
     call_state = result.scalar_one_or_none()
 
     if not call_state:
-        # Static assistant bypasses assistant-request, so VoiceCallState may not exist yet.
-        # Create it now from the tool-call payload so tools can proceed normally.
-        logger.warning("No VoiceCallState for call_id=%s — creating on first tool call", vapi_call_id)
-        caller_phone = call.get("customer", {}).get("number", "")
-        call_state = VoiceCallState(
-            id=str(uuid.uuid4()),
-            vapi_call_id=vapi_call_id,
-            caller_phone=caller_phone,
-            verified_phone=caller_phone,
-            call_started_at=datetime.now(timezone.utc),
-        )
-        # Seed buyer info if available
-        if caller_phone:
-            buyer_result = await db.execute(select(Buyer).where(Buyer.phone == caller_phone))
-            buyer = buyer_result.scalar_one_or_none()
-            if buyer:
-                call_state.buyer_id = buyer.id
-                call_state.buyer_name = buyer.name
-        db.add(call_state)
-        await db.commit()
+        logger.error("No VoiceCallState for call_id=%s", vapi_call_id)
+        return JSONResponse({
+            "results": [
+                {"toolCallId": tc.get("id", ""), "result": "System error, please try again."}
+                for tc in message.get("toolCallList", [])
+            ]
+        })
 
     # Extract conversation transcript from Vapi message so tool handlers
     # can access the buyer's actual question (not just topic slugs).
@@ -407,15 +366,6 @@ async def _handle_end_of_call(message: dict, db: AsyncSession) -> JSONResponse:
         sms_text = f"{name_prefix}it's Jess from Warehouse Exchange. Here's the link to complete your warehouse booking: {link}"
         await _send_follow_up_sms(sms_phone, sms_text, call_state)
 
-    elif sms_phone and not call_state.sms_sent:
-        # Fallback SMS — no search or booking happened, but still send a follow-up
-        sms_text = (
-            f"{name_prefix}it's Jess from Warehouse Exchange. "
-            "Thanks for calling! If you're looking for warehouse or industrial space, "
-            "just reply here and I'll help you find the right fit."
-        )
-        await _send_follow_up_sms(sms_phone, sms_text, call_state)
-
     # Send deferred escalation emails for any questions asked during the call.
     # Voice escalations are batched — emails deferred until call ends so we
     # don't spam ops while the buyer is still talking.
@@ -458,14 +408,8 @@ def _validate_vapi_signature(request: Request, body_bytes: bytes) -> None:
     """Validate Vapi webhook signature (HMAC-SHA256).
 
     Skipped when vapi_server_secret is not configured (local dev).
-    
-    TEMPORARILY DISABLED for debugging - Vapi not calling webhook.
     """
     settings = get_settings()
-    
-    # TEMP: Skip validation to test if signature is the issue
-    logger.warning("Vapi signature validation TEMPORARILY DISABLED for debugging")
-    return
 
     if not settings.vapi_server_secret:
         return  # Skip validation in dev

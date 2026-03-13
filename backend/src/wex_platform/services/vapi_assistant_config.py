@@ -7,12 +7,8 @@ from wex_platform.app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Default voice IDs per provider (warm, professional female voices)
-DEFAULT_VOICE_IDS = {
-    "11labs": "21m00Tcm4TlvDq8ikWAM",  # "Rachel" - calm professional female
-    "playht": "jennifer",               # PlayHT female voice
-    "deepgram": "asteria",               # Deepgram Asteria - professional female (short name)
-}
+# ElevenLabs default voice (warm, professional)
+DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # "Rachel" - calm professional female
 
 
 def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms_context: dict | None = None) -> dict:
@@ -25,8 +21,7 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
     - Call limits
     """
     settings = get_settings()
-    voice_provider = settings.vapi_voice_provider or "11labs"
-    voice_id = settings.vapi_voice_id or DEFAULT_VOICE_IDS.get(voice_provider, "21m00Tcm4TlvDq8ikWAM")
+    voice_id = settings.vapi_voice_id or DEFAULT_VOICE_ID
 
     # Compute time gap for returning callers
     gap_hours = None
@@ -116,10 +111,7 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
             },
             "voice": {
                 "provider": "11labs",
-                "voiceId": "21m00Tcm4TlvDq8ikWAM",
-                "model": "eleven_turbo_v2_5",
-                "stability": 0.5,
-                "similarityBoost": 0.75,
+                "voiceId": voice_id,
             },
             "firstMessage": first_message,
             "server": {
@@ -582,7 +574,6 @@ async def register_vapi_phone_number(server_url: str) -> bool:
         server_config["secret"] = settings.vapi_server_secret
     payload = {
         "server": server_config,
-        "assistantId": None,
     }
 
     try:
