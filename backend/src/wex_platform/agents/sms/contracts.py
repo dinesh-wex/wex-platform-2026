@@ -31,6 +31,7 @@ class MessageInterpretation:
     callback_time: str | None = None
     comparison_requested: bool = False
     landmark_text: str | None = None
+    wants_link: bool = False
 
     def __post_init__(self):
         # Sync sqft <-> min_sqft for backward compatibility.

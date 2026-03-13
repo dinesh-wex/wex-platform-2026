@@ -119,6 +119,8 @@ TEMPLATES = {
     "waitlist_confirmed": (
         "Done, you're on the waitlist! I'll text you as soon as something opens up."
     ),
+    "acknowledgment": "You're welcome! Let me know how you'd like to proceed.",
+    "send_link": "Here's where you can review the options I found for you.",
 }
 
 

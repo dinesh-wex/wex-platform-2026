@@ -37,7 +37,11 @@ Choose exactly one:
 - "tour_request" — wants to see/tour a facility
 - "commitment" — wants to book/commit ("I want that one", "book it", "let's go with this one")
 - "provide_info" — providing name/email during collection phase
-- "greeting" — just saying hi or thanks
+- "greeting" — saying hi to start a conversation (first message or re-introduction)
+- "acknowledgment" — buyer is acknowledging/thanking without starting a new conversation.
+  Examples: "thanks", "ok cool", "got it", "appreciate it", "sounds good"
+- "send_link" — buyer is asking for the browse link / options URL to view properties.
+  Examples: "send me the link", "can I get the URL", "share the options link"
 - "address_lookup" — buyer provided a specific street address to look up
 - "faq" — asking about WEx itself (pricing, how it works, who we are, privacy, legitimacy)
 - "engagement_status" — asking about their booking/lease status ("what happened with my booking", "did the owner accept", "any update", "where's my lease", "is my tour confirmed")
@@ -206,7 +210,7 @@ If the user provides their name anywhere in the message, extract it:
 
 ## REQUIRED JSON SCHEMA
 {{
-  "intent": "new_search|refine_search|reject_results|facility_info|tour_request|commitment|provide_info|greeting|address_lookup|faq|engagement_status|human_escalation|start_fresh|lease_modification|callback_request|comparison|waitlist_confirm|unknown",
+  "intent": "new_search|refine_search|reject_results|facility_info|tour_request|commitment|provide_info|greeting|acknowledgment|send_link|address_lookup|faq|engagement_status|human_escalation|start_fresh|lease_modification|callback_request|comparison|waitlist_confirm|unknown",
   "action": "search|lookup|schedule_tour|commitment_handoff|collect_info|address_lookup" or null,
   "criteria": {{
     "location": "city or area name" or null,

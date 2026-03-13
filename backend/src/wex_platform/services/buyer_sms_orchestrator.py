@@ -546,6 +546,11 @@ class BuyerSMSOrchestrator:
             if interpretation.sqft and not plan.criteria.get("sqft"):
                 plan.criteria["sqft"] = interpretation.sqft
 
+        # == Deterministic override: if interpreter detected link request, trust regex ==
+        if interpretation.wants_link and plan.intent != "send_link":
+            logger.info("Override: interpreter detected link request, overriding intent %s -> send_link", plan.intent)
+            plan.intent = "send_link"
+
         # == 5. Compute criteria readiness ==
         merged_criteria = {**(existing_criteria or {}), **(plan.criteria or {})}
         # Remove None values
@@ -984,6 +989,24 @@ class BuyerSMSOrchestrator:
 
         elif plan.intent == "greeting":
             pass  # Stay in current phase
+
+        elif plan.intent == "acknowledgment":
+            # Phase-aware acknowledgment — don't reset anything
+            if phase == "PRESENTING":
+                plan.response_hint = "You're welcome! Let me know if you want more details on any of those options, or if you'd like to see something different."
+            elif phase == "PROPERTY_FOCUSED":
+                plan.response_hint = "Happy to help! Any other questions about that space, or ready to move forward?"
+            else:
+                plan.response_hint = "You're welcome! What can I help you with?"
+
+        elif plan.intent == "send_link":
+            if state.search_session_token:
+                from wex_platform.app.config import get_settings
+                settings = get_settings()
+                search_link = f"{settings.frontend_url}/buyer/options?session={state.search_session_token}"
+                plan.response_hint = f"Here's the link to review your options: {search_link}"
+            else:
+                plan.response_hint = "I don't have a link ready yet — what city and size are you looking for?"
 
         elif plan.intent == "faq":
             pass  # Stay in current phase, response agent handles it

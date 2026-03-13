@@ -168,6 +168,13 @@ COMPARISON_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Link request detection
+LINK_REQUEST_PATTERN = re.compile(
+    r'\b(?:send|give|share|get)\s+(?:me\s+)?(?:the\s+)?(?:link|url|options?\s*(?:link|page))|'
+    r'\b(?:link|url)\s+(?:please|again|to\s+(?:the|those)\s+(?:options?|facilities|spaces?))',
+    re.IGNORECASE
+)
+
 # Known landmarks for warehouse searches (airport codes + ports)
 KNOWN_LANDMARKS = {
     "lax": "Los Angeles International Airport",
@@ -455,6 +462,11 @@ def interpret_message(text: str) -> MessageInterpretation:
     # Comparison request detection
     # -----------------------------------------------------------------------
     result.comparison_requested = bool(COMPARISON_PATTERN.search(text))
+
+    # -----------------------------------------------------------------------
+    # Link request detection
+    # -----------------------------------------------------------------------
+    result.wants_link = bool(LINK_REQUEST_PATTERN.search(text))
 
     # -----------------------------------------------------------------------
     # Landmark detection

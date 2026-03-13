@@ -35,8 +35,8 @@ class ResponseAgent(BaseAgent):
         renter_name: str | None = None,
     ) -> str:
         """Generate a contextual SMS reply."""
-        # Deterministic greeting fast-path
-        if intent == "greeting":
+        # Deterministic greeting fast-path (only on first message — mid-conversation "greeting" falls through to LLM)
+        if intent == "greeting" and is_first_message:
             return "Hey, this is Jess from Warehouse Exchange. What city are you looking in and how much space do you need?"
 
         # Messages with links get the first-message limit (800) since URLs are long
@@ -212,6 +212,8 @@ class ResponseAgent(BaseAgent):
             f"- lease_modification: Acknowledge their request, say you'll connect them with the team.\n"
             f"- comparison: Compare presented options side-by-side. Be concise: 'Option 1 has X, Option 2 has Y.'\n"
             f"- reject_results: NEVER re-present the same options. Ask what didn't work. Offer specific dimensions: price, location, size, features.\n"
+            f"- acknowledgment: Acknowledge warmly based on phase. PRESENTING: 'Let me know if you want details on any of those.' PROPERTY_FOCUSED: 'Any other questions about that space?'\n"
+            f"- send_link: Share the link from the response hint naturally.\n"
             f"- unknown/other: Ask what kind of space they need (city, size, use)\n\n"
 
             # --- FRUSTRATION AWARENESS ---
