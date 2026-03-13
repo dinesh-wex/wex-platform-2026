@@ -165,33 +165,38 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
         db.add(call_state)
         await db.commit()
 
-    # Return assistantId + assistantOverrides (dynamic system prompt + firstMessage per caller).
-    # This pattern responds fast (no heavy inline config) while injecting per-call context.
-    # The static assistant (ee1c27db) holds tools, voice, model, and server URL.
+    # Return full inline assistant config so Vapi creates a dynamic assistant per call.
+    # No static assistantId — phone number uses server.url + assistant-request webhook.
     try:
-        from wex_platform.services.vapi_assistant_config import (
-            build_assistant_config,
-            _build_system_prompt,
-        )
-        # Build only the dynamic parts — system prompt and firstMessage
-        overrides_config = build_assistant_config(
+        from wex_platform.services.vapi_assistant_config import build_assistant_config
+        config = build_assistant_config(
             caller_phone=caller_phone,
             buyer_name=buyer_name,
             sms_context=sms_context,
         )
-        inner = overrides_config.get("assistant", {})
-        config = {
-            "assistantId": "ee1c27db-c3a5-49cc-8e36-12a1c644b482",
-            "assistantOverrides": {
-                "firstMessage": inner.get("firstMessage", "Hey, thanks for calling Warehouse Exchange, this is Jess. Who am I speaking with?"),
-                "model": {
-                    "messages": inner.get("model", {}).get("messages", []),
-                },
-            },
-        }
+        logger.info(
+            "assistant-request: returning inline assistant config for call_id=%s caller=%s prompt_len=%d",
+            vapi_call_id, caller_phone,
+            len(config.get("assistant", {}).get("model", {}).get("messages", [{}])[0].get("content", "")),
+        )
     except Exception:
-        logger.warning("vapi_assistant_config unavailable, returning assistantId only", exc_info=True)
-        config = {"assistantId": "ee1c27db-c3a5-49cc-8e36-12a1c644b482"}
+        logger.exception("assistant-request: build_assistant_config failed, returning minimal fallback")
+        config = {
+            "assistant": {
+                "model": {
+                    "provider": "groq",
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [{"role": "system", "content": "You are Jess, a warehouse broker at Warehouse Exchange. Help callers find warehouse space."}],
+                    "temperature": 0.7,
+                },
+                "voice": {"provider": "openai", "voiceId": "nova"},
+                "firstMessage": "Hey, thanks for calling Warehouse Exchange, this is Jess. Who am I speaking with?",
+                "endCallFunctionEnabled": True,
+                "recordingEnabled": True,
+                "silenceTimeoutSeconds": 30,
+                "maxDurationSeconds": 600,
+            }
+        }
 
     return JSONResponse(config)
 
