@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     vapi_api_key: str = ""
     vapi_server_secret: str = ""
     vapi_phone_number_id: str = ""
-    vapi_voice_id: str = "kdmDKE6EkgrWrrykO9Qt"  # ElevenLabs voice
+    vapi_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # ElevenLabs voice
     vapi_voice_provider: str = "11labs"  # ElevenLabs
 
     # Groq (used by Vapi assistant for ultra-low latency LLM)
