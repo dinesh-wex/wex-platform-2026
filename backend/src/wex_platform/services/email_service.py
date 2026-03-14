@@ -551,7 +551,7 @@ def _build_human_escalation_html(data: dict) -> str:
     for msg in recent[-5:]:
         role = msg.get("role", "?")
         content = msg.get("content", "")
-        prefix = "Buyer" if role in ("buyer", "user") else "Jess"
+        prefix = "Buyer" if role in ("buyer", "user") else "Robin"
         conversation_rows += f"<p style='margin: 4px 0; font-size: 13px;'><strong>{prefix}:</strong> {content}</p>"
 
     return f"""
@@ -622,7 +622,7 @@ def _build_callback_request_html(data: dict) -> str:
     for msg in recent[-5:]:
         role = msg.get("role", "?")
         content = msg.get("content", "")
-        prefix = "Buyer" if role in ("buyer", "user") else "Jess"
+        prefix = "Buyer" if role in ("buyer", "user") else "Robin"
         conversation_rows += f"<p style='margin: 4px 0; font-size: 13px;'><strong>{prefix}:</strong> {content}</p>"
 
     return f"""

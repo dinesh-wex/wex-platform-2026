@@ -5,7 +5,7 @@ Ported from wex-leasing-service-python prompt guidelines.
 """
 
 TEMPLATES = {
-    "greeting": "Hey, this is Jess from Warehouse Exchange. What city are you looking in and how much space do you need?",
+    "greeting": "Hey, this is Robin from Warehouse Exchange. What city are you looking in and how much space do you need?",
     "new_search": (
         "On it, searching for spaces that fit. I'll text you back shortly."
     ),

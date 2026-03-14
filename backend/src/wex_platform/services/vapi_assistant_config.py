@@ -7,8 +7,8 @@ from wex_platform.app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# ElevenLabs default voice (warm, professional)
-DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # "Rachel" - calm professional female
+# PlayHT default voice
+DEFAULT_VOICE_ID = "pwMBn0SsmN1220Aorv15"  # PlayHT voice
 
 
 def build_assistant_config(
@@ -45,20 +45,20 @@ def build_assistant_config(
         first_name = buyer_name.split()[0] if buyer_name else None
         if gap_days > 30 and first_name:
             first_message = (
-                f"Hey {first_name}, it's Jess from Warehouse Exchange. "
+                f"Hey {first_name}, it's Robin from Warehouse Exchange. "
                 f"Good to hear from you again! I still have those "
                 f"{count} option{'s' if count != 1 else ''} we found, "
                 f"want to pick up where we left off?"
             )
         elif first_name:
             first_message = (
-                f"Hey {first_name}, this is Jess from Warehouse Exchange. "
+                f"Hey {first_name}, this is Robin from Warehouse Exchange. "
                 f"I've got those {count} option{'s' if count != 1 else ''} pulled up "
                 f"from our conversation, want to walk through them?"
             )
         else:
             first_message = (
-                f"Hey, this is Jess with Warehouse Exchange. "
+                f"Hey, this is Robin with Warehouse Exchange. "
                 f"I've got {count} option{'s' if count != 1 else ''} ready from your texts, "
                 f"want me to run through them?"
             )
@@ -72,24 +72,24 @@ def build_assistant_config(
         if gap_days and gap_days > 30:
             city_part = f" in {city}" if city else ""
             first_message = (
-                f"Hey{name_part}, it's Jess from Warehouse Exchange. "
+                f"Hey{name_part}, it's Robin from Warehouse Exchange. "
                 f"Good to hear from you again! Last time you were looking for space{city_part}. "
                 f"Want to pick up where we left off, or start fresh?"
             )
         elif first_name and city:
             first_message = (
-                f"Hey {first_name}, this is Jess from Warehouse Exchange. "
+                f"Hey {first_name}, this is Robin from Warehouse Exchange. "
                 f"Looks like you were asking about space in {city}, "
                 f"want to pick up where we left off?"
             )
         elif first_name:
             first_message = (
-                f"Hey {first_name}, this is Jess. "
+                f"Hey {first_name}, this is Robin. "
                 f"I've got your info from our texts, how can I help?"
             )
         else:
             first_message = (
-                "Hey, this is Jess with Warehouse Exchange. "
+                "Hey, this is Robin with Warehouse Exchange. "
                 "I see you were texting with us about space, what can I do for you?"
             )
     elif voice_context and voice_context.get("presented_match_ids"):
@@ -105,20 +105,20 @@ def build_assistant_config(
                 pass
         if voice_gap_days > 7 and first_name:
             first_message = (
-                f"Hey {first_name}, it's Jess from Warehouse Exchange. "
+                f"Hey {first_name}, it's Robin from Warehouse Exchange. "
                 f"Good to hear from you again! I still have those "
                 f"{count} option{'s' if count != 1 else ''} from your last call, "
                 f"want to pick up where we left off?"
             )
         elif first_name:
             first_message = (
-                f"Hey {first_name}, this is Jess from Warehouse Exchange. "
+                f"Hey {first_name}, this is Robin from Warehouse Exchange. "
                 f"I've got those {count} option{'s' if count != 1 else ''} pulled up "
                 f"from last time, want to walk through them?"
             )
         else:
             first_message = (
-                f"Hey, this is Jess with Warehouse Exchange. "
+                f"Hey, this is Robin with Warehouse Exchange. "
                 f"I've got {count} option{'s' if count != 1 else ''} ready from your last call, "
                 f"want me to run through them?"
             )
@@ -128,28 +128,28 @@ def build_assistant_config(
         first_name = buyer_name.split()[0] if buyer_name else None
         if first_name and city:
             first_message = (
-                f"Hey {first_name}, this is Jess from Warehouse Exchange. "
+                f"Hey {first_name}, this is Robin from Warehouse Exchange. "
                 f"Last time you were asking about space in {city}. "
                 f"Want to pick up where we left off, or start fresh?"
             )
         elif first_name:
             first_message = (
-                f"Hey {first_name}, this is Jess from Warehouse Exchange. "
+                f"Hey {first_name}, this is Robin from Warehouse Exchange. "
                 f"Good to hear from you again! How can I help you today?"
             )
         else:
             first_message = (
-                "Hey, this is Jess with Warehouse Exchange. "
+                "Hey, this is Robin with Warehouse Exchange. "
                 "I see you called us before about warehouse space, what can I do for you?"
             )
     elif buyer_name:
         first_message = (
-            f"Hey {buyer_name}, this is Jess with Warehouse Exchange. "
+            f"Hey {buyer_name}, this is Robin with Warehouse Exchange. "
             "What kind of space are you looking for?"
         )
     else:
         first_message = (
-            "Hey, thanks for calling Warehouse Exchange, this is Jess. "
+            "Hey, thanks for calling Warehouse Exchange, this is Robin. "
             "Who am I speaking with?"
         )
 
@@ -165,7 +165,7 @@ def build_assistant_config(
                 "temperature": 0.7,
             },
             "voice": {
-                "provider": "11labs",
+                "provider": "playht",
                 "voiceId": voice_id,
             },
             "firstMessage": first_message,
@@ -182,7 +182,7 @@ def build_assistant_config(
 
 def _build_system_prompt(sms_context: dict | None = None, voice_context: dict | None = None) -> str:
     """Build the voice agent system prompt."""
-    base_prompt = """You are Jess, a warehouse space broker at Warehouse Exchange. You help businesses find warehouse and industrial space. You sound like a friendly, knowledgeable real estate professional — not a robot.
+    base_prompt = """You are Robin, a warehouse space broker at Warehouse Exchange. You help businesses find warehouse and industrial space. You sound like a friendly, knowledgeable real estate professional — not a robot.
 
 CONVERSATION FLOW:
 1. GET NAME: You've already introduced yourself in the greeting. If you don't have the caller's name yet, ask for it naturally. Use their name throughout the call (2-3 times, not every sentence).
