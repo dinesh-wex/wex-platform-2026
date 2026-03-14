@@ -713,6 +713,11 @@ class ClearingEngine:
         if buyer_need.max_sqft and min_sqft and min_sqft > buyer_need.max_sqft:
             return False
 
+        # Available inventory check -- reject if remaining sqft can't serve buyer
+        if pl and buyer_need.min_sqft and pl.available_sqft is not None:
+            if pl.available_sqft < buyer_need.min_sqft:
+                return False
+
         # Use type compatibility (replaces flat activity_tier match)
         if buyer_need.use_type:
             activity_tier = pk.activity_tier if pk else None

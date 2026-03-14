@@ -1585,10 +1585,12 @@ function OptionsContent() {
 
       // Open TourBookingFlow — use engagement_id (new system) over deal.id (old system)
       const rawDeal = result?.deal || {};
+      const buyerSqft = parseBuyerSqft(getBuyerNeed());
+      const allocatedSqft = Math.min(buyerSqft, option?.property.available_sqft || buyerSqft);
       const deal = {
         id: result?.engagement_id || rawDeal.id || result?.deal_id || `deal-${matchId}`,
         warehouse_id: option?.warehouse_id || rawDeal.warehouse_id || "",
-        sqft_allocated: option?.property.available_sqft || rawDeal.sqft_allocated || 0,
+        sqft_allocated: allocatedSqft || rawDeal.sqft_allocated || 0,
         rate_per_sqft: option?.pricing.rate_sqft || rawDeal.rate_per_sqft || 0,
         monthly_payment: option?.pricing.monthly_total || rawDeal.monthly_payment || 0,
         term_months: option?.pricing.term_months || rawDeal.term_months || 6,
@@ -1602,7 +1604,7 @@ function OptionsContent() {
         city: option?.location.city || "",
         state: option?.location.state || "",
         zip: null,
-        building_size_sqft: option?.property.available_sqft || 0,
+        building_size_sqft: option?.property.building_total_sqft || option?.property.available_sqft || 0,
         primary_image_url: option?.primary_image?.url || null,
       };
 
@@ -1611,10 +1613,12 @@ function OptionsContent() {
       setTourFlowOpen(true);
     } catch {
       // Even on API error, open the flow with demo data
+      const fallbackBuyerSqft = parseBuyerSqft(getBuyerNeed());
+      const fallbackAllocated = Math.min(fallbackBuyerSqft, option?.property.available_sqft || fallbackBuyerSqft);
       const deal = {
         id: `deal-${matchId}`,
         warehouse_id: option?.warehouse_id || "",
-        sqft_allocated: option?.property.available_sqft || 0,
+        sqft_allocated: fallbackAllocated || 0,
         rate_per_sqft: option?.pricing.rate_sqft || 0,
         monthly_payment: option?.pricing.monthly_total || 0,
         term_months: option?.pricing.term_months || 6,
@@ -1628,7 +1632,7 @@ function OptionsContent() {
         city: option?.location.city || "",
         state: option?.location.state || "",
         zip: null,
-        building_size_sqft: option?.property.available_sqft || 0,
+        building_size_sqft: option?.property.building_total_sqft || option?.property.available_sqft || 0,
         primary_image_url: option?.primary_image?.url || null,
       };
 

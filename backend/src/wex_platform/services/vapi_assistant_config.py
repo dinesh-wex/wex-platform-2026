@@ -527,7 +527,7 @@ def _build_tool_definitions() -> list[dict]:
                         },
                         "duration": {
                             "type": "string",
-                            "description": "How long they need it: 1-3 months, 3-6 months, 6-12 months, 12-24 months, 24+ months"
+                            "description": "How long they need the space in months. If the caller gives a specific number (e.g. '8 months'), pass the exact number like '8 months'. If vague, use a range: 1-3 months, 3-6 months, 6-12 months, 12-24 months, 24+ months"
                         },
                         "features": {
                             "type": "array",

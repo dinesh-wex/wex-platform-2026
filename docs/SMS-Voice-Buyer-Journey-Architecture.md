@@ -43,7 +43,7 @@ The buyer journey is driven by an AI agent named **Jess** — a persona that spa
 |-------|-----------|
 | Backend | Python 3.12, FastAPI, SQLAlchemy 2.0 async |
 | SMS Provider | Aircall (native SMS send endpoint) |
-| Voice Provider | Vapi (hosted LLM + ElevenLabs TTS) |
+| Voice Provider | Vapi (hosted LLM + configurable TTS: ElevenLabs / Deepgram) |
 | LLM (SMS agents) | Google Gemini 3 Flash |
 | LLM (Voice) | Vapi's hosted model (configured via system prompt + tools) |
 | Email Alerts | SendGrid |
@@ -145,12 +145,14 @@ INBOUND CALL (Vapi)
     |- Extract caller_phone + vapi_call_id
     |- Look up Buyer record (for name/personalization)
     |- Fetch 30-day-fresh SMSConversationState (cross-channel seed)
-    |- Create VoiceCallState record
+    |- Fetch 30-day-fresh previous VoiceCallState (voice-to-voice seed)
+    |- Timestamp priority: most recent channel wins (SMS tiebreaker)
+    |- Create VoiceCallState record, seed from winning context
     |- Build assistant config:
     |   |- System prompt (persona, beats, FAQ, restrictions)
     |   |- 6 tool definitions
-    |   |- Dynamic greeting (based on SMS history)
-    |   |- Voice: ElevenLabs "Rachel"
+    |   |- Dynamic greeting (based on SMS/voice history)
+    |   |- Voice: configurable TTS provider (ElevenLabs / Deepgram)
     '- Return config to Vapi
     |
 [Vapi hosted LLM runs the call]
@@ -206,21 +208,45 @@ Prevents sensitive data from reaching Vapi's LLM (and thus the caller):
 
 ## Cross-Channel Integration
 
-SMS and Voice share the same buyer identity and search context:
+SMS and Voice share the same buyer identity and search context. A buyer can text, call, and call again — and Jess remembers everything across all interactions.
+
+### Timestamp-Based Priority
+
+When a buyer has history in both SMS and Voice, the system uses **recency** to decide which context to seed:
+
+| SMS context? | Voice context? | Behavior |
+|---|---|---|
+| Yes (newer) | Yes (older) | SMS wins — more recent + more structured |
+| Yes (older) | Yes (newer) | Voice wins — more recent intent |
+| Yes | No | SMS |
+| No | Yes | Voice |
+| No | No | Fresh caller, no seeding |
+
+SMS is the tiebreaker when timestamps are equal or missing (it has richer structured data). Comparison uses `SMSConversationState.last_buyer_message_at` vs `VoiceCallState.call_ended_at`.
 
 ### SMS → Voice Seeding
 
-When a buyer who has texted previously calls:
+When a buyer who has texted previously calls (and SMS is the most recent interaction):
 1. Webhook looks up `SMSConversationState` by phone (30-day freshness window)
 2. Seeds `VoiceCallState` with: `buyer_id`, `buyer_need_id`, `presented_match_ids`, `known_answers`
 3. Dynamic greeting references SMS context: "Hey {name}, I see you were texting about space in {city}..."
-4. Voice reuses the SMS `BuyerNeed` if criteria match (same city, sqft within range)
+4. System prompt includes `SMS CONVERSATION CONTEXT` section with criteria, presented matches, phase — instructs LLM "do NOT re-ask questions already answered via text"
+5. Voice reuses the SMS `BuyerNeed` if criteria match (same city, sqft within range)
+
+### Voice → Voice Re-seeding
+
+When a returning caller has a previous voice call (and voice is the most recent interaction):
+1. Webhook looks up most recent **completed** `VoiceCallState` by phone (30-day freshness, `call_ended_at IS NOT NULL`)
+2. Rebuilds criteria from associated `BuyerNeed` (location, sqft, use_type, duration)
+3. Seeds new `VoiceCallState` with: `buyer_need_id`, `presented_match_ids`, `match_summaries`, `known_answers`, `search_session_token`
+4. Dynamic greeting references prior call: "Hey {name}, I've got those 3 options pulled up from last time, want to walk through them?"
+5. System prompt includes `PREVIOUS VOICE CALL CONTEXT` section with criteria, match summaries (city/rate/monthly per option), and "do NOT re-ask" instruction
 
 ### Voice → SMS Follow-up
 
 After every call:
-- If search occurred → SMS with options browsing link
-- If booking initiated → SMS with guarantee signing link
+- If search occurred → SMS with options browsing link (`/buyer/options?session={token}`)
+- If booking initiated → SMS with guarantee signing link (`/sms/guarantee/{token}`)
 - Escalation emails batched and sent at call end
 
 ### Shared Services
@@ -565,8 +591,8 @@ Tracks unanswered property questions with 24h SLA:
 
 | File | Purpose |
 |------|---------|
-| `app/routes/vapi_webhook.py` | Vapi webhook: assistant-request, tool-calls, end-of-call-report |
-| `services/vapi_assistant_config.py` | System prompt builder, 6 tool definitions, dynamic greeting |
+| `app/routes/vapi_webhook.py` | Vapi webhook: assistant-request (with SMS + voice history lookup, timestamp priority), tool-calls, end-of-call-report |
+| `services/vapi_assistant_config.py` | System prompt builder, 6 tool definitions, dynamic greeting, SMS/voice context sections |
 | `services/voice_tool_handlers.py` | Tool handler implementations (search, lookup, booking, waitlist, status) |
 | `agents/voice/gatekeeper.py` | 3-layer data sanitization: VOICE_RESTRICTED_FIELDS, scrub_narrative_for_voice, validate_tool_result |
 | `domain/voice_models.py` | VoiceCallState model |
@@ -592,7 +618,7 @@ Tracks unanswered property questions with 24h SLA:
 | Dependency | Status | Details |
 |-----------|--------|---------|
 | **Aircall** | Connected | SMS send/receive via native endpoint. `sms_service.send_buyer_sms()` |
-| **Vapi** | Connected | Voice AI platform. Webhook integration for calls. ElevenLabs TTS |
+| **Vapi** | Connected | Voice AI platform. Webhook integration for calls. Configurable TTS: ElevenLabs (`VAPI_VOICE_PROVIDER=11labs`) or Deepgram (`VAPI_VOICE_PROVIDER=deepgram`). Voice ID configurable via `VAPI_VOICE_ID` env var |
 | **SendGrid** | Connected | Email alerts: escalations, callbacks, tool limits. Sends to `dev@warehouseexchange.com` |
 | **Google Gemini 3 Flash** | Connected | LLM for SMS CriteriaAgent + ResponseAgent |
 | **MarketRateCache** | Available | `MarketRateAgent.get_nnn_rates(zipcode)` — Gemini + Search grounding, 30-day cache. Used for budget-to-sqft conversion |

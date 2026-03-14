@@ -269,7 +269,8 @@ class VoiceToolHandlers:
                 wh = m.get("warehouse", {})
                 tc = wh.get("truth_core", {}) if isinstance(wh, dict) else {}
                 rate = m.get("buyer_rate", 0)
-                alloc_sqft = req_sqft or tc.get("max_sqft", 0)
+                available = tc.get("max_sqft", 0)
+                alloc_sqft = min(req_sqft, available) if req_sqft and available else (req_sqft or available)
                 tier1_safe.append({
                     "match_id": m.get("match_id"),
                     "warehouse_id": m.get("warehouse_id"),
@@ -278,7 +279,7 @@ class VoiceToolHandlers:
                     "city": wh.get("city", ""),
                     "state": wh.get("state", ""),
                     "address": wh.get("address", ""),
-                    "available_sqft": tc.get("max_sqft"),
+                    "available_sqft": alloc_sqft,
                     "building_size_sqft": wh.get("building_size_sqft"),
                     "buyer_rate": rate,
                     "monthly_cost": round(rate * alloc_sqft, 2),
@@ -307,6 +308,7 @@ class VoiceToolHandlers:
                     "state": state,
                     "sqft": sqft,
                     "use_type": use_type,
+                    "term_months": buyer_need.duration_months,
                 },
                 results={"tier1": tier1_safe, "tier2": []},
                 buyer_need_id=buyer_need.id,
@@ -922,17 +924,30 @@ def _parse_timing(timing: str | None) -> datetime | None:
 
 
 def _parse_duration(duration: str | None) -> int | None:
-    """Parse a duration string into months."""
+    """Parse a duration string into months.
+
+    Priority order:
+    1. Exact number extraction (e.g. "8 months" -> 8, "2 years" -> 24)
+    2. Bucket midpoints (e.g. "6-12 months" -> 9)
+    """
     if not duration:
         return None
 
-    duration_lower = duration.lower().replace(" ", "").replace("-", "_")
+    # 1. Exact number (non-range): "8 months" -> 8, "2 years" -> 24
+    match = re.search(r"(\d+)", duration)
+    if match:
+        num = int(match.group(1))
+        is_range = re.search(r"\d+\s*[-_to]+\s*\d+", duration)
+        if not is_range:
+            return num * 12 if "year" in duration.lower() else num
 
+    # 2. Bucket midpoints (not upper bounds)
+    duration_lower = duration.lower().replace(" ", "").replace("-", "_")
     duration_map = {
-        "1_3": 3,
-        "3_6": 6,
-        "6_12": 12,
-        "12_24": 24,
+        "1_3": 2,
+        "3_6": 5,
+        "6_12": 9,
+        "12_24": 18,
         "24+": 36,
         "1_month": 1,
         "3_months": 3,
@@ -946,12 +961,9 @@ def _parse_duration(duration: str | None) -> int | None:
         if key in duration_lower:
             return months
 
-    # Try to extract a number
-    match = re.search(r"(\d+)", duration)
+    # 3. Final fallback
     if match:
         num = int(match.group(1))
-        if "year" in duration.lower():
-            return num * 12
-        return num
+        return num * 12 if "year" in duration.lower() else num
 
     return None

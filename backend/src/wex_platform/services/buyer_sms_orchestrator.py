@@ -1504,7 +1504,8 @@ class BuyerSMSOrchestrator:
                 wh = m.get("warehouse", {})
                 tc = wh.get("truth_core", {}) if isinstance(wh, dict) else {}
                 rate = m.get("buyer_rate", 0)
-                sqft = req_sqft or tc.get("max_sqft", 0)
+                available = tc.get("max_sqft", 0)
+                sqft = min(req_sqft, available) if req_sqft and available else (req_sqft or available)
                 tier1_safe.append({
                     "match_id": m.get("match_id"),
                     "warehouse_id": m.get("warehouse_id"),
@@ -1513,7 +1514,7 @@ class BuyerSMSOrchestrator:
                     "city": wh.get("city", ""),
                     "state": wh.get("state", ""),
                     "address": wh.get("address", ""),
-                    "available_sqft": tc.get("max_sqft"),
+                    "available_sqft": sqft,
                     "building_size_sqft": wh.get("building_size_sqft"),
                     "buyer_rate": rate,
                     "monthly_cost": round(rate * sqft, 2),
