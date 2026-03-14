@@ -46,8 +46,8 @@ class Settings(BaseSettings):
     vapi_api_key: str = ""
     vapi_server_secret: str = ""
     vapi_phone_number_id: str = ""
-    vapi_voice_id: str = "pwMBn0SsmN1220Aorv15"  # PlayHT voice
-    vapi_voice_provider: str = "playht"  # Using PlayHT
+    vapi_voice_id: str = "jBzLvP03992lMFEkj2kJ"  # ElevenLabs voice
+    vapi_voice_provider: str = "11labs"  # ElevenLabs
 
     # Groq (used by Vapi assistant for ultra-low latency LLM)
     groq_api_key: str = ""

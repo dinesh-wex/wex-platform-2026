@@ -7,8 +7,9 @@ from wex_platform.app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# PlayHT default voice
-DEFAULT_VOICE_ID = "pwMBn0SsmN1220Aorv15"  # PlayHT voice
+# Defaults — overridden by VAPI_VOICE_ID / VAPI_VOICE_PROVIDER env vars
+DEFAULT_VOICE_ID = "jBzLvP03992lMFEkj2kJ"
+DEFAULT_VOICE_PROVIDER = "11labs"
 
 
 def build_assistant_config(
@@ -27,6 +28,7 @@ def build_assistant_config(
     """
     settings = get_settings()
     voice_id = settings.vapi_voice_id or DEFAULT_VOICE_ID
+    voice_provider = settings.vapi_voice_provider or DEFAULT_VOICE_PROVIDER
 
     # Compute time gap for returning callers
     gap_hours = None
@@ -165,7 +167,7 @@ def build_assistant_config(
                 "temperature": 0.7,
             },
             "voice": {
-                "provider": "playht",
+                "provider": voice_provider,
                 "voiceId": voice_id,
             },
             "firstMessage": first_message,
