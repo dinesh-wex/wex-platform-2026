@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from wex_platform.app.config import get_settings
 from wex_platform.domain.voice_models import VoiceCallState
-from wex_platform.domain.models import Buyer
+from wex_platform.domain.models import Buyer, BuyerNeed
 from wex_platform.domain.sms_models import SMSConversationState
 from wex_platform.infra.database import async_session
 
@@ -130,6 +130,72 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
                 if sms_state.renter_last_name:
                     buyer_name = f"{sms_state.renter_first_name} {sms_state.renter_last_name}"
 
+    # Look up most recent completed voice call for voice-to-voice re-seeding
+    voice_context = None
+    prev_voice = None
+    if caller_phone:
+        voice_result = await db.execute(
+            select(VoiceCallState)
+            .where(
+                VoiceCallState.caller_phone == caller_phone,
+                VoiceCallState.call_ended_at.isnot(None),
+                VoiceCallState.call_ended_at >= datetime.now(timezone.utc) - timedelta(days=FRESHNESS_DAYS),
+            )
+            .order_by(VoiceCallState.call_ended_at.desc())
+            .limit(1)
+        )
+        prev_voice = voice_result.scalar_one_or_none()
+
+        if prev_voice:
+            voice_criteria = {}
+            if prev_voice.buyer_need_id:
+                need_result = await db.execute(
+                    select(BuyerNeed).where(BuyerNeed.id == prev_voice.buyer_need_id)
+                )
+                prev_need = need_result.scalar_one_or_none()
+                if prev_need:
+                    if prev_need.city:
+                        loc = prev_need.city
+                        if prev_need.state:
+                            loc += f", {prev_need.state}"
+                        voice_criteria["location"] = loc
+                    if prev_need.max_sqft:
+                        voice_criteria["sqft"] = prev_need.max_sqft
+                    if prev_need.use_type:
+                        voice_criteria["use_type"] = prev_need.use_type
+                    if prev_need.duration_months:
+                        voice_criteria["duration"] = f"{prev_need.duration_months} months"
+
+            voice_context = {
+                "criteria": voice_criteria,
+                "presented_match_ids": prev_voice.presented_match_ids or [],
+                "match_summaries": prev_voice.match_summaries or [],
+                "buyer_need_id": prev_voice.buyer_need_id,
+                "buyer_name": prev_voice.buyer_name,
+                "known_answers": prev_voice.known_answers or {},
+                "answered_questions": prev_voice.answered_questions or [],
+                "search_session_token": prev_voice.search_session_token,
+                "call_ended_at": prev_voice.call_ended_at.isoformat() if prev_voice.call_ended_at else None,
+            }
+            if not buyer_name and prev_voice.buyer_name:
+                buyer_name = prev_voice.buyer_name
+
+    # Timestamp-based priority: most recent interaction wins
+    use_sms = False
+    use_voice = False
+    if sms_context and voice_context:
+        sms_age = sms_state.last_buyer_message_at if sms_state else None
+        voice_age = prev_voice.call_ended_at if prev_voice else None
+        if sms_age and voice_age:
+            use_sms = sms_age >= voice_age
+            use_voice = not use_sms
+        else:
+            use_sms = True  # fallback to SMS if timestamps missing
+    elif sms_context:
+        use_sms = True
+    elif voice_context:
+        use_voice = True
+
     # Create VoiceCallState for this call
     call_state = VoiceCallState(
         id=str(uuid.uuid4()),
@@ -139,10 +205,9 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
         call_started_at=datetime.now(timezone.utc),
     )
 
-    # Seed cross-channel fields from SMS state when available.
+    # Seed from whichever channel had the most recent interaction.
     # VoiceCallState is seeded once here and updated independently for the call.
-    # SMSConversationState is NEVER written to by voice handlers — channels are independent.
-    if sms_context:
+    if use_sms:
         call_state.buyer_id = buyer_id
         call_state.conversation_id = sms_context["conversation_id"]
         call_state.buyer_need_id = sms_context["buyer_need_id"]
@@ -155,16 +220,27 @@ async def _handle_assistant_request(message: dict, db: AsyncSession) -> JSONResp
         if sms_summaries:
             call_state.match_summaries = _build_voice_summaries_from_sms(sms_summaries)
 
+    elif use_voice:
+        call_state.buyer_id = buyer_id
+        call_state.buyer_need_id = voice_context["buyer_need_id"]
+        call_state.known_answers = voice_context["known_answers"]
+        call_state.answered_questions = voice_context["answered_questions"]
+        call_state.presented_match_ids = voice_context["presented_match_ids"]
+        call_state.match_summaries = voice_context["match_summaries"]
+        call_state.search_session_token = voice_context["search_session_token"]
+        call_state.buyer_name = buyer_name
+
     db.add(call_state)
     await db.commit()
 
-    # Build and return assistant config
+    # Build and return assistant config — pass only the winning context
     try:
         from wex_platform.services.vapi_assistant_config import build_assistant_config
         config = build_assistant_config(
             caller_phone=caller_phone,
             buyer_name=buyer_name,
-            sms_context=sms_context,
+            sms_context=sms_context if use_sms else None,
+            voice_context=voice_context if use_voice else None,
         )
     except ImportError:
         logger.warning("vapi_assistant_config not available yet, returning minimal config")

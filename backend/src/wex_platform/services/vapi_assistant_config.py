@@ -11,13 +11,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # "Rachel" - calm professional female
 
 
-def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms_context: dict | None = None) -> dict:
+def build_assistant_config(
+    caller_phone: str,
+    buyer_name: str | None = None,
+    sms_context: dict | None = None,
+    voice_context: dict | None = None,
+) -> dict:
     """Build the Vapi assistant configuration for an inbound call.
 
     Returns a dict with the full assistant config including:
     - System prompt (voice-adapted WEx broker persona)
     - Tool definitions (search, lookup, booking)
-    - Voice settings (ElevenLabs)
+    - Voice settings
     - Call limits
     """
     settings = get_settings()
@@ -87,6 +92,56 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
                 "Hey, this is Jess with Warehouse Exchange. "
                 "I see you were texting with us about space, what can I do for you?"
             )
+    elif voice_context and voice_context.get("presented_match_ids"):
+        count = len(voice_context["presented_match_ids"])
+        first_name = buyer_name.split()[0] if buyer_name else None
+        voice_gap_days = 0
+        if voice_context.get("call_ended_at"):
+            try:
+                from datetime import datetime, timezone
+                last_call_at = datetime.fromisoformat(voice_context["call_ended_at"])
+                voice_gap_days = (datetime.now(timezone.utc) - last_call_at).total_seconds() / 86400
+            except (ValueError, TypeError):
+                pass
+        if voice_gap_days > 7 and first_name:
+            first_message = (
+                f"Hey {first_name}, it's Jess from Warehouse Exchange. "
+                f"Good to hear from you again! I still have those "
+                f"{count} option{'s' if count != 1 else ''} from your last call, "
+                f"want to pick up where we left off?"
+            )
+        elif first_name:
+            first_message = (
+                f"Hey {first_name}, this is Jess from Warehouse Exchange. "
+                f"I've got those {count} option{'s' if count != 1 else ''} pulled up "
+                f"from last time, want to walk through them?"
+            )
+        else:
+            first_message = (
+                f"Hey, this is Jess with Warehouse Exchange. "
+                f"I've got {count} option{'s' if count != 1 else ''} ready from your last call, "
+                f"want me to run through them?"
+            )
+    elif voice_context and voice_context.get("criteria"):
+        criteria = voice_context["criteria"]
+        city = criteria.get("location", "").split(",")[0].strip() if criteria.get("location") else None
+        first_name = buyer_name.split()[0] if buyer_name else None
+        if first_name and city:
+            first_message = (
+                f"Hey {first_name}, this is Jess from Warehouse Exchange. "
+                f"Last time you were asking about space in {city}. "
+                f"Want to pick up where we left off, or start fresh?"
+            )
+        elif first_name:
+            first_message = (
+                f"Hey {first_name}, this is Jess from Warehouse Exchange. "
+                f"Good to hear from you again! How can I help you today?"
+            )
+        else:
+            first_message = (
+                "Hey, this is Jess with Warehouse Exchange. "
+                "I see you called us before about warehouse space, what can I do for you?"
+            )
     elif buyer_name:
         first_message = (
             f"Hey {buyer_name}, this is Jess with Warehouse Exchange. "
@@ -104,7 +159,7 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
                 "provider": "google",
                 "model": "gemini-3-flash-preview",
                 "messages": [
-                    {"role": "system", "content": _build_system_prompt(sms_context=sms_context)}
+                    {"role": "system", "content": _build_system_prompt(sms_context=sms_context, voice_context=voice_context)}
                 ],
                 "tools": _build_tool_definitions(),
                 "temperature": 0.7,
@@ -125,7 +180,7 @@ def build_assistant_config(caller_phone: str, buyer_name: str | None = None, sms
     }
 
 
-def _build_system_prompt(sms_context: dict | None = None) -> str:
+def _build_system_prompt(sms_context: dict | None = None, voice_context: dict | None = None) -> str:
     """Build the voice agent system prompt."""
     base_prompt = """You are Jess, a warehouse space broker at Warehouse Exchange. You help businesses find warehouse and industrial space. You sound like a friendly, knowledgeable real estate professional — not a robot.
 
@@ -296,7 +351,8 @@ If it's been a while, offer to pick up where they left off or start fresh.
 """
 
     sms_section = _build_sms_context_section(sms_context) if sms_context else ""
-    return base_prompt + sms_section
+    voice_section = _build_voice_context_section(voice_context) if voice_context and not sms_context else ""
+    return base_prompt + sms_section + voice_section
 
 
 def _build_sms_context_section(sms_context: dict | None) -> str:
@@ -371,6 +427,71 @@ def _build_sms_context_section(sms_context: dict | None) -> str:
         lines.append("- Only use search_properties if the buyer wants to change their criteria")
     else:
         lines.append("- Buyer has criteria but hasn't seen matches yet. You can search immediately.")
+
+    return "\n".join(lines)
+
+
+def _build_voice_context_section(voice_context: dict | None) -> str:
+    """Generate a dynamic system prompt section summarizing prior voice call history.
+
+    Appended to the base system prompt when the caller had a previous voice call
+    but no SMS context, so the voice agent doesn't re-ask answered questions.
+    """
+    if not voice_context:
+        return ""
+
+    lines = ["\n\nPREVIOUS VOICE CALL CONTEXT:"]
+    lines.append("This caller has called Warehouse Exchange before. Key context from their last call:")
+
+    criteria = voice_context.get("criteria") or {}
+
+    # Summarize known criteria
+    criteria_parts = []
+    if criteria.get("location"):
+        criteria_parts.append(f"location: {criteria['location']}")
+    if criteria.get("sqft"):
+        criteria_parts.append(f"size: {criteria['sqft']} sq ft")
+    if criteria.get("use_type"):
+        criteria_parts.append(f"use type: {criteria['use_type']}")
+    if criteria.get("duration"):
+        criteria_parts.append(f"duration: {criteria['duration']}")
+    if criteria.get("requirements") and criteria["requirements"] not in ("none", ""):
+        criteria_parts.append(f"requirements: {criteria['requirements']}")
+
+    if criteria_parts:
+        lines.append(f"- Prior criteria from voice call: {', '.join(criteria_parts)}")
+    else:
+        lines.append("- No specific criteria were collected in the last call")
+
+    # Summarize presented matches with details
+    presented = voice_context.get("presented_match_ids") or []
+    match_summaries = voice_context.get("match_summaries") or []
+    if presented:
+        lines.append(f"- {len(presented)} properties were presented during the last call")
+        for i, s in enumerate(match_summaries[:3], 1):
+            city = s.get("city", "")
+            state = s.get("state", "")
+            rate = s.get("rate")
+            monthly = s.get("monthly")
+            loc = f"{city}, {state}" if state else city
+            rate_str = f"${rate:.2f}/sqft" if rate else "rate TBD"
+            monthly_str = f", ~${monthly:,}/mo" if monthly else ""
+            lines.append(f"  - Option {i}: {loc} at {rate_str}{monthly_str}")
+
+    # Cached answers
+    answered_qs = voice_context.get("answered_questions") or []
+    if answered_qs:
+        lines.append(f"- {len(answered_qs)} property questions already answered and cached")
+
+    lines.append("\nINSTRUCTIONS FOR HANDLING PREVIOUS CALL CONTEXT:")
+    if criteria_parts:
+        lines.append("- Do NOT re-ask questions that were already answered in the previous call")
+        lines.append("- You can reference their criteria: \"Last time you were looking for X in Y\"")
+    if presented:
+        lines.append("- Caller has already seen options. Offer to review them or search for new ones.")
+        lines.append("- Only use search_properties if the caller wants to change their criteria or search again")
+    else:
+        lines.append("- Caller provided criteria but didn't get to see matches. You can search immediately.")
 
     return "\n".join(lines)
 
