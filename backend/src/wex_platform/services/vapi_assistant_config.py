@@ -8,7 +8,7 @@ from wex_platform.app.config import get_settings
 logger = logging.getLogger(__name__)
 
 # Defaults — overridden by VAPI_VOICE_ID / VAPI_VOICE_PROVIDER env vars
-DEFAULT_VOICE_ID = "jBzLvP03992lMFEkj2kJ"
+DEFAULT_VOICE_ID = "kdmDKE6EkgrWrrykO9Qt"
 DEFAULT_VOICE_PROVIDER = "11labs"
 
 
